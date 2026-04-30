@@ -25,10 +25,6 @@ def calculate_radius(target_f, n, thickness=0):
     return 1 / x
 
 
-# ПРИМЕР: Хотим фокус 30 при толщине 5 и стекле 1.5
-r_needed = calculate_radius(target_f=30, n=1.5, thickness=5)
-print(f"Для F=30 нужен радиус R = {r_needed:.2f}")
-
 
 class Ray:
     def __init__(self, origin, direction):
@@ -230,69 +226,16 @@ class SphereSurface:
         return eta * ray_dir + (eta * cos_i - cos_t) * actual_normal
 
 
-class Lens:
-    def __init__(self, center_x, radius1, radius2, thickness, n=1.5, show_axis=True):
-        self.center_x = center_x
-        self.thickness = thickness
-        self.n = n
-        self.show_axis = show_axis
+class Screen(PlaneSurface):
+    def __init__(self, point, normal, size=20):
+        # По умолчанию n=1.0 (как у воздуха), чтобы не было преломления перед остановкой
+        super().__init__(point, normal, n_inside=1.0)
+        self.size = size
 
-        # Левая вершина линзы в точке (center_x - thickness/2)
-        # Чтобы поверхность была выпуклой влево, центр сферы должен быть ПРАВЕЕ вершины
-        c1 = (center_x - thickness / 2) + radius1
-
-        # Правая вершина линзы в точке (center_x + thickness/2)
-        # Чтобы поверхность была выпуклой вправо, центр сферы должен быть ЛЕВЕЕ вершины
-        c2 = (center_x + thickness / 2) - radius2
-
-        self.front = SphereSurface(center=[c1, 0, 0], radius=radius1, n_inside=n)
-        self.back = SphereSurface(center=[c2, 0, 0], radius=radius2, n_inside=n)
-
-        left_v = center_x - thickness / 2
-        right_v = center_x + thickness / 2
-
-        self.front = SphereSurface(center=[c1, 0, 0], radius=radius1, n_inside=n,
-                                   x_min=left_v, x_max=right_v)
-        self.back = SphereSurface(center=[c2, 0, 0], radius=radius2, n_inside=n,
-                                  x_min=left_v, x_max=right_v)
-
-        # Расчет фокусного расстояния (формула для толстой линзы)
-        # R1 и R2 для формулы (R2 отрицательный для выпуклой стороны)
-        r1, r2 = radius1, -radius2
-        inv_f = (n - 1) * (1 / r1 - 1 / r2 + ((n - 1) * thickness) / (n * r1 * r2))
-        self.f_dist = 1 / inv_f
-
-    def get_surfaces(self):
-        # ВАЖНО: порядок в списке определяет, с чем луч столкнется первым
-        # Сортируем поверхности по их реальному положению на оси X
-        return [self.front, self.back]
-
-    def get_mesh(self):
-        """Создает меш через пересечение двух сфер"""
-        s1 = pv.Sphere(radius=self.front.radius, center=self.front.center, phi_resolution=100, theta_resolution=100)
-        s2 = pv.Sphere(radius=self.back.radius, center=self.back.center, phi_resolution=100, theta_resolution=100)
-        # Оставляем только общую часть
-        return s1.boolean_intersection(s2)
-
-    def draw_axis(self, plotter, length=300):
-        if not self.show_axis: return
-
-        # Основная линия оси
-        start = [self.center_x - length / 2, 0, 0]
-        stop = [self.center_x + length / 2, 0, 0]
-        axis_line = pv.Line(start, stop)
-        plotter.add_mesh(axis_line, color="white", line_width=1, label="Оптическая ось")
-
-        # Метки фокусов: F, 2F, 3F и т.д.
-        for m in range(-10, 10):
-            fx = self.center_x + m * self.f_dist
-            label = f"{abs(m)}F"
-            if m < 0: label = "-" + label
-
-            # Рисуем черточку фокуса
-            mark = pv.Line([fx, -0.2, 0], [fx, 0.2, 0])
-            plotter.add_mesh(mark, color="red", line_width=2)
-            plotter.add_point_labels([fx, 0.3, 0], [label], font_size=12, text_color="white")
+    def interact(self, ray_dir, normal, n1, n2):
+        # Экран поглощает луч, возвращаем тот же вектор,
+        # но в run_simulation мы добавим флаг остановки
+        return None
 
 
 class UniversalLens:
@@ -333,7 +276,7 @@ class UniversalLens:
         # --- Создание ПЕРЕДНЕЙ поверхности ---
         if R1 is None or abs(R1) > 1e5:  # Плоская
             self.front = PlaneSurface(point=[v1_x, 0, 0], normal=[-1, 0, 0],
-                                      n_inside=n, edge_radius=edge_radius)
+                                      n_inside=n)
             s1_sagitta = 0
         else:
             # Для SphereSurface: R > 0 (выпуклая), R < 0 (вогнутая)
@@ -352,7 +295,7 @@ class UniversalLens:
         # --- Создание ВТОРОЙ поверхности ---
         if R2 is None or abs(R2) > 1e5:  # Плоская
             self.back = PlaneSurface(point=[v2_x, 0, 0], normal=[1, 0, 0],
-                                     n_inside=n, edge_radius=edge_radius)
+                                     n_inside=n)
             s2_sagitta = 0
         else:
             # Центр сферы c2 = вершина - радиус (чтобы знаки R работали как в оптике)
@@ -600,23 +543,20 @@ def run_simulation(start_ray, elements, max_bounces=10):
 
         if hit_obj:
             hit_point = current_ray.origin + current_ray.direction * best_t
-            # print(f"  Удар {i + 1}: Поверхность id={id(hit_obj)} типа {type(hit_obj).__name__} в точке {hit_point}")
+            path.append(hit_point)
 
+            # Если это экран, он вернет None в interact
             normal = hit_obj.get_normal(hit_point)
-
-            # ОПРЕДЕЛЯЕМ КУДА ИДЕМ:
-            # Если мы были в воздухе (1.0), то идем в стекло (obj.n)
-            # Если мы были в стекле (obj.n), то выходим в воздух (1.0)
-            if abs(current_n - 1.0) < 1e-6:
-                next_n = hit_obj.n
-            else:
-                next_n = 1.0
+            next_n = hit_obj.n if abs(current_n - 1.0) < 1e-6 else 1.0
 
             new_dir = hit_obj.interact(current_ray.direction, normal, current_n, next_n)
 
-            path.append(hit_point)
+            if new_dir is None:  # ЛУЧ ОСТАНОВЛЕН ЭКРАНОМ
+                break
+
             current_ray = Ray(hit_point, new_dir)
-            current_n = next_n  # ОБЯЗАТЕЛЬНО обновляем текущую среду
+            current_n = next_n
+            last_hit_obj = hit_obj
         else:
             # print(f"  Удар {i + 1}: Промах (луч улетел)")
             path.append(current_ray.origin + current_ray.direction * 50)
@@ -672,126 +612,247 @@ def visualize_scene(plotter, trajectory_list, elements, lenses=None):
     plotter.show()
 
 
-# 1. Настройка сцены
+# 1. Настройка плоттера
 plotter = pv.Plotter()
 plotter.set_background("black")
 
-# 2. Параметры микроскопа
-# Объектив (сильная линза, маленький фокус)
-obj_x = 0
-objective = UniversalLens(center_x=obj_x, R1=10, R2=10, thickness=4, edge_radius=6, n=1.6)
+# 2. Оптические элементы
+# Линза в центре (X=0)
+lens = UniversalLens(center_x=0, R1=15, R2=15, thickness=5.5, edge_radius=8, n=1.5)
 
-# Окуляр (линза побольше, фокус подбираем для комфортного просмотра)
-# Расстояние между линзами (тубус) выберем так, чтобы окуляр стоял за фокусом объектива
-eye_x = 35
-eyepiece = UniversalLens(center_x=eye_x, R1=20, R2=20, thickness=5, edge_radius=10, n=1.5)
+# Зеркало 1: стоит после линзы, разворачивает луч на 90 градусов вбок (в плоскости XY)
+mirror1 = PlaneSurface(point=[15, 0, 0], normal=[-1, 1, 0], is_mirror=True)
 
-system = [*objective.get_surfaces(), *eyepiece.get_surfaces()]
+# Зеркало 2: принимает отраженный луч и уводит его ВВЕРХ (вдоль оси Z)
+mirror2 = PlaneSurface(point=[15, 15, 0], normal=[0, -1, 1], is_mirror=True)
 
-# 3. Предмет (Источник света в одной точке)
-# Помещаем предмет чуть дальше переднего фокуса объектива
-object_pos = [obj_x - objective.f_dist - 2.5, 0.5, 0]
+# Экран: ловит луч наверху
+screen = Screen(point=[15, 15, 15], normal=[0, 0, -1], size=10)
 
-# Создаем расходящийся пучок от одной точки предмета
-num_rays = 9
-angles = np.linspace(-0.15, 0.15, num_rays)
+system = [*lens.get_surfaces(), mirror1, mirror2, screen]
 
-for angle in angles:
-    direction = [np.cos(angle), np.sin(angle), 0]
-    ray = Ray(origin=object_pos, direction=direction)
-
-    # Трассировка через всю систему (увеличим количество отскоков и длину)
+# 3. Источник света (небольшой пучок)
+for y_off in np.linspace(-1, 1, 5):
+    ray = Ray(origin=[-20, y_off, 0], direction=[1, 0, 0])
     trajectory = run_simulation(ray, system, max_bounces=10)
 
-    # Отрисовка луча
+    # Визуализация луча
     path = pv.PolyData(trajectory)
     lines = np.hstack(([len(trajectory)], range(len(trajectory))))
     path.lines = lines
-    plotter.add_mesh(path, color="yellow", line_width=1.5, opacity=0.7)
+    plotter.add_mesh(path, color="yellow", line_width=2, render_lines_as_tubes=True)
 
-    # Маркеры столкновений
+    # Точки удара
     if len(trajectory) > 2:
         hits = pv.PolyData(trajectory[1:-1])
-        plotter.add_mesh(hits, color="red", point_size=8, render_points_as_spheres=True)
+        plotter.add_mesh(hits, color="red", point_size=10)
 
-# 4. Визуализация элементов
-# Объектив
-plotter.add_mesh(objective.get_mesh(), color="cyan", opacity=0.3)
-objective.draw_axis(plotter, length=40)
+# 4. Визуализация моделей
+# Линза
+plotter.add_mesh(lens.get_mesh(), color="cyan", opacity=0.3)
+# Зеркало 1
+m1_mesh = pv.Plane(center=mirror1.point, direction=mirror1.normal, i_size=10, j_size=10)
+plotter.add_mesh(m1_mesh, color="silver", opacity=0.8)
+# Зеркало 2
+m2_mesh = pv.Plane(center=mirror2.point, direction=mirror2.normal, i_size=10, j_size=10)
+plotter.add_mesh(m2_mesh, color="silver", opacity=0.8)
+# Экран
+s_mesh = pv.Plane(center=screen.point, direction=screen.normal, i_size=10, j_size=10)
+plotter.add_mesh(s_mesh, color="white", opacity=0.5)
 
-# Окуляр
-plotter.add_mesh(eyepiece.get_mesh(), color="lightblue", opacity=0.3)
-eyepiece.draw_axis(plotter, length=60)
+# Настройка камеры для 3D вида
+plotter.camera_position = [(-50, -50, 50), (10, 10, 0), (0, 0, 1)]
+plotter.add_axes()
 
-# Подписи
-plotter.add_point_labels([object_pos], ["Предмет"], font_size=12, text_color="white")
-plotter.add_point_labels([[obj_x, 8, 0], [eye_x, 12, 0]], ["Объектив", "Окуляр"], font_size=14)
 
-plotter.view_xy()
-plotter.show()
-
-# # 1. Настройка плоттера
+# # 1. Настройка параметров
+# F = 20.0
+# n = 1.5
+# thickness = 5.5
+# edge_r = 10.0
+#
+# # Рассчитываем радиус для двояковыпуклой линзы под фокус F
+# # Используем упрощенную формулу R = 2*F*(n-1) для оценки
+# R_val = 2 * F * (n - 1)
+#
+# # 2. Создание линз
+# # Первая линза в X=0
+# lens1 = UniversalLens(center_x=0, R1=R_val, R2=R_val, thickness=thickness, edge_radius=edge_r, n=n)
+#
+# # Вторая линза на расстоянии 2F от первой (X = 40)
+# lens2 = UniversalLens(center_x=2 * F, R1=R_val, R2=R_val, thickness=thickness, edge_radius=edge_r, n=n)
+#
+# system = [*lens1.get_surfaces(), *lens2.get_surfaces()]
+#
+# # 3. Настройка источника
+# # Слева от первой линзы на 0.5F (X = -10) и на высоте (Y = 3)
+# source_pos = [-0.5 * F, 3.0, 0]
+#
+# # 1. Создаем экран в X = 80 (например)
+# screen = Screen(point=[80, 0, 0], normal=[-1, 0, 0], size=30)
+#
+# # 2. Добавляем его в систему К ПОСЛЕДНИМ
+# system.append(screen)
+#
+# # Отрисовка экрана как белого прямоугольника
+# screen_mesh = pv.Plane(center=screen.point, direction=screen.normal,
+#                        i_size=screen.size, j_size=screen.size)
+#
+# # 4. Визуализация
 # plotter = pv.Plotter()
 # plotter.set_background("black")
 #
-# # 2. Создаем "галерею" линз
-# # Каждую линзу смещаем по оси X, чтобы они не мешали друг другу
-# lenses = [
-#     # {"obj": UniversalLens(center_x=-40, R1=15, R2=15, thickness=2, edge_radius=5, n=1.5),
-#     #  "label": "Biconvex (Collecting)"},
+# # Отрисовка линз и их осей
+# for l in [lens1, lens2]:
+#     plotter.add_mesh(l.get_mesh(), color="cyan", opacity=0.3)
+#     l.draw_axis(plotter, length=100)
 #
-#     # {"obj": UniversalLens(center_x=40, R1=-15, R2=-15, thickness=2, edge_radius=7, n=1.5),
-#     #  "label": "Biconcave (Diverging)"},
+# # Запуск расходящегося пучка из точки источника
+# num_rays = 11
+# angles = np.linspace(-0.15, 0.15, num_rays)
 #
-#     {"obj": UniversalLens(center_x=40, R1=10, R2=-20, thickness=3, edge_radius=5, n=1.5),
-#      "label": "Meniscus"},
-#     # {"obj": UniversalLens(center_x=0, R1=-5, R2=15, thickness=2, edge_radius=4, n=1.5),
-#     #  "label": "."},
+# for angle in angles:
+#     # Направление луча из точки под углом
+#     direction = [np.cos(angle), np.sin(angle), 0]
+#     ray = Ray(origin=source_pos, direction=direction)
+#
+#     # Трассировка через всю систему
+#     trajectory = run_simulation(ray, system, max_bounces=10)
+#
+#     # Отрисовка луча
+#     path = pv.PolyData(trajectory)
+#     lines = np.hstack(([len(trajectory)], range(len(trajectory))))
+#     path.lines = lines
+#     plotter.add_mesh(path, color="yellow", line_width=1.5, opacity=0.8)
+#
+# # Метка источника
+# plotter.add_mesh(pv.Sphere(radius=0.3, center=source_pos), color="white", render_points_as_spheres=True)
+# plotter.add_point_labels([source_pos], ["Источник (0.5F)"], font_size=12)
+# plotter.add_mesh(screen_mesh, color="white", opacity=0.5, label="Экран")
+#
+# plotter.view_xy()
+# plotter.enable_parallel_projection()
+# plotter.enable_terrain_style(mouse_wheel_zooms=True)
+# plotter.show()
+
+
+# # 1. Настройка окружения
+# plotter = pv.Plotter(shape=(2, 2))  # Сетка 2x2 для разных видов
+# plotter.set_background("black")
+#
+# # 2. Список тестовых линз
+# test_cases = [
+#     {
+#         "title": "Плоско-выпуклая (R1=None, R2=15)",
+#         "lens": UniversalLens(center_x=0, R1=None, R2=15, thickness=4, edge_radius=8, n=1.5),
+#         "pos": (0, 0)
+#     },
+#     {
+#         "title": "Двояковогнутая (R1=-15, R2=-15)",
+#         "lens": UniversalLens(center_x=0, R1=-15, R2=-15, thickness=2, edge_radius=8, n=1.5),
+#         "pos": (0, 1)
+#     },
+#     {
+#         "title": "Положительный мениск (R1=10, R2=20)",
+#         "lens": UniversalLens(center_x=0, R1=10, R2=20, thickness=3, edge_radius=8, n=1.5),
+#         "pos": (1, 0)
+#     },
+#     {
+#         "title": "Крутая собирающая (R1=10, R2=10)",
+#         "lens": UniversalLens(center_x=0, R1=10, R2=10, thickness=6, edge_radius=8, n=1.5),
+#         "pos": (1, 1)
+#     }
 # ]
 #
-# # 3. Цикл отрисовки каждой линзы и её лучей
-# for item in lenses:
-#     lens = item["obj"]
+# # 3. Отрисовка
+# for case in test_cases:
+#     plotter.subplot(*case["pos"])
+#     lens = case["lens"]
 #
-#     # Отрисовка меша линзы
-#     plotter.add_mesh(lens.get_mesh(), color="cyan", opacity=0.75, smooth_shading=True)
+#     # Визуализация меша (параметрического)
+#     try:
+#         mesh = lens.get_mesh()
+#         plotter.add_mesh(mesh, color="cyan", opacity=0.5, smooth_shading=True, show_edges=True)
+#     except Exception as e:
+#         plotter.add_text(f"Ошибка отрисовки: {e}", font_size=10, color="red")
 #
-#     # Отрисовка оптической оси и фокусов
-#     lens.draw_axis(plotter, length=100)
-#
-#     # Подпись названия линзы
-#     plotter.add_point_labels([lens.center_x, 8, 0], [item["label"]], font_size=14, text_color="cyan")
-#
-#     # Трассировка пучка лучей для текущей линзы
+#     # Отрисовка лучей для проверки преломления
 #     system = lens.get_surfaces()
-#     y_range = np.linspace(10, -10, 200)  # 7 параллельных лучей
+#     for y in np.linspace(-10, 10, 30):
+#         ray = Ray(origin=[-15, y, 0], direction=[1, 0, 0])
+#         traj = run_simulation(ray, system, max_bounces=5)
 #
-#     for y in y_range:
-#         # 1. Создаем луч
-#         start_pos = [lens.center_x - 30, y, 0]
-#         ray = Ray(origin=start_pos, direction=[1, 0, 0])
-#         trajectory = run_simulation(ray, system, max_bounces=5)
+#         path = pv.PolyData(traj)
+#         path.lines = np.hstack(([len(traj)], range(len(traj))))
+#         plotter.add_mesh(path, color="yellow", line_width=2)
 #
-#         # 2. Отрисовка источника (начальной точки)
-#         # Создаем маленькую белую сферу в начале траектории
-#         source_point = pv.Sphere(radius=0.15, center=trajectory[0])
-#         plotter.add_mesh(source_point, color="white", emissive=True, label="Источник" if y == y_range[0] else "")
+#     plotter.add_text(case["title"], font_size=12)
+#     plotter.add_axes()
+#     plotter.view_xy()
 #
-#         # 3. Отрисовка самой линии луча
-#         path = pv.PolyData(trajectory)
-#         lines = np.hstack(([len(trajectory)], range(len(trajectory))))
-#         path.lines = lines
-#
-#         # Можно сделать плавное затухание цвета от источника
-#         plotter.add_mesh(path, color="yellow", line_width=2, opacity=0.1)
-#
-#         # 4. Точки столкновения (как и раньше)
-#         if len(trajectory) > 2:
-#             hits = pv.PolyData(trajectory[1:-1])
-#             plotter.add_mesh(hits, color="red", point_size=10, render_points_as_spheres=True)
-#
-# # Настройка камеры и запуск
-# plotter.add_axes()
-# plotter.view_xy()  # По умолчанию смотрим в плоскости X-Y
-#
+# plotter.link_views()  # Синхронное вращение всех окон
 # plotter.show()
+
+
+# # 1. Настройка сцены
+# plotter = pv.Plotter()
+# plotter.set_background("black")
+#
+# # 2. Параметры микроскопа
+# # Объектив (сильная линза, маленький фокус)
+# obj_x = 0
+# objective = UniversalLens(center_x=obj_x, R1=10, R2=10, thickness=4, edge_radius=6, n=1.6)
+#
+# # Окуляр (линза побольше, фокус подбираем для комфортного просмотра)
+# # Расстояние между линзами (тубус) выберем так, чтобы окуляр стоял за фокусом объектива
+# eye_x = 35
+# eyepiece = UniversalLens(center_x=eye_x, R1=20, R2=20, thickness=5.5, edge_radius=10, n=1.5)
+#
+# system = [*objective.get_surfaces(), *eyepiece.get_surfaces()]
+#
+# # 3. Предмет (Источник света в одной точке)
+# # Помещаем предмет чуть дальше переднего фокуса объектива
+# object_pos = [obj_x - objective.f_dist - 2.5, 0.5, 0]
+#
+# # Создаем расходящийся пучок от одной точки предмета
+# num_rays = 50
+# angles = np.linspace(-0.1, 0.1, num_rays)
+#
+# for angle in angles:
+#     direction = [np.cos(angle), np.sin(angle), 0]
+#     ray = Ray(origin=object_pos, direction=direction)
+#
+#     # Трассировка через всю систему (увеличим количество отскоков и длину)
+#     trajectory = run_simulation(ray, system, max_bounces=10)
+#
+#     # Отрисовка луча
+#     path = pv.PolyData(trajectory)
+#     lines = np.hstack(([len(trajectory)], range(len(trajectory))))
+#     path.lines = lines
+#     plotter.add_mesh(path, color="yellow", line_width=1.5, opacity=0.7)
+#
+#     # Маркеры столкновений
+#     if len(trajectory) > 2:
+#         hits = pv.PolyData(trajectory[1:-1])
+#         plotter.add_mesh(hits, color="red", point_size=8, render_points_as_spheres=True)
+#
+# # 4. Визуализация элементов
+# # Объектив
+# plotter.add_mesh(objective.get_mesh(), color="cyan", opacity=0.3)
+# objective.draw_axis(plotter, length=40)
+#
+# # Окуляр
+# plotter.add_mesh(eyepiece.get_mesh(), color="lightblue", opacity=0.3)
+# eyepiece.draw_axis(plotter, length=60)
+#
+# # Подписи
+# plotter.add_point_labels([object_pos], ["Предмет"], font_size=12, text_color="white")
+# plotter.add_point_labels([[obj_x, 8, 0], [eye_x, 12, 0]], ["Объектив", "Окуляр"], font_size=14)
+#
+# plotter.view_xy()
+# plotter.show()
+
+plotter.view_xy()
+plotter.enable_parallel_projection()
+plotter.enable_terrain_style(mouse_wheel_zooms=True)
+plotter.show()
