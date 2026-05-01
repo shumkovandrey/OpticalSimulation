@@ -1,3 +1,88 @@
+# # 1. Настройка сцены
+#     plotter = pv.Plotter()
+#     plotter.set_background("black")
+#     plotter.show_grid(color="white")
+#     plotter.view_xy()
+#     # plotter.add_legend()
+#     plotter.enable_parallel_projection()
+#     plotter.enable_terrain_style(mouse_wheel_zooms=True)
+#
+#     # Параметры призмы (BoxPrism)
+#     origin = np.array([0.0, 0.0, 0.0])
+#     size = [10.0, 20.0, 15.0]  # [X, Y, Z]
+#
+#     # Настройка спектра лучей
+#     colors = ["red", "orange", "yellow", "green", "cyan", "blue", "violet"]
+#     n_values = np.linspace(1.50, 1.65, len(colors))
+#     source_pos = np.array([-25.0, 5.0, 0.0])
+#     target_point = np.array([-5.0, 0.0, 0.0])
+#     direction = (target_point - source_pos) / np.linalg.norm(target_point - source_pos)
+#
+#     # Создаем "актеров" для лучей, чтобы обновлять их геометрию
+#     ray_actors = []
+#     for color in colors:
+#         actor = plotter.add_mesh(pv.PolyData(), color=color, opacity=0.9, line_width=3)
+#         ray_actors.append(actor)
+#
+#     # 2. Основной цикл анимации
+#     plotter.show(interactive_update=True)
+#
+#     angle_step = 0.5
+#     current_angle = 0.0
+#
+#     state = {'paused': False}
+#
+#
+#     def toggle_pause():
+#         state['paused'] = not state['paused']
+#         if state['paused']:
+#             print("Пауза")
+#         else:
+#             print("Воспроизведение")
+#
+#
+#     # 2. Настраиваем обработчик событий перед показом
+#     # При нажатии "Space" (пробел) будет вызываться функция toggle_pause
+#     plotter.add_key_event("space", toggle_pause)
+#     plotter.show(interactive_update=True)
+#
+#     while plotter.render:
+#         if state['paused']:
+#             plotter.update()
+#             continue
+#
+#         current_angle += angle_step
+#
+#         # Очищаем старую визуализацию призмы
+#         plotter.remove_actor("prism_mesh")
+#
+#         # Создаем и поворачиваем математическую модель BoxPrism
+#         prism = BoxPrism(origin=origin, size_x=size[0], size_y=size[1], size_z=size[2], n=1.5)
+#         prism.rotate((0, 0, current_angle))  # Метод поворота всех граней
+#
+#         # Обновляем визуальную модель
+#         prism_mesh = prism.get_mesh()
+#         plotter.add_mesh(prism_mesh, color="cyan", opacity=0.2, name="prism_mesh", show_edges=True)
+#
+#         # 3. Пересчет траекторий лучей
+#         surfaces = prism.get_surfaces()
+#         for i, n_val in enumerate(n_values):
+#             # Применяем показатель преломления для конкретного цвета
+#             for surf in surfaces:
+#                 surf.n = n_val
+#
+#             ray = Ray(origin=source_pos, direction=direction)
+#             # Рассчитываем путь луча через повернутые грани
+#             trajectory = run_simulation(ray, surfaces, max_bounces=4)
+#
+#             # Обновляем PolyData луча без пересоздания актера
+#             new_path = pv.PolyData(trajectory)
+#             new_path.lines = np.hstack(([len(trajectory)], range(len(trajectory))))
+#             ray_actors[i].mapper.dataset.copy_from(new_path)
+#
+#         # Обновление окна
+#         plotter.update()
+
 
 
 # # --- НАСТРОЙКИ ---
