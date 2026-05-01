@@ -114,6 +114,128 @@ def get_tangents(normal):
     return t1, t2
 
 
+def fresnel_coeffs(n1: float, n2: float, cos_i: float) -> Tuple[float, float]:
+    """
+    Возвращает (коэффициент отражения R, коэффициент пропускания T).
+    cos_i – косинус угла падения (положительный, от 0 до 1).
+    """
+    # sin_i**2
+    sin2_i = max(0.0, 1.0 - cos_i * cos_i)
+    # sin2_t по закону Снелла
+    eta = n1 / n2
+    sin2_t = (eta ** 2) * sin2_i
+
+    if sin2_t > 1.0:
+        # Полное внутреннее отражение
+        return 1.0, 0.0
+
+    cos_t = np.sqrt(1.0 - sin2_t)
+
+    # Амплитудные коэффициенты Френеля
+    # s-поляризация
+    r_s = (n1 * cos_i - n2 * cos_t) / (n1 * cos_i + n2 * cos_t)
+    # p-поляризация
+    r_p = (n2 * cos_i - n1 * cos_t) / (n2 * cos_i + n1 * cos_t)
+
+    # Интенсивность (коэффициенты отражения)
+    R_s = r_s * r_s
+    R_p = r_p * r_p
+    R = 0.5 * (R_s + R_p)
+    T = 1.0 - R
+    return R, T
+
+
+def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray) -> List[Ray]:
+    """
+    Разделяет падающий луч на отражённый и преломлённый.
+    start_point – точка на поверхности, от которой стартуют новые лучи.
+    """
+    EPS = 1e-3
+    # Убедимся, что нормаль направлена против луча
+    cos_i = np.dot(normal, ray.direction)
+    if cos_i > 0:
+        normal = -normal
+        cos_i = np.dot(normal, ray.direction)
+    cos_i = -cos_i
+
+    n1 = ray.current_n
+    n2 = n_next
+
+    R, T = fresnel_coeffs(n1, n2, cos_i)
+
+    new_rays = []
+    # Отражённый луч
+    reflected_dir = ray.direction - 2 * np.dot(ray.direction, normal) * normal
+    reflected_energy = ray.energy * R
+    if reflected_energy > 1e-6:
+        origin = start_point + EPS * reflected_dir
+        new_rays.append(Ray(origin, reflected_dir, reflected_energy, n1))
+
+    # Преломлённый луч
+    if T > 1e-6:
+        eta = n1 / n2
+        cos_t = np.sqrt(max(0.0, 1.0 - (eta**2) * (1.0 - cos_i**2)))
+        refracted_dir = eta * ray.direction + (eta * cos_i - cos_t) * normal
+        refracted_dir /= np.linalg.norm(refracted_dir)
+        refracted_energy = ray.energy * T
+        origin = start_point + EPS * refracted_dir
+        new_rays.append(Ray(origin, refracted_dir, refracted_energy, n2))
+
+    return new_rays
+
+
+def trace_ray_tree(ray: Ray, elements: List, max_depth: int,
+                   min_energy: float = 0.01) -> List[Tuple[np.ndarray, np.ndarray, float]]:
+    """
+    Возвращает список отрезков в виде (p1, p2, energy).
+    Глубина ограничена max_depth, лучи с энергией < min_energy отбрасываются.
+    """
+    segments = []
+    _trace_recursive(ray, elements, max_depth, min_energy, segments)
+    return segments
+
+
+def _trace_recursive(ray: Ray, elements: List, depth: int, min_energy: float,
+                     segments: List):
+    if depth <= 0 or ray.energy < min_energy:
+        return
+
+    best_t = float('inf')
+    hit_obj = None
+    for obj in elements:
+        t = obj.intersect(ray)
+        if t is not None and t < best_t:
+            best_t = t
+            hit_obj = obj
+
+    if hit_obj is None:
+        p2 = ray.origin + ray.direction * 50.0
+        segments.append((ray.origin, p2, ray.energy))
+        return
+
+    hit_point = ray.origin + ray.direction * best_t
+    segments.append((ray.origin, hit_point, ray.energy))
+
+    normal = hit_obj.get_normal(hit_point)
+    n_next = hit_obj.n if abs(ray.current_n - 1.0) < 1e-6 else 1.0
+
+    if hit_obj.is_mirror:
+        dot = np.dot(normal, ray.direction)
+        actual_normal = normal if dot < 0 else -normal
+        reflected_dir = ray.direction - 2 * np.dot(ray.direction, actual_normal) * actual_normal
+        new_ray = Ray(hit_point + 1e-3 * reflected_dir, reflected_dir, ray.energy, ray.current_n)
+        _trace_recursive(new_ray, elements, depth-1, min_energy, segments)
+        return
+
+    if isinstance(hit_obj, Screen):
+        return
+
+    # Преломляющая поверхность – делим луч, используя hit_point как старт
+    new_rays = split_ray(ray, normal, n_next, start_point=hit_point)
+    for new_ray in new_rays:
+        _trace_recursive(new_ray, elements, depth-1, min_energy, segments)
+
+
 # def get_mirror_mesh(surface):
 #     """
 #     surface: объект класса SphereSurface (у которого есть center, radius,
@@ -159,10 +281,13 @@ def get_tangents(normal):
 
 class Ray:
     """Луч с началом и единичным направлением."""
-    def __init__(self, origin: np.ndarray, direction: np.ndarray):
+    def __init__(self, origin: np.ndarray, direction: np.ndarray,
+                 energy: float = 1.0, current_n: float = 1.0):
         self.origin = np.array(origin, dtype=float)
         self.direction = np.array(direction, dtype=float)
         self.direction /= np.linalg.norm(self.direction)
+        self.energy = energy
+        self.current_n = current_n
 
 
 class PlaneSurface:
@@ -822,242 +947,3 @@ plotter.enable_parallel_projection()
 plotter.enable_terrain_style(mouse_wheel_zooms=True)
 plotter.view_vector((0, 0, 1), viewup=(0, 1, 0))
 plotter.add_axes()
-
-if __name__ == "__main__":
-    # plotter = pv.Plotter()
-    # plotter.set_background("black")
-    # plotter.show_grid(color="white")
-    # plotter.view_isometric()
-    # plotter.enable_parallel_projection()
-    # plotter.enable_terrain_style(mouse_wheel_zooms=True)
-    # plotter.view_xy()
-
-    # 1. Настройка сцены
-    plotter = pv.Plotter()
-    plotter.set_background("black")
-    plotter.show_grid(color="white")
-    plotter.view_xy()
-    # plotter.add_legend()
-    # plotter.enable_parallel_projection()
-    plotter.enable_terrain_style(mouse_wheel_zooms=True)
-
-    # Параметры призмы (BoxPrism)
-    origin = np.array([0.0, 0.0, 0.0])
-    size = [10.0, 20.0, 15.0]  # [X, Y, Z]
-
-    # Настройка спектра лучей
-    colors = ["red", "orange", "yellow", "green", "cyan", "blue", "violet"]
-    n_values = np.linspace(1.50, 1.65, len(colors))
-    source_pos = np.array([-25.0, 5.0, 0.0])
-    target_point = np.array([-5.0, 0.0, 0.0])
-    direction = (target_point - source_pos) / np.linalg.norm(target_point - source_pos)
-
-    # Создаем "актеров" для лучей, чтобы обновлять их геометрию
-    ray_actors = []
-    for color in colors:
-        actor = plotter.add_mesh(pv.PolyData(), color=color, opacity=0.9, line_width=3)
-        ray_actors.append(actor)
-
-    # 2. Основной цикл анимации
-    plotter.show(interactive_update=True)
-
-    angle_step_z = 0.5
-    angle_step_x = -0.25
-    angle_step_y = 1
-    current_angle_z = 0.0
-    current_angle_x = 0.0
-    current_angle_y = 0.0
-
-    state = {'paused': False}
-
-
-    def toggle_pause():
-        state['paused'] = not state['paused']
-        if state['paused']:
-            print("Пауза")
-        else:
-            print("Воспроизведение")
-
-
-    # 2. Настраиваем обработчик событий перед показом
-    # При нажатии "Space" (пробел) будет вызываться функция toggle_pause
-    plotter.add_key_event("space", toggle_pause)
-
-    plotter.show(interactive_update=True)
-    while plotter.render:
-        if state['paused']:
-            plotter.update()
-            continue
-
-        current_angle_z += angle_step_z
-        current_angle_x += angle_step_x
-        current_angle_y += angle_step_y
-
-        # Очищаем старую визуализацию призмы
-        plotter.remove_actor("prism_mesh")
-
-        # Создаем и поворачиваем математическую модель BoxPrism
-        prism = BoxPrism(origin=origin, size_x=size[0], size_y=size[1], size_z=size[2], n=2)
-        prism.rotate((current_angle_x, current_angle_y, current_angle_z))  # Метод поворота всех граней
-
-        # Обновляем визуальную модель
-        prism_mesh = prism.get_mesh()
-        plotter.add_mesh(prism_mesh, color="cyan", opacity=0.2, name="prism_mesh", show_edges=True)
-
-
-        sc = Screen(point=[20, 0, 0], normal=[-1, 0, 0], size=30)
-        screen_mesh = pv.Plane(center=sc.point, direction=sc.normal, i_size=sc.size, j_size=sc.size)
-
-        plotter.add_mesh(screen_mesh, color="white", opacity=1, name="prism_mesh", show_edges=True)
-
-        # 3. Пересчет траекторий лучей
-        surfaces = prism.get_surfaces() + [sc]
-        for i, n_val in enumerate(n_values):
-            # Применяем показатель преломления для конкретного цвета
-            for surf in surfaces:
-                surf.n = n_val
-
-            ray = Ray(origin=source_pos, direction=direction)
-            # Рассчитываем путь луча через повернутые грани
-            trajectory = run_simulation(ray, surfaces, max_bounces=4)
-
-            # Обновляем PolyData луча без пересоздания актера
-            new_path = pv.PolyData(trajectory)
-            new_path.lines = np.hstack(([len(trajectory)], range(len(trajectory))))
-            ray_actors[i].mapper.dataset.copy_from(new_path)
-
-        # Обновление окна
-        plotter.update()
-
-    # # ------------------------------------------------------------
-    # # 1. Создаём набор разнотипных линз с разными положениями и ориентациями
-    # # ------------------------------------------------------------
-    # lenses = []
-    #
-    # # Двояковыпуклая линза (R1>0, R2>0) – стандартная
-    # lenses.append(UniversalLens(
-    #     origin=np.array([0, 20, 0]),
-    #     axis_dir=np.array([1, 0, 0]),
-    #     R1=10.0, R2=10.0,
-    #     thickness=2.0, edge_radius=3.0, n=1.5
-    # ))
-    #
-    # # Двояковогнутая линза (R1<0, R2<0)
-    # lenses.append(UniversalLens(
-    #     origin=np.array([0, 10, 0]),
-    #     axis_dir=np.array([1, 0, 0]),
-    #     R1=-10.0, R2=-10.0,
-    #     thickness=2.0, edge_radius=3.0, n=1.5
-    # ))
-    #
-    # # Плоско-выпуклая (передняя плоская, задняя выпуклая)
-    # lenses.append(UniversalLens(
-    #     origin=np.array([0, 0, 0]),
-    #     axis_dir=np.array([1, 0, 0]),
-    #     R1=None, R2=10.0,
-    #     thickness=2.0, edge_radius=3.0, n=1.5
-    # ))
-    #
-    # # Выпукло-плоская (передняя выпуклая, задняя плоская)
-    # lenses.append(UniversalLens(
-    #     origin=np.array([0, -10, 0]),
-    #     axis_dir=np.array([1, 0, 0]),
-    #     R1=10.0, R2=None,
-    #     thickness=2.0, edge_radius=3.0, n=1.5
-    # ))
-    #
-    # # Мениск (R1>0, R2>0, но разной кривизны)
-    # lenses.append(UniversalLens(
-    #     origin=np.array([0, -20, 0]),
-    #     axis_dir=np.array([1, 0, 0]),
-    #     R1=10.0, R2=5.0,
-    #     thickness=2.0, edge_radius=3.0, n=1.5
-    # ))
-    #
-    # # Линза, повёрнутая на 45° вокруг оси Z (наклон в плоскости XY)
-    # lenses.append(UniversalLens(
-    #     origin=np.array([40, 30, 0]),
-    #     axis_dir=np.array([np.cos(np.radians(45)), np.sin(np.radians(45)), 0]),
-    #     R1=10.0, R2=10.0,
-    #     thickness=2.0, edge_radius=3.0, n=1.5
-    # ))
-    #
-    # # Линза, повёрнутая на -30° вокруг оси Z
-    # lenses.append(UniversalLens(
-    #     origin=np.array([40, -30, 0]),
-    #     axis_dir=np.array([np.cos(np.radians(-30)), np.sin(np.radians(-30)), 0]),
-    #     R1=-10.0, R2=None,
-    #     thickness=2.0, edge_radius=3.0, n=1.5
-    # ))
-    #
-    # # ------------------------------------------------------------
-    # # 2. Собираем все поверхности в общий список для трассировки
-    # # ------------------------------------------------------------
-    # all_surfaces = []
-    # for lens in lenses:
-    #     all_surfaces.extend(lens.get_surfaces())
-    #
-    # # ------------------------------------------------------------
-    # # 3. Генерируем параллельные лучи для каждой линзы
-    # # ------------------------------------------------------------
-    # all_trajectories = []
-    # # Набор смещений по Y для параллельных лучей (будут общими для всех линз)
-    # y_offsets = np.linspace(-2.5, 2.5, 6)  # 6 лучей через каждую линзу
-    #
-    # for i, lens in enumerate(lenses):
-    #     # Лучи идут вдоль оси X (слева направо) или по направлению axis_dir линзы?
-    #     # Удобнее пускать лучи параллельно глобальной оси X, а линзы могут быть повёрнуты.
-    #     # Чтобы лучи были параллельны друг другу для каждой линзы, будем использовать
-    #     # направление (1,0,0), стартуя с x = -20, y = lens.origin[1] + offset, z = 0.
-    #     trajectories = []
-    #     for dy in y_offsets:
-    #         start = np.array([-20.0, lens.origin[1] + dy, 0.0])
-    #         direction = np.array([1.0, 0.0, 0.0])
-    #         ray = Ray(origin=start, direction=direction)
-    #         traj = run_simulation(ray, all_surfaces, max_bounces=4)
-    #         trajectories.append(traj)
-    #     all_trajectories.append({"trajectories": trajectories, "color": ["red", "orange", "yellow", "green", "cyan", "blue", "violet"][i % 7]})
-    #
-    # # ------------------------------------------------------------
-    # # 4. Визуализация
-    # # ------------------------------------------------------------
-    # # Добавляем линзы
-    # for lens in lenses:
-    #     plotter.add_mesh(lens.get_mesh(), color="cyan", opacity=0.6, smooth_shading=True)
-    #     # Опционально: отрисовка оптической оси и фокусов
-    #     lens.draw_axis(plotter, length=15)
-    #
-    # # Добавляем все лучи
-    # for trajectories in all_trajectories:
-    #     for traj in trajectories["trajectories"]:
-    #         path = pv.PolyData(traj)
-    #         path.lines = np.hstack(([len(traj)], range(len(traj))))
-    #         plotter.add_mesh(path, color=trajectories["color"], opacity = 0.5, line_width=2, render_lines_as_tubes=True)
-    #         pts = pv.PolyData(traj)
-    #         plotter.add_mesh(pts, color="purple", point_size=6, render_points_as_spheres=True)
-    #
-    # # Подпишем линзы (точки над ними)
-    # label_points = np.array([
-    #     [0, 8, 4],
-    #     [0, 4, 4],
-    #     [0, 0, 4],
-    #     [0, -4, 4],
-    #     [0, -8, 4],
-    #     [20, 6, 4],
-    #     [20, -6, 4]
-    # ])
-    # labels = [
-    #     "Biconvex",
-    #     "Biconcave",
-    #     "Plano-convex",
-    #     "Convex-plano",
-    #     "Meniscus",
-    #     "Tilted 45°",
-    #     "Tilted -30°"
-    # ]
-    # plotter.add_point_labels(label_points, labels, font_size=10, text_color="white",
-    #                          shape=None, show_points=False, point_size=1)
-    #
-    # plotter.reset_camera()
-    # plotter.show()
-

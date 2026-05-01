@@ -20,7 +20,7 @@ aperture = Aperture(
     point=aperture_pos,
     normal=optical_axis,
     aperture_radius=1,   # отверстие
-    outer_radius=2.0       # непрозрачная часть
+    outer_radius=4.0       # непрозрачная часть
 )
 
 # ---------- 3. Экран (матрица) ----------
@@ -45,8 +45,8 @@ directions = [top_dir, center_dir, bottom_dir]
 colors = ['royalblue', 'lime', 'crimson']
 
 # Параллельные пучки лучей, покрывающие апертуру объектива
-y_offsets = np.linspace(-4, 4, 10)
-z_offsets = np.linspace(-4, 4, 10)
+y_offsets = np.linspace(-2.5, 2.5, 5)
+z_offsets = np.linspace(-2.5, 2.5, 5)
 start_x = -5.0
 
 for dir_vec, col in zip(directions, colors):
