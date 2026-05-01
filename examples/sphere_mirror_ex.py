@@ -2,13 +2,6 @@ from main import *
 
 
 if __name__ == "__main__":
-    plotter = pv.Plotter()
-    plotter.set_background("black")
-    plotter.show_grid(color="white")
-    plotter.view_isometric()
-    plotter.enable_parallel_projection()
-    plotter.enable_terrain_style(mouse_wheel_zooms=True)
-
     # ------------------------------------------------------------
     # Параметры зеркала (можно менять для тестов)
     # ------------------------------------------------------------
@@ -95,5 +88,6 @@ if __name__ == "__main__":
                              [f"{mirror_type} mirror\nR={radius}"],
                              font_size=12, text_color="white", shape=None, show_points=False)
 
+    plotter.reset_camera()
     plotter.show()
 

@@ -101,6 +101,18 @@ def normalize(vec):
     return vec / np.linalg.norm(vec)
 
 
+def get_tangents(normal):
+    # Выбираем произвольный вектор, не параллельный normal
+    if abs(normal[0]) < 0.9:
+        arbitrary = np.array([1, 0, 0])
+    else:
+        arbitrary = np.array([0, 1, 0])
+    t1 = np.cross(normal, arbitrary)
+    t1 /= np.linalg.norm(t1)
+    t2 = np.cross(normal, t1)
+    t2 /= np.linalg.norm(t2)
+    return t1, t2
+
 
 # def get_mirror_mesh(surface):
 #     """
@@ -154,13 +166,9 @@ class Ray:
 
 
 class PlaneSurface:
-    """
-    Плоская поверхность (грань, экран, зеркало).
-    Ограничена круглой апертурой (edge_radius) в плоскости,
-    перпендикулярной lens_axis с центром в lens_origin.
-    """
-    def __init__(self, point: np.ndarray, normal: np.ndarray, n_inside: float,
-                 lens_origin: np.ndarray, lens_axis: np.ndarray, edge_radius: float, is_mirror=False, half_sizes=None, face_tangents=None):
+    def __init__(self, point, normal, n_inside,
+                 lens_origin, lens_axis, edge_radius, is_mirror=False,
+                 half_sizes=None, face_tangents=None):
         self.point = np.array(point, dtype=float)
         self.normal = np.array(normal, dtype=float)
         self.normal /= np.linalg.norm(self.normal)
@@ -170,9 +178,9 @@ class PlaneSurface:
         self.lens_axis /= np.linalg.norm(self.lens_axis)
         self.edge_radius = edge_radius
         self.is_mirror = is_mirror
-
-        self.half_sizes = half_sizes  # (half_u, half_v) или None
-        self.face_tangents = face_tangents  # (vec_u, vec_v) – орты вдоль сторон грани
+        # Прямоугольная апертура (опционально)
+        self.half_sizes = half_sizes
+        self.face_tangents = face_tangents
 
     def intersect(self, ray: Ray) -> Optional[float]:
         dot_dn = np.dot(ray.direction, self.normal)
@@ -184,19 +192,21 @@ class PlaneSurface:
 
         hit_p = ray.origin + ray.direction * t
 
-        # Если заданы прямоугольные параметры – проверяем прямоугольник
+        # Прямоугольная проверка (если заданы параметры)
         if self.half_sizes is not None and self.face_tangents is not None:
             vec = hit_p - self.lens_origin
             u = np.dot(vec, self.face_tangents[0])
             v = np.dot(vec, self.face_tangents[1])
+
             if abs(u) <= self.half_sizes[0] + 1e-6 and abs(v) <= self.half_sizes[1] + 1e-6:
                 return t
             return None
 
-        # Иначе – стандартная круговая проверка (для линз, экранов и т.п.)
+        # Круговая проверка (если прямоугольные параметры не заданы)
         vec_to_hit = hit_p - self.lens_origin
         projection = np.dot(vec_to_hit, self.lens_axis)
         dist_to_axis = np.linalg.norm(vec_to_hit - projection * self.lens_axis)
+
         if dist_to_axis <= self.edge_radius + 1e-6:
             return t
         return None
@@ -204,16 +214,12 @@ class PlaneSurface:
     def get_normal(self, point: np.ndarray) -> np.ndarray:
         return self.normal
 
-    def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
+    def interact(self, ray_dir, normal, n1, n2):
         if self.is_mirror:
-            # Математика отражения
             dot = np.dot(normal, ray_dir)
-            # Убеждаемся, что нормаль направлена навстречу лучу
             actual_normal = normal if dot < 0 else -normal
-
             reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
             return reflected_dir / np.linalg.norm(reflected_dir)
-
         return refract(ray_dir, normal, n1, n2)
 
 
@@ -589,6 +595,61 @@ class UniversalLens:
                                      shape=None, show_points=False)
 
 
+class RectangularMirror(PlaneSurface):
+    """
+    Прямоугольное плоское зеркало.
+    Параметры:
+        center  – геометрический центр зеркала,
+        normal  – нормаль к поверхности (единичный вектор),
+        width   – полная ширина (размер вдоль первой касательной),
+        height  – полная высота (размер вдоль второй касательной),
+        n_inside – показатель преломления внутри (по умолчанию 1.0).
+    """
+    def __init__(self, center: np.ndarray, normal: np.ndarray,
+                 width: float, height: float, n_inside: float = 1.0):
+        self.width = width
+        self.height = height
+        half_u = width / 2.0
+        half_v = height / 2.0
+
+        center = np.asarray(center, dtype=float)
+        normal = np.asarray(normal, dtype=float)
+        normal /= np.linalg.norm(normal)
+
+        tangent1, tangent2 = get_tangents(normal)
+
+        super().__init__(
+            point=center,
+            normal=normal,
+            n_inside=n_inside,
+            lens_origin=center,
+            lens_axis=normal,
+            edge_radius=0.0,         # не используется
+            is_mirror=True,
+            half_sizes=(half_u, half_v),
+            face_tangents=(tangent1, tangent2)
+        )
+
+    def get_mesh(self) -> pv.PolyData:
+        """Прямоугольник, заданный центром, касательными и полуразмерами."""
+        t1, t2 = self.face_tangents
+        hu, hv = self.half_sizes
+        center = self.lens_origin
+
+        # Четыре угла прямоугольника
+        p0 = center - hu * t1 - hv * t2
+        p1 = center + hu * t1 - hv * t2
+        p2 = center + hu * t1 + hv * t2
+        p3 = center - hu * t1 + hv * t2
+
+        # Два треугольника
+        vertices = np.array([p0, p1, p2, p3])
+        faces = np.array([[3, 0, 1, 2],
+                          [3, 0, 2, 3]])  # полигоны: треугольники (0,1,2) и (0,2,3)
+        mesh = pv.PolyData(vertices, faces)
+        return mesh
+
+
 # --------------------------------
 # Трассировка лучей и визуализация
 # --------------------------------
@@ -663,9 +724,13 @@ def visualize_scene(plotter: pv.Plotter, trajectory_list: List[np.ndarray],
     plotter.add_axes()
 
 
-# --------------------------------
-# Пример использования
-# --------------------------------
+plotter = pv.Plotter()
+plotter.set_background("black")
+plotter.view_isometric()
+plotter.enable_parallel_projection()
+plotter.enable_terrain_style(mouse_wheel_zooms=True)
+plotter.view_vector((0, 0, 1), viewup=(0, 1, 0))
+plotter.add_axes()
 
 if __name__ == "__main__":
     # plotter = pv.Plotter()
