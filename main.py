@@ -30,6 +30,45 @@ def calculate_radius(target_f, n, thickness=0):
     return 1 / x
 
 
+def calculate_rotation_matrix(v_to):
+    """
+    Создает матрицу поворота, которая переводит вектор [1, 0, 0]
+    в вектор v_to.
+    """
+    v_to = np.array(v_to, dtype=float)
+    # Нормализация входного вектора (приведение к длине 1)
+    norm = np.linalg.norm(v_to)
+    if norm < 1e-10:
+        return np.eye(3)
+    v_to /= norm
+
+    v_from = np.array([1.0, 0.0, 0.0])  # Базовая ось симуляции (X)
+
+    # 1. Если векторы уже совпадают
+    if np.allclose(v_from, v_to):
+        return np.eye(3)
+
+    # 2. Если векторы противоположны (разворот на 180 градусов)
+    if np.allclose(v_from, -v_to):
+        # Поворот на 180 вокруг оси Y
+        return np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]])
+
+    # 3. Общий случай: находим ось поворота (векторное произведение)
+    # и косинус угла (скалярное произведение)
+    v = np.cross(v_from, v_to)  # Вектор оси поворота
+    c = np.dot(v_from, v_to)  # Косинус угла между векторами
+
+    # Кососимметричная матрица K
+    K = np.array([
+        [0, -v[2], v[1]],
+        [v[2], 0, -v[0]],
+        [-v[1], v[0], 0]
+    ])
+
+    # Формула Родрига для поворота вектора к вектору
+    R = np.eye(3) + K + (K @ K) * (1 / (1 + c))
+    return R
+
 
 class Ray:
     def __init__(self, origin, direction):
@@ -445,7 +484,7 @@ class UniversalLens:
         self.thickness = thickness
         self.edge_radius = edge_radius
         self.n = n
-        self.show_axis = False
+        self.show_axis = True
 
         self.origin = np.array(origin, dtype=float)
         self.axis_dir = np.array(axis_dir, dtype=float)

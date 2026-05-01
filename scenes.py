@@ -1,3 +1,69 @@
+
+
+# # --- НАСТРОЙКИ ---
+#     plotter = pv.Plotter()
+#     plotter.set_background("black")
+#
+#     # 1. Параметры линз
+#     # Объектив: слабовыпуклый, F = 100
+#     obj_f = 100.0
+#     obj_x = 0
+#     objective = UniversalLens(
+#         origin=[obj_x, 0, 0], axis_dir=[1, 0, 0],
+#         R1=100, R2=100, thickness=5, edge_radius=15, n=1.5
+#     )
+#
+#     # Окуляр: сильновыпуклый, F = 20
+#     eye_f = 20.0
+#     # Расстояние между линзами = F_obj + F_eye (условие бесконечности)
+#     eye_x = obj_f + eye_f
+#     eyepiece = UniversalLens(
+#         origin=[eye_x, 0, 0], axis_dir=[1, 0, 0],
+#         R1=20, R2=20, thickness=4, edge_radius=8, n=1.5
+#     )
+#
+#     system = [*objective.get_surfaces(), *eyepiece.get_surfaces()]
+#
+#     # 2. Визуализация элементов
+#     plotter.add_mesh(objective.get_mesh(), color="cyan", opacity=0.3, label="Объектив")
+#     plotter.add_mesh(eyepiece.get_mesh(), color="lightblue", opacity=0.5, label="Окуляр")
+#
+#     # Рисуем тубус (трубу) телескопа для красоты
+#     tube = pv.Cylinder(center=[eye_x / 2, 0, 0], direction=[1, 0, 0],
+#                        radius=16, height=eye_x + 10)
+#     plotter.add_mesh(tube, color="gray", opacity=0.1, style="wireframe")
+#
+#     # 3. Запуск лучей от далекого объекта
+#     # Лучи от звезды приходят почти параллельно, но под небольшим углом к оси
+#     angle_deg = 2.0
+#     rad = np.radians(angle_deg)
+#     direction = [np.cos(rad), np.sin(rad), 0]
+#
+#     for y in np.linspace(-10, 0, 7):
+#         # Стартуем далеко слева
+#         ray = Ray(origin=[-50, y, 0], direction=direction)
+#         trajectory = run_simulation(ray, system, max_bounces=6)
+#
+#         path = pv.PolyData(trajectory)
+#         path.lines = np.hstack(([len(trajectory)], range(len(trajectory))))
+#         plotter.add_mesh(path, color="red", line_width=2)
+#     for y in np.linspace(0, 10, 7):
+#         # Стартуем далеко слева
+#         ray = Ray(origin=[-50, y, 0], direction=direction)
+#         trajectory = run_simulation(ray, system, max_bounces=6)
+#
+#         path = pv.PolyData(trajectory)
+#         path.lines = np.hstack(([len(trajectory)], range(len(trajectory))))
+#         plotter.add_mesh(path, color="green", line_width=2)
+#
+#     # Добавим подписи фокусов
+#     f_point = [obj_f, 0, 0]
+#     plotter.add_mesh(pv.Sphere(radius=0.5, center=f_point), color="red")
+#     plotter.add_point_labels([f_point], ["Общий фокус"], font_size=12)
+
+
+
+
 # # 1. Настройка плоттера
 # plotter = pv.Plotter()
 # plotter.set_background("black")
@@ -294,3 +360,80 @@
 #
 # plotter.view_xy()
 # plotter.show()
+
+
+# # 1. Настройка сцены
+    # plotter = pv.Plotter()
+    # plotter.set_background("black")
+    #
+    # # --- ГЕОМЕТРИЯ ГЛАЗА ---
+    # eye_origin = [0, 0, 0]
+    # axis_dir = [1, 0, 0]  # Глаз "смотрит" вправо
+    #
+    # # 1. Роговица (Плоско-выпуклая линза с большим радиусом)
+    # cornea = UniversalLens(
+    #     origin=[0, 0, 0],
+    #     axis_dir=axis_dir,
+    #     R1=8, R2=None,  # Выпуклая снаружи, плоская внутри
+    #     thickness=1.5,
+    #     edge_radius=4.65,
+    #     n=1.37
+    # )
+    #
+    # # 2. Хрусталик (Двояковыпуклая линза)
+    # # Расположен чуть за роговицей (через 3-4 мм)
+    # lens = UniversalLens(
+    #     origin=[5, 0, 0],
+    #     axis_dir=axis_dir,
+    #     R1=20, R2=10,
+    #     thickness=2,
+    #     edge_radius=5,
+    #     n=1.41
+    # )
+    #
+    # glasses = UniversalLens(
+    #     origin=[-10, 0, 0],
+    #     axis_dir=axis_dir,
+    #     R1=-35, R2=-20,
+    #     thickness=4,
+    #     edge_radius=5,
+    #     n=1.41
+    # )
+    #
+    # # 3. Сетчатка (Экран, где должно быть изображение)
+    # # Расположена в задней части глазного яблока (примерно 24 мм от роговицы)
+    # retina_pos = [20, 0, 0]
+    # retina = Screen(point=retina_pos, normal=[-1, 0, 0], size=20)
+    #
+    # # Сборка системы
+    # system = [*cornea.get_surfaces(), *lens.get_surfaces(), retina]
+    #
+    # # --- ВИЗУАЛИЗАЦИЯ ---
+    # # Отрисовка элементов
+    # plotter.add_mesh(cornea.get_mesh(), color="lightblue", opacity=0.3, label="Rogovica")
+    # plotter.add_mesh(lens.get_mesh(), color="cyan", opacity=0.5, label="Hrustalic")
+    # # plotter.add_mesh(glasses.get_mesh(), color="cyan", opacity=0.5, label="Hrustalic")
+    #
+    # # Отрисовка "склеры" (глазного яблока) для красоты
+    # eye_ball = pv.Sphere(radius=10, center=[10, 0, 0])
+    # plotter.add_mesh(eye_ball, color="white", opacity=0.1, style="wireframe")
+    #
+    # # Отрисовка экрана сетчатки
+    # plotter.add_mesh(pv.Plane(center=retina.point, direction=retina.normal, i_size=20, j_size=20),
+    #                  color="red", opacity=0.2)
+    #
+    # # --- ЗАПУСК ЛУЧЕЙ ---
+    # # Параллельный пучок (свет от удаленного предмета)
+    # for y in np.linspace(-4, 4, 200):
+    #     ray = Ray(origin=[-20, random.uniform(-4, 4), random.uniform(-4, 4)], direction=[1, 0, 0])
+    #     trajectory = run_simulation(ray, system, max_bounces=15)
+    #
+    #     path = pv.PolyData(trajectory)
+    #     path.lines = np.hstack(([len(trajectory)], range(len(trajectory))))
+    #     plotter.add_mesh(path, color="yellow", opacity=0.1, line_width=2)
+    #
+    #     # Точки попадания
+    #     if len(trajectory) > 1:
+    #         hits = pv.PolyData(trajectory[1:])
+    #         plotter.add_mesh(hits, color="red", point_size=8, render_points_as_spheres=True)
+

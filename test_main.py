@@ -1,7 +1,11 @@
+import random
+
 import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 from typing import List, Optional, Tuple
+
+pv.global_theme.allow_empty_mesh = True
 
 # -------------------------------
 # Утилиты для оптических расчётов
@@ -31,6 +35,107 @@ def refract(ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Op
     return eta * ray_dir + (eta * cos_i - cos_t) * actual_normal
 
 
+def calculate_rotation_matrix(v_to):
+    """
+    Создает матрицу поворота, которая переводит вектор [1, 0, 0]
+    в вектор v_to.
+    """
+    v_to = np.array(v_to, dtype=float)
+    # Нормализация входного вектора (приведение к длине 1)
+    norm = np.linalg.norm(v_to)
+    if norm < 1e-10:
+        return np.eye(3)
+    v_to /= norm
+
+    v_from = np.array([1.0, 0.0, 0.0])  # Базовая ось симуляции (X)
+
+    # 1. Если векторы уже совпадают
+    if np.allclose(v_from, v_to):
+        return np.eye(3)
+
+    # 2. Если векторы противоположны (разворот на 180 градусов)
+    if np.allclose(v_from, -v_to):
+        # Поворот на 180 вокруг оси Y
+        return np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]])
+
+    # 3. Общий случай: находим ось поворота (векторное произведение)
+    # и косинус угла (скалярное произведение)
+    v = np.cross(v_from, v_to)  # Вектор оси поворота
+    c = np.dot(v_from, v_to)  # Косинус угла между векторами
+
+    # Кососимметричная матрица K
+    K = np.array([
+        [0, -v[2], v[1]],
+        [v[2], 0, -v[0]],
+        [-v[1], v[0], 0]
+    ])
+
+    # Формула Родрига для поворота вектора к вектору
+    R = np.eye(3) + K + (K @ K) * (1 / (1 + c))
+    return R
+
+
+def calculate_radius(target_f, n, thickness=0):
+    """
+    Рассчитывает радиус R для двояковыпуклой линзы.
+    Если thickness=0, используется формула тонкой линзы.
+    """
+    if thickness == 0:
+        return 2 * target_f * (n - 1)
+
+    # Коэффициенты квадратного уравнения Ax^2 + Bx + C = 0, где x = 1/R
+    A = ((n - 1) * thickness) / n
+    B = 2
+    C = -1 / (target_f * (n - 1))
+
+    # Решаем через дискриминант
+    D = B ** 2 - 4 * A * C
+    if D < 0:
+        return None  # Решения нет для такой толщины
+
+    x = (-B + np.sqrt(D)) / (2 * A)
+    return 1 / x
+
+
+def get_mirror_mesh(surface):
+    """
+    surface: объект класса SphereSurface (у которого есть center, radius,
+             lens_origin, lens_axis, edge_radius)
+    """
+    # 1. Создаем полную сферу в локальном НУЛЕ
+    # Это гарантирует, что у нас не будет паразитных смещений
+    radius = surface.radius
+    mesh = pv.Sphere(radius=radius, center=(0, 0, 0),
+                     phi_resolution=80, theta_resolution=80)
+
+    # 2. Обрезаем сферу, чтобы оставить только "шапочку" нужного радиуса
+    # В локальных координатах (ось X) вершина сферы находится в точке [radius, 0, 0]
+    # Отрезаем всё, что дальше edge_radius по высоте (Y и Z)
+    # Самый простой способ для сферы — обрезать плоскостью по координате X
+    sagitta = radius - np.sqrt(max(0, radius ** 2 - surface.edge_radius ** 2))
+
+    # Отрезаем заднюю часть сферы, оставляя только "купол" высотой sagitta
+    mesh = mesh.clip(normal=[1, 0, 0], origin=[radius - sagitta, 0, 0], invert=False)
+
+    # 3. Глобальная трансформация (синхронизация с математикой)
+    # Создаем матрицу 4x4
+    matrix = np.eye(4)
+
+    # Используем ту же функцию вращения, что и для линз,
+    # чтобы направить локальную ось X вдоль lens_axis
+    rot_matrix = -calculate_rotation_matrix(surface.lens_axis)
+    matrix[:3, :3] = rot_matrix
+
+    # СМЕЩЕНИЕ:
+    # В локальных координатах вершина в [radius, 0, 0].
+    # Нам нужно, чтобы после поворота она попала в lens_origin.
+    # Поэтому центр сферы в мировых координатах = lens_origin - axis * radius
+    world_center = surface.lens_origin + (surface.lens_axis * radius)
+    matrix[:3, 3] = world_center
+
+    return mesh.transform(matrix)
+
+
 # ---------------------
 # Классы элементов сцены
 # ---------------------
@@ -50,7 +155,7 @@ class PlaneSurface:
     перпендикулярной lens_axis с центром в lens_origin.
     """
     def __init__(self, point: np.ndarray, normal: np.ndarray, n_inside: float,
-                 lens_origin: np.ndarray, lens_axis: np.ndarray, edge_radius: float):
+                 lens_origin: np.ndarray, lens_axis: np.ndarray, edge_radius: float, is_mirror=False, half_sizes=None, face_tangents=None):
         self.point = np.array(point, dtype=float)
         self.normal = np.array(normal, dtype=float)
         self.normal /= np.linalg.norm(self.normal)
@@ -59,6 +164,10 @@ class PlaneSurface:
         self.lens_axis = np.array(lens_axis, dtype=float)
         self.lens_axis /= np.linalg.norm(self.lens_axis)
         self.edge_radius = edge_radius
+        self.is_mirror = is_mirror
+
+        self.half_sizes = half_sizes  # (half_u, half_v) или None
+        self.face_tangents = face_tangents  # (vec_u, vec_v) – орты вдоль сторон грани
 
     def intersect(self, ray: Ray) -> Optional[float]:
         """Возвращает расстояние t до пересечения или None."""
@@ -70,6 +179,7 @@ class PlaneSurface:
             return None
 
         hit_p = ray.origin + ray.direction * t
+
         # Проверка: попадает ли точка в апертуру (круг)
         vec_to_hit = hit_p - self.lens_origin
         projection = np.dot(vec_to_hit, self.lens_axis)
@@ -83,6 +193,15 @@ class PlaneSurface:
         return self.normal
 
     def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
+        if self.is_mirror:
+            # Математика отражения
+            dot = np.dot(normal, ray_dir)
+            # Убеждаемся, что нормаль направлена навстречу лучу
+            actual_normal = normal if dot < 0 else -normal
+
+            reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
+            return reflected_dir / np.linalg.norm(reflected_dir)
+
         return refract(ray_dir, normal, n1, n2)
 
 
@@ -93,7 +212,7 @@ class SphereSurface:
     """
     def __init__(self, center: np.ndarray, radius: float, n_inside: float,
                  lens_origin: np.ndarray, lens_axis: np.ndarray,
-                 edge_radius: float, thickness: float):
+                 edge_radius: float, thickness: float, is_mirror=False):
         self.center = np.array(center, dtype=float)
         self.radius = radius
         self.n = n_inside
@@ -102,9 +221,11 @@ class SphereSurface:
         self.lens_axis /= np.linalg.norm(self.lens_axis)
         self.edge_radius = edge_radius
         self.thickness = thickness
+        self.is_mirror = is_mirror
 
     def intersect(self, ray: Ray) -> Optional[float]:
         """Пересечение луча со сферой с учётом границ линзы."""
+
         oc = ray.origin - self.center
         a = np.dot(ray.direction, ray.direction)
         b = 2.0 * np.dot(oc, ray.direction)
@@ -142,6 +263,17 @@ class SphereSurface:
         return normal / np.linalg.norm(normal)
 
     def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
+        if self.is_mirror:
+            # Находим косинус угла падения
+            dot = np.dot(normal, ray_dir)
+
+            # ГЛАВНЫЙ СЕКРЕТ: нормаль должна всегда смотреть НАВСТРЕЧУ лучу
+            # Если dot > 0, значит нормаль и луч смотрят в одну сторону -> разворачиваем нормаль
+            actual_normal = normal if dot < 0 else -normal
+
+            # Формула отражения
+            reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
+            return reflected_dir / np.linalg.norm(reflected_dir)
         return refract(ray_dir, normal, n1, n2)
 
 
@@ -169,6 +301,7 @@ class BoxPrism:
         self.size = np.array([size_x, size_y, size_z], dtype=float)
         self.n = n
         self.surfaces: List[PlaneSurface] = []
+        self.rotation_matrix = np.eye(3)
 
         face_configs = [
             ([1, 0, 0], size_x / 2, [size_y, size_z]),
@@ -196,19 +329,28 @@ class BoxPrism:
         return self.surfaces
 
     def get_mesh(self) -> pv.PolyData:
-        return pv.Cube(
-            center=self.origin,
+        # Создаём куб с центром в начале координат
+        mesh = pv.Cube(
+            center=(0.0, 0.0, 0.0),
             x_length=self.size[0],
             y_length=self.size[1],
             z_length=self.size[2]
         )
+        # Матрица полного преобразования: поворот + смещение
+        transform = np.eye(4)
+        transform[:3, :3] = self.rotation_matrix
+        transform[:3, 3] = self.origin
+        return mesh.transform(transform, inplace=False)
 
     def rotate(self, angles_deg: Tuple[float, float, float]):
         rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        self.rotation_matrix = rot @ self.rotation_matrix
         for surf in self.surfaces:
             local_pos = surf.point - self.origin
             surf.point = self.origin + rot @ local_pos
             surf.normal = rot @ surf.normal
+            surf.lens_axis = surf.normal  # синхронизация для intersect
+            surf.lens_origin = surf.point
 
 
 class UniversalLens:
@@ -284,6 +426,21 @@ class UniversalLens:
                 edge_radius=edge_radius, thickness=thickness
             )
 
+        # 2. РАСЧЕТ ОПТИЧЕСКИХ ПАРАМЕТРОВ (Формула толстой линзы)
+        # Для формулы: r1 и r2 (радиус второй берется с инверсией знака)
+        r1_val = R1 if R1 else 1e10
+        r2_val = -R2 if R2 else -1e10
+
+        inv_f = (n - 1) * (1 / r1_val - 1 / r2_val + ((n - 1) * thickness) / (n * r1_val * r2_val))
+
+        if abs(inv_f) < 1e-10:
+            self.f_dist = float('inf')
+        else:
+            self.f_dist = 1 / inv_f
+
+        # Расчет положения главной плоскости H2 для корректного draw_axis
+        self.h2 = -(self.f_dist * (n - 1) * thickness) / (n * r1_val)
+
     def get_surfaces(self) -> List:
         return [self.front, self.back]
 
@@ -326,6 +483,51 @@ class UniversalLens:
         matrix[:3, :3] = self.rotation
         matrix[:3, 3] = self.origin
         return local_mesh.transform(matrix)
+
+    def draw_axis(self, plot, length=100):
+        # if not self.show_axis:
+        #     return
+
+        # 1. Отрисовка основной оси
+        # Направляем её вдоль вектора axis_dir
+        axis_start = self.origin - self.axis_dir * (length / 2)
+        axis_stop = self.origin + self.axis_dir * (length / 2)
+        axis_line = pv.Line(axis_start, axis_stop)
+        plot.add_mesh(axis_line, color="white", line_width=1, opacity=0.5)
+
+        # 2. Проверка на бесконечный фокус
+        if np.isinf(self.f_dist) or abs(self.f_dist) > 1000:
+            return
+
+        # 3. Расчет положения главной плоскости H2 относительно центра линзы
+        # (необходимо для точного отображения фокуса в "толстой" линзе)
+        r1_val = self.R1 if self.R1 else 1e10
+        h2 = -(self.f_dist * (self.n - 1) * self.thickness) / (self.n * r1_val)
+
+        # Точка отсчета фокуса (Главная точка на оптической оси)
+        # Смещаемся от центра вдоль оси на (толщина/2 + h2)
+        p_point = self.origin + self.axis_dir * (self.thickness / 2 + h2)
+
+        # 4. Метки фокусов F и -F
+        f = self.f_dist
+
+        # Вектор "вверх" для отрисовки засечек (перпендикулярен оси)
+        up_vec = np.array([0, 1, 0]) if abs(self.axis_dir[0]) < 0.9 else np.array([0, 0, 1])
+        mark_vec = np.cross(self.axis_dir, up_vec)
+        mark_vec /= np.linalg.norm(mark_vec)
+
+        for i in range(-5, 5):
+            # Позиция метки в мировых координатах
+            f_pos = p_point + self.axis_dir * i * f
+
+            # Вертикальная засечка
+            mark_line = pv.Line(f_pos - mark_vec * 0.5, f_pos + mark_vec * 0.5)
+            plot.add_mesh(mark_line, color="red", line_width=3)
+
+            # Текстовая подпись
+            plot.add_point_labels([f_pos + mark_vec * 0.8], [f"{i}F"],
+                                     font_size=12, text_color="yellow",
+                                     shape=None, show_points=False)
 
 
 # --------------------------------
@@ -407,41 +609,95 @@ def visualize_scene(plotter: pv.Plotter, trajectory_list: List[np.ndarray],
 # --------------------------------
 
 if __name__ == "__main__":
+    # 1. Настройка сцены
     plotter = pv.Plotter()
+    plotter.set_background("black")
+    plotter.show_grid(color="white")
+    plotter.view_xy()
+    # plotter.add_legend()
+    plotter.enable_parallel_projection()
+    plotter.enable_terrain_style(mouse_wheel_zooms=True)
 
-    # Собирающая линза на оси X
-    l1 = UniversalLens(
-        origin=[-20, 0, 0],
-        axis_dir=[1, 0, 0],
-        R1=5, R2=5, thickness=0.5, edge_radius=1.75, n=1.5
-    )
+    # Параметры призмы (BoxPrism)
+    origin = np.array([0.0, 0.0, 0.0])
+    size = [10.0, 20.0, 15.0]  # [X, Y, Z]
 
-    all_lenses = [l1]
+    # Настройка спектра лучей
+    colors = ["red", "orange", "yellow", "green", "cyan", "blue", "violet"]
+    n_values = np.linspace(1.50, 1.65, len(colors))
+    source_pos = np.array([-25.0, 5.0, 0.0])
+    target_point = np.array([-5.0, 0.0, 0.0])
+    direction = (target_point - source_pos) / np.linalg.norm(target_point - source_pos)
 
-    for i, lens in enumerate(all_lenses):
-        plotter.add_mesh(lens.get_mesh(), color="cyan", opacity=0.3, smooth_shading=True)
+    # Создаем "актеров" для лучей, чтобы обновлять их геометрию
+    ray_actors = []
+    for color in colors:
+        actor = plotter.add_mesh(pv.PolyData(), color=color, opacity=0.9, line_width=3)
+        ray_actors.append(actor)
 
-        # Пучок параллельных лучей вдоль оси линзы
-        for off in np.linspace(-1.0, 1.0, 20):
-            # Локальный старт: смещение по Y и Z в плоскости апертуры
-            local_start = np.array([-15, off, 0])
-            world_start = lens.origin + lens.rotation @ local_start
-            world_dir = lens.axis_dir
+    # 2. Основной цикл анимации
+    plotter.show(interactive_update=True)
 
-            ray = Ray(origin=world_start, direction=world_dir)
-            trajectory = run_simulation(ray, lens.get_surfaces(), max_bounces=5)
+    angle_step = 0.5
+    current_angle = 0.0
 
-            path = pv.PolyData(trajectory)
-            path.lines = np.hstack(([len(trajectory)], range(len(trajectory))))
-            plotter.add_mesh(path, color="orange", opacity=0.7, line_width=1)
+    state = {'paused': False}
 
-            if len(trajectory) > 2:
-                hits = pv.PolyData(trajectory[1:-1])
-                plotter.add_mesh(hits, color="red", point_size=8, render_points_as_spheres=True)
+
+    def toggle_pause():
+        state['paused'] = not state['paused']
+        if state['paused']:
+            print("Пауза")
+        else:
+            print("Воспроизведение")
+
+
+    # 2. Настраиваем обработчик событий перед показом
+    # При нажатии "Space" (пробел) будет вызываться функция toggle_pause
+    plotter.add_key_event("space", toggle_pause)
+    plotter.show(interactive_update=True)
+
+    while plotter.render:
+        if state['paused']:
+            plotter.update()
+            continue
+
+        current_angle += angle_step
+
+        # Очищаем старую визуализацию призмы
+        plotter.remove_actor("prism_mesh")
+
+        # Создаем и поворачиваем математическую модель BoxPrism
+        prism = BoxPrism(origin=origin, size_x=size[0], size_y=size[1], size_z=size[2], n=1.5)
+        prism.rotate((0, 0, current_angle))  # Метод поворота всех граней
+
+        # Обновляем визуальную модель
+        prism_mesh = prism.get_mesh()
+        plotter.add_mesh(prism_mesh, color="cyan", opacity=0.2, name="prism_mesh", show_edges=True)
+
+        # 3. Пересчет траекторий лучей
+        surfaces = prism.get_surfaces()
+        for i, n_val in enumerate(n_values):
+            # Применяем показатель преломления для конкретного цвета
+            for surf in surfaces:
+                surf.n = n_val
+
+            ray = Ray(origin=source_pos, direction=direction)
+            # Рассчитываем путь луча через повернутые грани
+            trajectory = run_simulation(ray, surfaces, max_bounces=4)
+
+            # Обновляем PolyData луча без пересоздания актера
+            new_path = pv.PolyData(trajectory)
+            new_path.lines = np.hstack(([len(trajectory)], range(len(trajectory))))
+            ray_actors[i].mapper.dataset.copy_from(new_path)
+
+        # Обновление окна
+        plotter.update()
 
     plotter.set_background("black")
     plotter.show_grid(color="white")
     plotter.view_xy()
+    # plotter.add_legend()
     plotter.enable_parallel_projection()
     plotter.enable_terrain_style(mouse_wheel_zooms=True)
     plotter.show()
