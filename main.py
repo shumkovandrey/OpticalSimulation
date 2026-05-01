@@ -675,9 +675,16 @@ class Aperture(PlaneSurface):
         t = np.dot(self.point - ray.origin, self.normal) / dot_dn
         if t <= 1e-6:
             return None
+
         hit_point = ray.origin + ray.direction * t
         vec = hit_point - self.lens_origin
         dist_to_axis = np.linalg.norm(vec - np.dot(vec, self.lens_axis) * self.lens_axis)
+
+        # Слишком далеко – диафрагма не пересечена
+        if dist_to_axis > self.outer_radius + 1e-6:
+            return None
+
+        # Попадание в отверстие или в непрозрачную часть?
         self._hit_opaque = (dist_to_axis > self.aperture_radius + 1e-6)
         return t
 

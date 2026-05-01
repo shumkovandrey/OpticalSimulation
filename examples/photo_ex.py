@@ -19,8 +19,8 @@ aperture_pos = np.array([2.5, 0.0, 0.0])
 aperture = Aperture(
     point=aperture_pos,
     normal=optical_axis,
-    aperture_radius=1.5,   # отверстие
-    outer_radius=3.0       # непрозрачная часть
+    aperture_radius=1,   # отверстие
+    outer_radius=2.0       # непрозрачная часть
 )
 
 # ---------- 3. Экран (матрица) ----------
@@ -45,9 +45,9 @@ directions = [top_dir, center_dir, bottom_dir]
 colors = ['royalblue', 'lime', 'crimson']
 
 # Параллельные пучки лучей, покрывающие апертуру объектива
-y_offsets = np.linspace(-2.5, 2.5, 10)
-z_offsets = np.linspace(-2.5, 2.5, 10)
-start_x = -10.0
+y_offsets = np.linspace(-4, 4, 10)
+z_offsets = np.linspace(-4, 4, 10)
+start_x = -5.0
 
 for dir_vec, col in zip(directions, colors):
     for y in y_offsets:
@@ -61,7 +61,7 @@ for dir_vec, col in zip(directions, colors):
 # Линза
 plotter.add_mesh(lens.get_mesh(), color="cyan", opacity=0.5, smooth_shading=True)
 # Диафрагма – серый диск с отверстием
-plotter.add_mesh(aperture.get_mesh(), color="gray", opacity=0.8, show_edges=True)
+plotter.add_mesh(aperture.get_mesh(), color="gray", opacity=1, show_edges=False)
 # Экран (матрица)
 plotter.add_mesh(pv.Plane(center=screen_pos, direction=screen.normal,
                           i_size=screen.size, j_size=screen.size),
