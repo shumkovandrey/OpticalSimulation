@@ -650,15 +650,98 @@ class RectangularMirror(PlaneSurface):
         return mesh
 
 
+class Aperture(PlaneSurface):
+    """Диафрагма: непрозрачная плоскость с круглым отверстием."""
+    def __init__(self, point: np.ndarray, normal: np.ndarray,
+                 aperture_radius: float, outer_radius: float = 3.0,
+                 n_inside: float = 1.0):
+        super().__init__(
+            point=point,
+            normal=normal,
+            n_inside=n_inside,
+            lens_origin=point,
+            lens_axis=normal,
+            edge_radius=0.0,
+            is_mirror=False
+        )
+        self.aperture_radius = aperture_radius
+        self.outer_radius = outer_radius
+        self._hit_opaque = False
+
+    def intersect(self, ray: Ray) -> Optional[float]:
+        dot_dn = np.dot(ray.direction, self.normal)
+        if abs(dot_dn) < 1e-6:
+            return None
+        t = np.dot(self.point - ray.origin, self.normal) / dot_dn
+        if t <= 1e-6:
+            return None
+        hit_point = ray.origin + ray.direction * t
+        vec = hit_point - self.lens_origin
+        dist_to_axis = np.linalg.norm(vec - np.dot(vec, self.lens_axis) * self.lens_axis)
+        self._hit_opaque = (dist_to_axis > self.aperture_radius + 1e-6)
+        return t
+
+    def interact(self, ray_dir: np.ndarray, normal: np.ndarray,
+                 n1: float, n2: float) -> Optional[np.ndarray]:
+        if self._hit_opaque:
+            self._hit_opaque = False
+            return None
+        return ray_dir
+
+    def get_mesh(self) -> pv.PolyData:
+        """Кольцо, правильно ориентированное по self.normal."""
+        # Диск в плоскости XY (нормаль Z) с центром в (0,0,0)
+        disc = pv.Disc(
+            center=(0, 0, 0),
+            normal=(0, 0, 1),
+            inner=self.aperture_radius,
+            outer=self.outer_radius,
+            c_res=100
+        )
+
+        # Строим матрицу поворота от [0,0,1] к self.normal
+        v_from = np.array([0.0, 0.0, 1.0])
+        v_to = self.normal
+        v_from = v_from / np.linalg.norm(v_from)
+        v_to = v_to / np.linalg.norm(v_to)
+
+        if np.allclose(v_from, v_to):
+            rot_matrix = np.eye(3)
+        elif np.allclose(v_from, -v_to):
+            # Поворот на 180° вокруг оси, перпендикулярной v_from
+            if abs(v_from[0]) < 0.9:
+                perp = np.array([1.0, 0.0, 0.0])
+            else:
+                perp = np.array([0.0, 1.0, 0.0])
+            rot_matrix = -np.eye(3) + 2 * np.outer(perp, perp) / np.dot(perp, perp)
+        else:
+            v = np.cross(v_from, v_to)
+            c = np.dot(v_from, v_to)
+            K = np.array([
+                [0, -v[2], v[1]],
+                [v[2], 0, -v[0]],
+                [-v[1], v[0], 0]
+            ])
+            rot_matrix = np.eye(3) + K + (K @ K) * (1.0 / (1.0 + c))
+
+        # Мировая матрица: поворот + перенос
+        transform = np.eye(4)
+        transform[:3, :3] = rot_matrix
+        transform[:3, 3] = self.lens_origin
+
+        return disc.transform(transform, inplace=False)
+
+
 # --------------------------------
 # Трассировка лучей и визуализация
 # --------------------------------
 
-def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 10) -> np.ndarray:
-    """Трассирует один луч через последовательность оптических элементов."""
+def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 20) -> np.ndarray:
+    EPS = 1e-4  # малое смещение
+
     path = [start_ray.origin]
     current_ray = start_ray
-    current_n = 1.0  # начинаем из воздуха
+    current_n = 1.0
 
     for _ in range(max_bounces):
         best_t = float('inf')
@@ -671,7 +754,6 @@ def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 10) -> np.
                 hit_obj = obj
 
         if hit_obj is None:
-            # Луч уходит в бесконечность
             path.append(current_ray.origin + current_ray.direction * 50)
             break
 
@@ -682,10 +764,12 @@ def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 10) -> np.
         next_n = hit_obj.n if abs(current_n - 1.0) < 1e-6 else 1.0
         new_dir = hit_obj.interact(current_ray.direction, normal, current_n, next_n)
 
-        if new_dir is None:  # Поглощён (например, экраном)
+        if new_dir is None:
             break
 
-        current_ray = Ray(hit_point, new_dir)
+        # Смещаем точку вдоль нового направления, чтобы не задеть ту же поверхность
+        hit_point_safe = hit_point + EPS * new_dir
+        current_ray = Ray(hit_point_safe, new_dir)
         current_n = next_n
 
     return np.array(path)
