@@ -5,7 +5,7 @@ mesh = trimesh.load("../Models/plane.stl")
 # mesh = trimesh.creation.icosphere()
 mesh.apply_scale(5)
 
-surface = MeshSurface(mesh, n_inside=1.5)
+surface = MeshSurface(mesh, n_inside=1.5, reflection_range=(0, np.inf))
 
 # Лучи идут вдоль оси X, y от -40 до 40 (попадают в сферу)
 origins = []
@@ -18,8 +18,10 @@ plotter.add_mesh(surface.get_mesh(), opacity=0.5, color="silver", pbr=True, meta
 all_segments = []
 for orig in origins:
     ray = Ray(origin=orig, direction=direction, energy=1.0, current_n=1.0)
-    segs = trace_ray_tree(ray, [surface], 5)
-    all_segments.extend(segs)
+    # segs = trace_ray_tree(ray, [surface], 5)
+    # all_segments.extend(segs)
+    traj = run_simulation(ray, [surface])
+    all_segments.append(traj)
 
 cloud = RayCloud(plotter, energy_color_type=1, default_color="yellow", gamma=0.3)
 print("Total segments collected:", len(all_segments))

@@ -149,33 +149,40 @@ def fresnel_coeffs(n1: float, n2: float, cos_i: float) -> Tuple[float, float]:
     return R, T
 
 
-def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray) -> List[Ray]:
-    """
-    Разделяет падающий луч на отражённый и преломлённый.
-    start_point – точка на поверхности, от которой стартуют новые лучи.
-    """
-    EPS = 1e-3
-    # Убедимся, что нормаль направлена против луча
+def split_ray(ray, normal, n_next, start_point,
+              allow_reflection=True, allow_refraction=True,
+              offset_distance=0.01):
+    EPS = offset_distance
     cos_i = np.dot(normal, ray.direction)
     if cos_i > 0:
         normal = -normal
         cos_i = np.dot(normal, ray.direction)
     cos_i = -cos_i
-
-    n1 = ray.current_n
-    n2 = n_next
+    n1, n2 = ray.current_n, n_next
 
     R, T = fresnel_coeffs(n1, n2, cos_i)
 
-    new_rays = []
-    # Отражённый луч
-    reflected_dir = ray.direction - 2 * np.dot(ray.direction, normal) * normal
-    reflected_energy = ray.energy * R
-    if reflected_energy > 1e-6:
-        origin = start_point + EPS * reflected_dir
-        new_rays.append(Ray(origin, reflected_dir, reflected_energy, n1))
+    # Логика переопределения коэффициентов
+    if not allow_refraction:
+        T = 0.0
+        if allow_reflection:
+            R = 1.0   # идеальное зеркало
+    if not allow_reflection:
+        R = 0.0
+        if allow_refraction:
+            T = 1.0   # идеальное просветление (нет отражения)
 
-    # Преломлённый луч
+    if R == 0.0 and T == 0.0:
+        return []
+
+    new_rays = []
+    if R > 1e-6:
+        reflected_dir = ray.direction - 2 * np.dot(ray.direction, normal) * normal
+        reflected_energy = ray.energy * R
+        origin = start_point + EPS * reflected_dir
+        new_rays.append(Ray(origin, reflected_dir, reflected_energy, n1,
+                            color=ray.color, wavelength=ray.wavelength,
+                            energy_color_type=ray.energy_color_type))
     if T > 1e-6:
         eta = n1 / n2
         cos_t = np.sqrt(max(0.0, 1.0 - (eta**2) * (1.0 - cos_i**2)))
@@ -183,8 +190,9 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
         refracted_dir /= np.linalg.norm(refracted_dir)
         refracted_energy = ray.energy * T
         origin = start_point + EPS * refracted_dir
-        new_rays.append(Ray(origin, refracted_dir, refracted_energy, n2))
-
+        new_rays.append(Ray(origin, refracted_dir, refracted_energy, n2,
+                            color=ray.color, wavelength=ray.wavelength,
+                            energy_color_type=ray.energy_color_type))
     return new_rays
 
 
@@ -199,61 +207,78 @@ def trace_ray_tree(ray: Ray, elements: List, max_depth: int,
     return segments
 
 
-def _trace_recursive(ray: Ray, elements: List, depth: int, min_energy: float,
-                     segments: List, total_limit: int = 5000):
-    # Ограничение общего числа отрезков
-    if len(segments) >= total_limit:
-        return
-
-    if depth <= 0 or ray.energy < min_energy:
+def _trace_recursive(ray, elements, depth, min_energy, segments,
+                     total_limit=5000, offset_distance=0.01):
+    if len(segments) >= total_limit or depth <= 0 or ray.energy < min_energy:
         return
 
     best_t = float('inf')
     hit_obj = None
     for obj in elements:
+        if hasattr(obj, 'is_active') and not obj.is_active(ray.wavelength):
+            continue
         t = obj.intersect(ray)
         if t is not None and t < best_t:
             best_t = t
             hit_obj = obj
 
     if hit_obj is None:
-        p2 = ray.origin + ray.direction * 50.0
+        p2 = ray.origin + ray.direction * 500.0
         segments.append((ray.origin, p2, ray.energy))
         return
 
     hit_point = ray.origin + ray.direction * best_t
     segments.append((ray.origin, hit_point, ray.energy))
 
-    normal = hit_obj.get_normal(hit_point)
+    # Поглощение
+    if hasattr(hit_obj, 'absorption_range') and hit_obj.absorption_range is not None:
+        if ray.wavelength is None or (hit_obj.absorption_range[0] <= ray.wavelength <= hit_obj.absorption_range[1]):
+            return
+
+    # Определяем разрешённые действия
+    allow_reflection = False
+    allow_refraction = False
+    if hasattr(hit_obj, 'reflection_range') and hit_obj.reflection_range is not None:
+        if ray.wavelength is None or (hit_obj.reflection_range[0] <= ray.wavelength <= hit_obj.reflection_range[1]):
+            allow_reflection = True
+    if hasattr(hit_obj, 'refraction_range') and hit_obj.refraction_range is not None:
+        if ray.wavelength is None or (hit_obj.refraction_range[0] <= ray.wavelength <= hit_obj.refraction_range[1]):
+            allow_refraction = True
+
+    # Ничего не разрешено – проходим сквозь
+    if not allow_reflection and not allow_refraction:
+        new_ray = Ray(hit_point + offset_distance * ray.direction, ray.direction,
+                      energy=ray.energy, current_n=ray.current_n,
+                      color=ray.color, wavelength=ray.wavelength,
+                      energy_color_type=ray.energy_color_type)
+        segments.append((hit_point, new_ray.origin, new_ray.energy))   # соединительный отрезок
+        _trace_recursive(new_ray, elements, depth-1, min_energy, segments,
+                         total_limit, offset_distance)
+        return
+
     n_next = hit_obj.n if abs(ray.current_n - 1.0) < 1e-6 else 1.0
-
-    if hit_obj.is_mirror:
-        dot = np.dot(normal, ray.direction)
-        actual_normal = normal if dot < 0 else -normal
-        reflected_dir = ray.direction - 2 * np.dot(ray.direction, actual_normal) * actual_normal
-        new_ray = Ray(hit_point + 1e-3 * reflected_dir, reflected_dir, ray.energy, ray.current_n)
-        _trace_recursive(new_ray, elements, depth-1, min_energy, segments, total_limit)
-        return
-
-    if isinstance(hit_obj, Screen) or getattr(hit_obj, 'is_screen', False):
-        return
-
-    # Преломляющая поверхность – делим луч
-    new_rays = split_ray(ray, normal, n_next, start_point=hit_point)
+    new_rays = split_ray(ray, hit_obj.get_normal(hit_point), n_next, hit_point,
+                         allow_reflection=allow_reflection,
+                         allow_refraction=allow_refraction,
+                         offset_distance=offset_distance)
     for new_ray in new_rays:
-        _trace_recursive(new_ray, elements, depth-1, min_energy, segments, total_limit)
+        # Соединительный отрезок от точки удара до старта нового луча
+        segments.append((hit_point, new_ray.origin, new_ray.energy))
+        _trace_recursive(new_ray, elements, depth-1, min_energy, segments,
+                         total_limit, offset_distance)
 
 
 # ---------------------
 # Классы элементов сцены
 # ---------------------
 
+
 class Ray:
-    """Луч с началом и единичным направлением."""
     def __init__(self, origin, direction,
                  energy=1.0, current_n=1.0,
-                 color="yellow",              # строка или RGB-кортеж
-                 energy_color_type=2):        # 0, 1, 2
+                 color="yellow",
+                 energy_color_type=2,
+                 wavelength=None):          # новая опция
         self.origin = np.array(origin, dtype=float)
         self.direction = np.array(direction, dtype=float)
         self.direction /= np.linalg.norm(self.direction)
@@ -261,6 +286,7 @@ class Ray:
         self.current_n = current_n
         self.color = color
         self.energy_color_type = energy_color_type
+        self.wavelength = wavelength        # например, 550 (нм)
 
 
 class RayCloud:
@@ -444,89 +470,50 @@ class RayCloud:
 
 
 class RayTracer:
-    """
-    Управляет набором лучей и оптических элементов,
-    выполняет трассировку в выбранном режиме.
-    """
-    def __init__(self,
-                 mode: str = "trace_ray_tree",
-                 max_depth: int = 6,
-                 min_energy: float = 0.01,
-                 offset_distance: float = 0.5):
-        """
-        mode: "run_simulation" или "trace_ray_tree"
-        max_depth:  глубина трассировки (max_bounces для run_simulation)
-        min_energy: порог энергии для trace_ray_tree
-        offset_distance: отступ от поверхности (предотвращает самопересечения)
-        """
-        if mode not in ("run_simulation", "trace_ray_tree"):
-            raise ValueError("mode must be 'run_simulation' or 'trace_ray_tree'")
+    def __init__(self, mode='tree', max_depth=6, min_energy=0.01, offset_distance=0.5):
+        if mode not in ('simple', 'tree'):
+            raise ValueError("mode must be 'simple' or 'tree'")
         self.mode = mode
         self.max_depth = max_depth
         self.min_energy = min_energy
         self.offset_distance = offset_distance
+        self.rays = []
+        self.elements = []
 
-        self.rays: List[Ray] = []
-        self.elements: List = []
-        self.colors: List = []          # цвета для каждого луча (для run_simulation)
-
-    def add_ray(self, ray: Ray, color=None):
-        """Добавить один луч с опциональным цветом."""
+    def add_ray(self, ray: Ray):
         self.rays.append(ray)
-        if color is not None:
-            self.colors.append(color)
-        elif self.colors:
-            self.colors.append(None)   # сохраняем одинаковую длину
 
-    def add_elements(self, *elements):
-        """Добавить оптический элемент (поверхность, экран и т.д.)."""
-        for element in elements:
-            self.elements.append(element)
+    def add_element(self, element):
+        self.elements.append(element)
 
     def trace_all(self):
-        if self.mode == "run_simulation":
+        if self.mode == 'simple':
             trajectories, colors = [], []
             for ray in self.rays:
-                simple = Ray(origin=ray.origin, direction=ray.direction)
-                traj = run_simulation(simple, self.elements, max_bounces=self.max_depth)
+                traj = trace_ray(ray, self.elements, mode='simple',
+                                 max_depth=self.max_depth,
+                                 offset_distance=self.offset_distance)
                 trajectories.append(traj)
                 colors.append(ray.color)
             return trajectories, colors, None
-
-        else:  # trace_ray_tree
-            all_segments = []
-            all_colors = []
-            all_types = []
+        else:  # tree
+            all_segments, all_colors, all_types = [], [], []
             for ray in self.rays:
-                segs = trace_ray_tree(ray, self.elements,
-                                      max_depth=self.max_depth,
-                                      min_energy=self.min_energy)
+                segs = trace_ray(ray, self.elements, mode='tree',
+                                 max_depth=self.max_depth,
+                                 min_energy=self.min_energy,
+                                 offset_distance=self.offset_distance)
                 all_segments.extend(segs)
-                # Для каждого отрезка от этого луча запоминаем его цвет и тип
                 all_colors.extend([ray.color] * len(segs))
                 all_types.extend([ray.energy_color_type] * len(segs))
             return all_segments, all_colors, all_types
 
-    def clear_rays(self):
-        self.rays.clear()
-        self.colors.clear()
-
-    def clear_elements(self):
-        self.elements.clear()
-
-    def render(self, plotter: pv.Plotter, **cloud_kwargs) -> 'RayCloud':
-        """
-        Автоматически создаёт RayCloud с нужными настройками,
-        загружает в него результат трассировки и возвращает облако.
-        """
+    def render(self, plotter, **cloud_kwargs):
         result, colors, types = self.trace_all()
-
-        if self.mode == "run_simulation":
-            # Для обычных лучей: energy_color_type=0 (нет энергии)
+        if self.mode == 'simple':
             cloud = RayCloud(plotter, energy_color_type=0, **cloud_kwargs)
             cloud.update_from_trajectories(result, colors=colors)
         else:
-            # Для trace_ray_tree: передаём цвета и типы затухания
             cloud = RayCloud(plotter, energy_color_type=2, **cloud_kwargs)
             cloud.update_from_segments(result, base_colors=colors, energy_types=types)
         return cloud
@@ -534,8 +521,9 @@ class RayTracer:
 
 class PlaneSurface:
     def __init__(self, point, normal, n_inside,
-                 lens_origin, lens_axis, edge_radius, is_mirror=False,
-                 half_sizes=None, face_tangents=None):
+                 lens_origin, lens_axis, edge_radius,
+                 half_sizes=None, face_tangents=None, reflection_range=None, refraction_range=None,
+                 absorption_range=None):
         self.point = np.array(point, dtype=float)
         self.normal = np.array(normal, dtype=float)
         self.normal /= np.linalg.norm(self.normal)
@@ -544,10 +532,14 @@ class PlaneSurface:
         self.lens_axis = np.array(lens_axis, dtype=float)
         self.lens_axis /= np.linalg.norm(self.lens_axis)
         self.edge_radius = edge_radius
-        self.is_mirror = is_mirror
         # Прямоугольная апертура (опционально)
         self.half_sizes = half_sizes
         self.face_tangents = face_tangents
+
+        # Диапазоны отражения, преломления, поглощения
+        self.reflection_range = reflection_range
+        self.refraction_range = refraction_range
+        self.absorption_range = absorption_range
 
     def intersect(self, ray: Ray) -> Optional[float]:
         dot_dn = np.dot(ray.direction, self.normal)
@@ -581,13 +573,26 @@ class PlaneSurface:
     def get_normal(self, point: np.ndarray) -> np.ndarray:
         return self.normal
 
-    def interact(self, ray_dir, normal, n1, n2):
-        if self.is_mirror:
-            dot = np.dot(normal, ray_dir)
-            actual_normal = normal if dot < 0 else -normal
-            reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
-            return reflected_dir / np.linalg.norm(reflected_dir)
-        return refract(ray_dir, normal, n1, n2)
+    # def interact(self, ray_dir, normal, n1, n2):
+    #     if self.is_mirror:
+    #         dot = np.dot(normal, ray_dir)
+    #         actual_normal = normal if dot < 0 else -normal
+    #         reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
+    #         return reflected_dir / np.linalg.norm(reflected_dir)
+    #     return refract(ray_dir, normal, n1, n2)
+
+    def is_active(self, wavelength):
+        """Возвращает True, если поверхность должна взаимодействовать с данной длиной волны."""
+        if wavelength is None:
+            return True
+        # Если ни один диапазон не задан, объект невидим (прозрачен) – нет взаимодействия
+        if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
+            return False
+        # Проверяем попадание хотя бы в один диапазон
+        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        return in_ref or in_refr or in_abs
 
 
 class SphereSurface:
@@ -597,7 +602,8 @@ class SphereSurface:
     """
     def __init__(self, center: np.ndarray, radius: float, n_inside: float,
                  lens_origin: np.ndarray, lens_axis: np.ndarray,
-                 edge_radius: float, thickness: float, is_mirror=False):
+                 edge_radius: float, thickness: float, reflection_range=None, refraction_range=None,
+                 absorption_range=None):
         self.center = np.array(center, dtype=float)
         self.radius = radius
         self.n = n_inside
@@ -606,7 +612,11 @@ class SphereSurface:
         self.lens_axis /= np.linalg.norm(self.lens_axis)
         self.edge_radius = edge_radius
         self.thickness = thickness
-        self.is_mirror = is_mirror
+
+        # Диапазоны отражения, преломления, поглощения
+        self.reflection_range = reflection_range
+        self.refraction_range = refraction_range
+        self.absorption_range = absorption_range
 
     def intersect(self, ray: Ray) -> Optional[float]:
         """Пересечение луча со сферой с учётом границ линзы."""
@@ -647,19 +657,19 @@ class SphereSurface:
         normal = (point - self.center) / self.radius
         return normal / np.linalg.norm(normal)
 
-    def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
-        if self.is_mirror:
-            # Находим косинус угла падения
-            dot = np.dot(normal, ray_dir)
-
-            # ГЛАВНЫЙ СЕКРЕТ: нормаль должна всегда смотреть НАВСТРЕЧУ лучу
-            # Если dot > 0, значит нормаль и луч смотрят в одну сторону -> разворачиваем нормаль
-            actual_normal = normal if dot < 0 else -normal
-
-            # Формула отражения
-            reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
-            return reflected_dir / np.linalg.norm(reflected_dir)
-        return refract(ray_dir, normal, n1, n2)
+    # def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
+    #     if self.is_mirror:
+    #         # Находим косинус угла падения
+    #         dot = np.dot(normal, ray_dir)
+    #
+    #         # ГЛАВНЫЙ СЕКРЕТ: нормаль должна всегда смотреть НАВСТРЕЧУ лучу
+    #         # Если dot > 0, значит нормаль и луч смотрят в одну сторону -> разворачиваем нормаль
+    #         actual_normal = normal if dot < 0 else -normal
+    #
+    #         # Формула отражения
+    #         reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
+    #         return reflected_dir / np.linalg.norm(reflected_dir)
+    #     return refract(ray_dir, normal, n1, n2)
 
     def get_mesh(self) -> pv.PolyData:
         """Полигональная модель сферической поверхности (линзы или зеркала)."""
@@ -698,6 +708,19 @@ class SphereSurface:
 
         return mesh.transform(matrix, inplace=False)
 
+    def is_active(self, wavelength):
+        """Возвращает True, если поверхность должна взаимодействовать с данной длиной волны."""
+        if wavelength is None:
+            return True
+        # Если ни один диапазон не задан, объект невидим (прозрачен) – нет взаимодействия
+        if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
+            return False
+        # Проверяем попадание хотя бы в один диапазон
+        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        return in_ref or in_refr or in_abs
+
 
 class MeshSurface:
     """
@@ -705,9 +728,8 @@ class MeshSurface:
     Может быть зеркальной, преломляющей или поглощающей.
     """
     def __init__(self, mesh,  # может быть путём к файлу или готовым trimesh.Trimesh / pv.PolyData
-                 n_inside: float = 1.0,
-                 is_mirror: bool = False,
-                 is_screen: bool = False):
+                 n_inside: float = 1.0, reflection_range=None, refraction_range=None,
+                 absorption_range=None):
         # Загрузка, если передан путь
         if isinstance(mesh, str):
             self.trimesh_obj = trimesh.load(mesh)
@@ -733,21 +755,17 @@ class MeshSurface:
         self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
 
         self.n = n_inside
-        self._is_mirror = is_mirror
-        self._is_screen = is_screen
 
         # Кэш последнего пересечения
         self._last_ray_origin = None
         self._last_ray_direction = None
         self._last_hit_triangle_idx = None
 
-    @property
-    def is_mirror(self):
-        return self._is_mirror
+        # Диапазоны отражения, преломления, поглощения
+        self.reflection_range = reflection_range
+        self.refraction_range = refraction_range
+        self.absorption_range = absorption_range
 
-    @property
-    def is_screen(self):
-        return self._is_screen
 
     def intersect(self, ray: Ray) -> Optional[float]:
         """
@@ -822,6 +840,19 @@ class MeshSurface:
                            self.mesh.faces])
         return pv.PolyData(verts, faces)
 
+    def is_active(self, wavelength):
+        """Возвращает True, если поверхность должна взаимодействовать с данной длиной волны."""
+        if wavelength is None:
+            return True
+        # Если ни один диапазон не задан, объект невидим (прозрачен) – нет взаимодействия
+        if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
+            return False
+        # Проверяем попадание хотя бы в один диапазон
+        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        return in_ref or in_refr or in_abs
+
 
 class Screen(PlaneSurface):
     """Экран, поглощающий лучи."""
@@ -840,44 +871,33 @@ class Screen(PlaneSurface):
         return None  # сигнал остановки трассировки
 
 
-class RectangularScreen(PlaneSurface):
-    """Экран, поглощающий лучи, прямоугольный."""
+class RectangularMirror(PlaneSurface):
     def __init__(self, center: np.ndarray, normal: np.ndarray,
-                 width: float, height: float):
-        half_u = width / 2
-        half_v = height / 2
+                 width: float, height: float,
+                 n_inside: float = 1.0,
+                 reflection_range=(0, 10000)):   # ← теперь диапазон
+        self.width = width
+        self.height = height
+        half_u = width / 2.0
+        half_v = height / 2.0
+
+        center = np.asarray(center, dtype=float)
+        normal = np.asarray(normal, dtype=float)
+        normal /= np.linalg.norm(normal)
+
         tangent1, tangent2 = get_tangents(normal)
+
         super().__init__(
             point=center,
             normal=normal,
-            n_inside=1.0,
+            n_inside=n_inside,
             lens_origin=center,
             lens_axis=normal,
-            edge_radius=0.0,             # не используется
-            is_mirror=False,
+            edge_radius=0.0,
             half_sizes=(half_u, half_v),
-            face_tangents=(tangent1, tangent2)
+            face_tangents=(tangent1, tangent2),
+            reflection_range=reflection_range   # зеркало
         )
-        self.width = width
-        self.height = height
-        self.is_screen = True
-
-    def interact(self, ray_dir, normal, n1, n2):
-        return None   # поглощение
-
-    def get_mesh(self):
-        # Для визуализации прямоугольника
-        t1, t2 = self.face_tangents
-        hu, hv = self.half_sizes
-        c = self.lens_origin
-        p0 = c - hu * t1 - hv * t2
-        p1 = c + hu * t1 - hv * t2
-        p2 = c + hu * t1 + hv * t2
-        p3 = c - hu * t1 + hv * t2
-        vertices = np.array([p0, p1, p2, p3])
-        faces = np.array([[3, 0, 1, 2], [3, 0, 2, 3]])
-        mesh = pv.PolyData(vertices, faces)
-        return mesh
 
 
 class BoxPrism:
@@ -913,7 +933,8 @@ class BoxPrism:
                 lens_axis=norm_vec,
                 edge_radius=0.0,  # не используется при наличии half_sizes
                 half_sizes=(half_u, half_v),
-                face_tangents=tangents
+                face_tangents=tangents,
+                reflection_range = (0, np.inf), refraction_range = (0, np.inf)
             )
             self.surfaces.append(surf)
 
@@ -996,14 +1017,15 @@ class UniversalLens:
             n1_world = self.rotation @ np.array([-1, 0, 0])
             self.front = PlaneSurface(
                 point=p1_world, normal=n1_world, n_inside=n,
-                lens_origin=self.origin, lens_axis=self.axis_dir, edge_radius=edge_radius
+                lens_origin=self.origin, lens_axis=self.axis_dir, edge_radius=edge_radius, reflection_range=(0, np.inf), refraction_range=(0, np.inf)
             )
         else:
             c1_world = self.origin + self.rotation @ np.array([v1_local + R1, 0, 0])
             self.front = SphereSurface(
                 center=c1_world, radius=abs(R1), n_inside=n,
                 lens_origin=self.origin, lens_axis=self.axis_dir,
-                edge_radius=edge_radius, thickness=thickness
+                edge_radius=edge_radius, thickness=thickness,
+                reflection_range=(0, np.inf), refraction_range=(0, np.inf)
             )
 
         # Задняя поверхность
@@ -1012,14 +1034,15 @@ class UniversalLens:
             n2_world = self.rotation @ np.array([1, 0, 0])
             self.back = PlaneSurface(
                 point=p2_world, normal=n2_world, n_inside=n,
-                lens_origin=self.origin, lens_axis=self.axis_dir, edge_radius=edge_radius
+                lens_origin=self.origin, lens_axis=self.axis_dir, edge_radius=edge_radius, reflection_range=(0, np.inf), refraction_range=(0, np.inf)
             )
         else:
             c2_world = self.origin + self.rotation @ np.array([v2_local - R2, 0, 0])
             self.back = SphereSurface(
                 center=c2_world, radius=abs(R2), n_inside=n,
                 lens_origin=self.origin, lens_axis=self.axis_dir,
-                edge_radius=edge_radius, thickness=thickness
+                edge_radius=edge_radius, thickness=thickness,
+                reflection_range=(0, np.inf), refraction_range=(0, np.inf)
             )
 
         # 2. РАСЧЕТ ОПТИЧЕСКИХ ПАРАМЕТРОВ (Формула толстой линзы)
@@ -1311,6 +1334,109 @@ def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 20) -> np.
         current_n = next_n
 
     return np.array(path)
+
+
+def _trace_simple(ray: Ray, elements: List, max_bounces: int,
+                  offset_distance: float) -> np.ndarray:
+    path = [ray.origin]
+    current_ray = ray
+    current_n = ray.current_n
+
+    for _ in range(max_bounces):
+        best_t = float('inf')
+        hit_obj = None
+        for obj in elements:
+            if hasattr(obj, 'is_active') and not obj.is_active(current_ray.wavelength):
+                continue
+            t = obj.intersect(current_ray)
+            if t is not None and t < best_t:
+                best_t = t
+                hit_obj = obj
+
+        if hit_obj is None:
+            path.append(current_ray.origin + current_ray.direction * 500)
+            break
+
+        hit_point = current_ray.origin + current_ray.direction * best_t
+        path.append(hit_point)
+
+        # Поглощение?
+        if hasattr(hit_obj, 'absorption_range') and hit_obj.absorption_range is not None:
+            if current_ray.wavelength is None or (hit_obj.absorption_range[0] <= current_ray.wavelength <= hit_obj.absorption_range[1]):
+                break
+
+        # Разрешённые действия
+        allow_reflection = False
+        allow_refraction = False
+        if hasattr(hit_obj, 'reflection_range') and hit_obj.reflection_range is not None:
+            if current_ray.wavelength is None or (hit_obj.reflection_range[0] <= current_ray.wavelength <= hit_obj.reflection_range[1]):
+                allow_reflection = True
+        if hasattr(hit_obj, 'refraction_range') and hit_obj.refraction_range is not None:
+            if current_ray.wavelength is None or (hit_obj.refraction_range[0] <= current_ray.wavelength <= hit_obj.refraction_range[1]):
+                allow_refraction = True
+
+        # Ничего не разрешено – проходим сквозь
+        if not allow_reflection and not allow_refraction:
+            current_ray = Ray(hit_point + offset_distance * current_ray.direction,
+                              current_ray.direction,
+                              energy=current_ray.energy, current_n=current_n,
+                              color=current_ray.color,
+                              wavelength=current_ray.wavelength,
+                              energy_color_type=current_ray.energy_color_type)
+            continue
+
+        # Нормаль для отражения/преломления
+        normal = hit_obj.get_normal(hit_point)
+        dot = np.dot(normal, current_ray.direction)
+        actual_normal = normal if dot < 0 else -normal
+
+        if allow_refraction:
+            n_next = hit_obj.n if abs(current_n - 1.0) < 1e-6 else 1.0
+            refracted_dir = refract(current_ray.direction, normal, current_n, n_next)
+            if refracted_dir is not None:
+                current_n = n_next
+                new_dir = refracted_dir
+            else:  # полное внутреннее отражение
+                allow_reflection = True
+                allow_refraction = False
+                # принудительно отражаем
+
+        if allow_reflection:
+            new_dir = (current_ray.direction - 2 * np.dot(current_ray.direction, actual_normal) * actual_normal)
+            new_dir /= np.linalg.norm(new_dir)
+
+        current_ray = Ray(hit_point + offset_distance * new_dir, new_dir,
+                          energy=current_ray.energy, current_n=current_n,
+                          color=current_ray.color,
+                          wavelength=current_ray.wavelength,
+                          energy_color_type=current_ray.energy_color_type)
+
+    return np.array(path)
+
+
+def trace_ray(ray: Ray, elements: List, mode: str = 'tree',
+              max_depth: int = 10, min_energy: float = 0.01,
+              offset_distance: float = 0.5):
+    """
+    Универсальная трассировка луча.
+
+    mode:
+        'simple' – без разделения энергии (аналог run_simulation).
+        'tree'   – с разделением и учётом энергии (аналог trace_ray_tree).
+
+    Возвращает:
+        при mode='simple': массив точек траектории (np.ndarray)
+        при mode='tree'  : список отрезков (p1, p2, energy)
+    """
+    if mode == 'simple':
+        return _trace_simple(ray, elements, max_depth, offset_distance)
+    elif mode == 'tree':
+        segments = []
+        _trace_recursive(ray, elements, max_depth, min_energy, segments,
+                         total_limit=5000, offset_distance=offset_distance)
+        return segments
+    else:
+        raise ValueError("mode must be 'simple' or 'tree'")
 
 
 def visualize_scene(plotter: pv.Plotter, trajectory_list: List[np.ndarray],

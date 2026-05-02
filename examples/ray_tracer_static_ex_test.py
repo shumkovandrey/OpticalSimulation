@@ -14,7 +14,7 @@ start_time = time.time()
 
 
 # Создаём трассировщик
-tracer = RayTracer(mode="trace_ray_tree", max_depth=6, min_energy=0.005)
+tracer = RayTracer(mode="run_simulation", max_depth=6, min_energy=0.005)
 
 lens = UniversalLens(origin=[0, 0, 0], axis_dir=[1,0,0], R1=20, R2=10, thickness=2, edge_radius=3, n=1.5)
 
@@ -23,10 +23,10 @@ lens = UniversalLens(origin=[0, 0, 0], axis_dir=[1,0,0], R1=20, R2=10, thickness
 tracer.add_elements(*lens.get_surfaces())          # BoxPrism или любая поверхность
 
 # Генерируем лучи
-for y in np.linspace(-2, 2, 5000):
+for y in np.linspace(-2, 2, 5):
     origin = np.array([-15.0, y, 0.0])
     # ray = Ray(origin=origin, direction=[1, 0, 0], energy=1.0, current_n=1.0, color=["red", "blue", "green", "yellow", "orange"][round(y)+2], energy_color_type=[1, 2, 0, 1, 0][round(y)+2])
-    ray = Ray(origin=origin, direction=[1, 0, 0], energy=1.0, current_n=1.0, color=(uniform(0, 1), uniform(0, 1), uniform(0, 1)), energy_color_type=1)
+    ray = Ray(origin=origin, direction=[1, 0, 0], energy=1.0, current_n=1.0, color=(uniform(0, 1), uniform(0, 1), uniform(0, 1)), energy_color_type=2)
     tracer.add_ray(ray, color=(1, 1, 1))
 
 # Трассируем всё сразу
