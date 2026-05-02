@@ -57,7 +57,7 @@ for lens in lenses:
 # Создаём облако лучей
 if USE_TRACE_TREE:
     # energy_color_type=2: плавное затухание
-    cloud = RayCloud(plotter, energy_color_type=2, default_color="white",
+    cloud = RayCloud(plotter, energy_color_type=1, default_color="white",
                      min_alpha=0.05, gamma=0.3)
     cloud.update_from_segments(all_segments, base_colors=base_colors_list)
 else:

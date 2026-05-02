@@ -17,11 +17,11 @@ plotter.add_mesh(screen.get_mesh(), color="white", opacity=0.9,
 
 # Падающие лучи (параллельный пучок)
 base_dir = np.array([1.0, 1.0, 0.0]) / np.linalg.norm([1, 1, 0])
-start_origins = [np.array([-15.0, -1.0 + dy, 0.0]) for dy in np.linspace(-3, 3, 5)]
+start_origins = [np.array([-15.0, -1.0 + dy, 0.0]) for dy in np.linspace(-3, 3, 50)]
 
 # Облако лучей с энергией: цветовая карта "plasma",
 # прозрачность от 0.1 до 1.0, слабые лучи видны благодаря низкому min_energy_visible
-ray_cloud = RayCloud(plotter, energy_color_type=2, default_color=(0.5, 1, 1, 1))
+ray_cloud = RayCloud(plotter, energy_color_type=1, default_color=(0.1, 0.8, 0.5, 1))
 
 # Вращение призмы
 rotation_speed_z = 20.0

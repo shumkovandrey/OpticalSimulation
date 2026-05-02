@@ -5,6 +5,8 @@ import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 from typing import List, Optional, Tuple
 
+import trimesh
+
 from matplotlib.colors import to_rgb
 
 pv.global_theme.allow_empty_mesh = True
@@ -324,13 +326,7 @@ class RayCloud:
 
     # ---------- Методы обновления ----------
 
-    def update_from_trajectories(self, trajectories: List[np.ndarray],
-                                 colors: Optional[List] = None):
-        """
-        Обычные лучи (без энергии). energy_color_type игнорируется – прозрачность = 1.
-        trajectories: список массивов (N,3).
-        colors: список цветов для каждого луча (или None – используется default_color).
-        """
+    def update_from_trajectories(self, trajectories, colors=None):
         if not trajectories:
             self.actor.mapper.dataset.copy_from(pv.PolyData())
             return
@@ -350,11 +346,14 @@ class RayCloud:
             n = len(traj)
             if n < 2:
                 continue
+            # Проверка формы точек
+            if any(p.shape != (3,) for p in traj):
+                print("⚠️ Пропущена траектория с некорректными точками")
+                continue
             points.extend(traj)
             lines.append(np.hstack([n, np.arange(offset, offset + n)]))
-            rgba = self._build_rgba(color, 1.0)   # прозрачность всегда 1
-            for _ in range(n):
-                rgba_list.append(rgba)
+            rgba = self._build_rgba(color, 1.0)
+            rgba_list.extend([rgba] * n)
             offset += n
 
         if not points:
@@ -370,36 +369,41 @@ class RayCloud:
         self.actor.mapper.dataset.copy_from(new_mesh)
         self.actor.mapper.SetColorModeToDirectScalars()
 
-    def update_from_segments(self, segments: List[Tuple[np.ndarray, np.ndarray, float]],
-                             base_colors: Optional[List] = None):
-        """
-        Лучи с энергией (trace_ray_tree).
-        segments: список (p1, p2, energy).
-        base_colors: список цветов для каждого отрезка (или None – default_color).
-        Прозрачность вычисляется по энергии согласно energy_color_type.
-        """
+    def update_from_segments(self, segments: list, base_colors=None):
         if not segments:
             self.actor.mapper.dataset.copy_from(pv.PolyData())
             return
-
-        if base_colors is not None and len(base_colors) != len(segments):
-            raise ValueError("base_colors length must match number of segments")
 
         points = []
         lines = []
         offset = 0
         rgba_list = []
 
-        for i, (p1, p2, energy) in enumerate(segments):
+        # Проверяем все сегменты
+        valid_segments = []
+        for i, seg in enumerate(segments):
+            p1, p2, energy = seg
+            # Убедимся, что точки имеют правильную размерность
+            if p1.shape != (3,) or p2.shape != (3,):
+                print(f"⚠️ Пропущен сегмент {i}: неверная форма точек {p1.shape}, {p2.shape}")
+                continue
+            if np.any(np.isnan(p1)) or np.any(np.isnan(p2)):
+                print(f"⚠️ Пропущен сегмент {i}: NaN в точках")
+                continue
+            valid_segments.append(seg)
+
+        if not valid_segments:
+            self.actor.mapper.dataset.copy_from(pv.PolyData())
+            return
+
+        for i, (p1, p2, energy) in enumerate(valid_segments):
             points.append(p1)
             points.append(p2)
             lines.append([2, offset, offset + 1])
-
             color = base_colors[i] if base_colors else self.default_color
             alpha = self._energy_to_alpha(energy)
             rgba = self._build_rgba(color, alpha)
-            rgba_list.append(rgba)
-            rgba_list.append(rgba)
+            rgba_list.extend([rgba, rgba])
             offset += 2
 
         points = np.array(points, dtype=np.float32)
@@ -577,6 +581,130 @@ class SphereSurface:
         matrix[:3, 3] = world_center
 
         return mesh.transform(matrix, inplace=False)
+
+
+class MeshSurface:
+    """
+    Произвольная треугольная поверхность, загружаемая из файла или создаваемая из меша.
+    Может быть зеркальной, преломляющей или поглощающей.
+    """
+    def __init__(self, mesh,  # может быть путём к файлу или готовым trimesh.Trimesh / pv.PolyData
+                 n_inside: float = 1.0,
+                 is_mirror: bool = False,
+                 is_screen: bool = False):
+        # Загрузка, если передан путь
+        if isinstance(mesh, str):
+            self.trimesh_obj = trimesh.load(mesh)
+            if isinstance(self.trimesh_obj, trimesh.Scene):
+                self.trimesh_obj = trimesh.util.concatenate(
+                    [g for g in self.trimesh_obj.geometry.values()
+                     if isinstance(g, trimesh.Trimesh)]
+                )
+            if not isinstance(self.trimesh_obj, trimesh.Trimesh):
+                raise TypeError("Файл не содержит треугольной сетки")
+        elif isinstance(mesh, trimesh.Trimesh):
+            self.trimesh_obj = mesh
+        elif isinstance(mesh, pv.PolyData):
+            # Конвертируем PyVista → trimesh
+            verts = mesh.points
+            faces = mesh.faces.reshape(-1, 4)[:, 1:4]
+            self.trimesh_obj = trimesh.Trimesh(vertices=verts, faces=faces)
+        else:
+            raise TypeError("mesh должен быть str, trimesh.Trimesh или pv.PolyData")
+
+        self.mesh = self.trimesh_obj
+        # Ускоритель для пересечений
+        self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
+
+        self.n = n_inside
+        self._is_mirror = is_mirror
+        self._is_screen = is_screen
+
+        # Кэш последнего пересечения
+        self._last_ray_origin = None
+        self._last_ray_direction = None
+        self._last_hit_triangle_idx = None
+
+    @property
+    def is_mirror(self):
+        return self._is_mirror
+
+    @property
+    def is_screen(self):
+        return self._is_screen
+
+    def intersect(self, ray: Ray) -> Optional[float]:
+        """
+        Возвращает параметр t для ближайшего пересечения > 0,
+        либо None, если пересечений нет.
+        """
+        origins = np.array([ray.origin])
+        directions = np.array([ray.direction])
+
+        # Ищем все пересечения, trimesh возвращает их уже отсортированными по расстоянию
+        locations, _, tri_indices = self.intersector.intersects_location(
+            origins, directions, multiple_hits=False
+        )
+
+        if len(locations) == 0:
+            return None
+
+        hit_point = locations[0]
+        t = np.linalg.norm(hit_point - ray.origin)
+
+        if t <= 1e-6:
+            return None
+
+        # Сохраняем для get_normal
+        self._last_ray_origin = ray.origin.copy()
+        self._last_ray_direction = ray.direction.copy()
+        self._last_hit_triangle_idx = tri_indices[0]
+        return t
+
+    def get_normal(self, point: np.ndarray) -> np.ndarray:
+        """
+        Возвращает нормаль к поверхности в точке пересечения.
+        Использует нормаль треугольника из последнего пересечения.
+        """
+        if self._last_hit_triangle_idx is not None:
+            # Берём нормаль треугольника, который был пересечён
+            normal = self.mesh.face_normals[self._last_hit_triangle_idx]
+        else:
+            # Запасной вариант: ищем ближайший треугольник
+            _, _, tri_idx = trimesh.proximity.closest_point(self.mesh, [point])
+            normal = self.mesh.face_normals[tri_idx[0]]
+
+        # Нормализуем
+        return normal / np.linalg.norm(normal)
+
+    def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
+        """
+        Определяет поведение луча при столкновении:
+          - зеркало: отражение
+          - экран/поглотитель: остановка (возвращает None)
+          - иначе: преломление (вызывается refract)
+        """
+        if self.is_screen:
+            return None  # луч поглощён
+
+        if self.is_mirror:
+            # Отражение (нормаль всегда направлена против луча)
+            dot = np.dot(normal, ray_dir)
+            actual_normal = normal if dot < 0 else -normal
+            reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
+            return reflected_dir / np.linalg.norm(reflected_dir)
+
+        # Преломление
+        return refract(ray_dir, normal, n1, n2)
+
+    def get_mesh(self) -> pv.PolyData:
+        """
+        Возвращает PyVista меш для визуализации.
+        """
+        verts = self.mesh.vertices
+        faces = np.hstack([np.full((len(self.mesh.faces), 1), 3),
+                           self.mesh.faces])
+        return pv.PolyData(verts, faces)
 
 
 class Screen(PlaneSurface):

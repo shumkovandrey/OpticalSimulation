@@ -17,8 +17,8 @@ surfaces = prism.get_surfaces() + [screen]
 source_pos = np.array([-15.0, -10.0, 0.0])
 base_dir = normalize([1.0, 1.0, 0.0])
 trajectories = []
-for dy in np.linspace(2, 8, 6):
-    for dz in np.linspace(-3, 3, 6):
+for dy in np.linspace(2, 8, 60):
+    for dz in np.linspace(-3, 3, 60):
         start = source_pos + np.array([0, dy, dz])
         ray = Ray(origin=start, direction=base_dir)
         traj = run_simulation(ray, surfaces, max_bounces=4)
