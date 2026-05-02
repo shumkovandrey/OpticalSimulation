@@ -5,6 +5,8 @@ import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 from typing import List, Optional, Tuple
 
+from matplotlib.colors import to_rgb
+
 pv.global_theme.allow_empty_mesh = True
 
 # -------------------------------
@@ -196,7 +198,11 @@ def trace_ray_tree(ray: Ray, elements: List, max_depth: int,
 
 
 def _trace_recursive(ray: Ray, elements: List, depth: int, min_energy: float,
-                     segments: List):
+                     segments: List, total_limit: int = 5000):
+    # Ограничение общего числа отрезков
+    if len(segments) >= total_limit:
+        return
+
     if depth <= 0 or ray.energy < min_energy:
         return
 
@@ -224,55 +230,16 @@ def _trace_recursive(ray: Ray, elements: List, depth: int, min_energy: float,
         actual_normal = normal if dot < 0 else -normal
         reflected_dir = ray.direction - 2 * np.dot(ray.direction, actual_normal) * actual_normal
         new_ray = Ray(hit_point + 1e-3 * reflected_dir, reflected_dir, ray.energy, ray.current_n)
-        _trace_recursive(new_ray, elements, depth-1, min_energy, segments)
+        _trace_recursive(new_ray, elements, depth-1, min_energy, segments, total_limit)
         return
 
     if isinstance(hit_obj, Screen):
         return
 
-    # Преломляющая поверхность – делим луч, используя hit_point как старт
+    # Преломляющая поверхность – делим луч
     new_rays = split_ray(ray, normal, n_next, start_point=hit_point)
     for new_ray in new_rays:
-        _trace_recursive(new_ray, elements, depth-1, min_energy, segments)
-
-
-# def get_mirror_mesh(surface):
-#     """
-#     surface: объект класса SphereSurface (у которого есть center, radius,
-#              lens_origin, lens_axis, edge_radius)
-#     """
-#     # 1. Создаем полную сферу в локальном НУЛЕ
-#     # Это гарантирует, что у нас не будет паразитных смещений
-#     radius = surface.radius
-#     mesh = pv.Sphere(radius=radius, center=(0, 0, 0),
-#                      phi_resolution=80, theta_resolution=80)
-#
-#     # 2. Обрезаем сферу, чтобы оставить только "шапочку" нужного радиуса
-#     # В локальных координатах (ось X) вершина сферы находится в точке [radius, 0, 0]
-#     # Отрезаем всё, что дальше edge_radius по высоте (Y и Z)
-#     # Самый простой способ для сферы — обрезать плоскостью по координате X
-#     sagitta = radius - np.sqrt(max(0, radius ** 2 - surface.edge_radius ** 2))
-#
-#     # Отрезаем заднюю часть сферы, оставляя только "купол" высотой sagitta
-#     mesh = mesh.clip(normal=[1, 0, 0], origin=[radius - sagitta, 0, 0], invert=False)
-#
-#     # 3. Глобальная трансформация (синхронизация с математикой)
-#     # Создаем матрицу 4x4
-#     matrix = np.eye(4)
-#
-#     # Используем ту же функцию вращения, что и для линз,
-#     # чтобы направить локальную ось X вдоль lens_axis
-#     rot_matrix = -calculate_rotation_matrix(surface.lens_axis)
-#     matrix[:3, :3] = rot_matrix
-#
-#     # СМЕЩЕНИЕ:
-#     # В локальных координатах вершина в [radius, 0, 0].
-#     # Нам нужно, чтобы после поворота она попала в lens_origin.
-#     # Поэтому центр сферы в мировых координатах = lens_origin - axis * radius
-#     world_center = surface.lens_origin + (surface.lens_axis * radius)
-#     matrix[:3, 3] = world_center
-#
-#     return mesh.transform(matrix)
+        _trace_recursive(new_ray, elements, depth-1, min_energy, segments, total_limit)
 
 
 # ---------------------
@@ -288,6 +255,178 @@ class Ray:
         self.direction /= np.linalg.norm(self.direction)
         self.energy = energy
         self.current_n = current_n
+
+
+class RayCloud:
+    """
+    Единый актор для отрисовки множества отрезков.
+    Гибкая настройка:
+      - Без энергии: можно задать цвет каждому лучу отдельно.
+      - С энергией: используется цветовая карта и логарифмическая прозрачность.
+    """
+
+    def __init__(self, plotter: pv.Plotter,
+                 use_energy_color: int = 0,
+                 color: str = "yellow",
+                 cmap_name: str = "plasma",
+                 line_width: float = 2.0,
+                 min_energy_visible: float = 1e-5,
+                 alpha_range: Tuple[float, float] = (0.05, 1.0)):
+        """
+        Параметры:
+          use_energy_color: bool – использовать ли энергию для цвета/прозрачности.
+          color: цвет по умолчанию, если не задан для конкретного луча.
+          cmap_name: имя цветовой карты matplotlib для режима энергии.
+          line_width: толщина линий.
+          min_energy_visible: минимальная видимая энергия (для логарифмической шкалы).
+          alpha_range: (min_alpha, max_alpha) – диапазон непрозрачности.
+        """
+        self.plotter = plotter
+        self.use_energy_color = use_energy_color
+        self.default_color = color
+        self.line_width = line_width
+        self.min_energy_visible = min_energy_visible
+        self.alpha_min, self.alpha_max = alpha_range
+        self.cmap = None
+        if use_energy_color == 3:
+            from matplotlib import cm
+            self.cmap = cm.get_cmap(cmap_name)
+
+        # Временный меш для инициализации актора
+        temp_points = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
+        temp_mesh = pv.PolyData(temp_points)
+        if use_energy_color > 0:
+            temp_mesh.point_data["colors"] = np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32)
+            self.actor = plotter.add_mesh(
+                temp_mesh,
+                scalars="colors",
+                rgba=True,
+                line_width=line_width,
+                render_lines_as_tubes=False,
+                name="RayCloud"
+            )
+        else:
+            # Даже для простых лучей будем использовать rgba для единообразия,
+            # но инициализируем с фиктивным цветом
+            temp_mesh.point_data["colors"] = np.array([[1.0, 1.0, 0.0, 1.0]], dtype=np.float32)
+            self.actor = plotter.add_mesh(
+                temp_mesh,
+                scalars="colors",
+                rgba=True,
+                line_width=line_width,
+                render_lines_as_tubes=False,
+                name="RayCloud"
+            )
+
+    def _energy_to_rgba(self, energy: float) -> np.ndarray:
+        """Преобразует энергию в массив RGBA."""
+        if self.use_energy_color == 1:
+            # Логарифмическая шкала для альфа
+            alpha = energy
+            rgb = np.array(to_rgb(self.default_color), dtype=np.float32)
+            return np.array([*rgb, alpha], dtype=np.float32)
+        elif self.use_energy_color == 2:
+            alpha = max(0.05, energy ** 0.3)
+            rgb = np.array(to_rgb(self.default_color), dtype=np.float32)
+            return np.array([*rgb, alpha], dtype=np.float32)
+        elif self.use_energy_color == 3:
+            min_vis = self.min_energy_visible
+            alpha = self.alpha_min + (self.alpha_max - self.alpha_min) * np.clip(
+                np.log10(max(energy, min_vis) / min_vis) / np.log10(1.0 / min_vis), 0, 1)
+            rgb = self.cmap(energy)[:3]
+            return np.array([*rgb, alpha], dtype=np.float32)
+        else:
+            # Без энергии – полная непрозрачность
+            rgb = np.array(to_rgb(self.default_color), dtype=np.float32)
+            return np.array([*rgb, 1.0], dtype=np.float32)
+
+    def _color_to_rgba(self, color) -> np.ndarray:
+        """Преобразует строку или RGB-кортеж в RGBA с альфа=1."""
+        rgb = np.array(to_rgb(color), dtype=np.float32)
+        return np.array([*rgb, 1.0], dtype=np.float32)
+
+    # ---------- Методы обновления ----------
+
+    def update_from_trajectories(self, trajectories: List[np.ndarray],
+                                 colors: Optional[List] = None):
+        """
+        Обычные лучи (без энергии).
+        trajectories: список массивов (N,3) – траектории.
+        colors: список цветов (строка или RGB) для каждого луча.
+                Если None, используется self.default_color.
+        """
+        if not trajectories:
+            self.actor.mapper.dataset.copy_from(pv.PolyData())
+            return
+
+        # Если colors не задан, создаём список из default_color
+        n_rays = len(trajectories)
+        if colors is None:
+            colors = [self.default_color] * n_rays
+        elif len(colors) != n_rays:
+            raise ValueError("colors length must match number of trajectories")
+
+        points = []
+        lines = []
+        offset = 0
+        rgba_list = []
+
+        for traj, color in zip(trajectories, colors):
+            n = len(traj)
+            if n < 2:
+                continue
+            points.extend(traj)
+            lines.append(np.hstack([n, np.arange(offset, offset + n)]))
+            rgba = self._color_to_rgba(color)
+            # Каждой точке луча присваиваем один и тот же цвет
+            for _ in range(n):
+                rgba_list.append(rgba)
+            offset += n
+
+        if not points:
+            self.actor.mapper.dataset.copy_from(pv.PolyData())
+            return
+
+        points = np.array(points, dtype=np.float32)
+        lines = np.hstack(lines).astype(int)
+        new_mesh = pv.PolyData(points, lines=lines)
+        new_mesh.point_data["colors"] = np.array(rgba_list, dtype=np.float32)
+        new_mesh.active_scalars_name = "colors"
+
+        self.actor.mapper.dataset.copy_from(new_mesh)
+        self.actor.mapper.SetColorModeToDirectScalars()
+
+    def update_from_segments(self, segments: List[Tuple[np.ndarray, np.ndarray, float]]):
+        """
+        Лучи с энергией (trace_ray_tree).
+        segments: список (p1, p2, energy).
+        """
+        if not segments:
+            self.actor.mapper.dataset.copy_from(pv.PolyData())
+            return
+
+        points = []
+        lines = []
+        offset = 0
+        rgba_list = []
+
+        for p1, p2, energy in segments:
+            points.append(p1)
+            points.append(p2)
+            lines.append([2, offset, offset + 1])
+            rgba = self._energy_to_rgba(energy)
+            rgba_list.append(rgba)
+            rgba_list.append(rgba)
+            offset += 2
+
+        points = np.array(points, dtype=np.float32)
+        lines = np.hstack(lines).astype(int)
+        new_mesh = pv.PolyData(points, lines=lines)
+        new_mesh.point_data["colors"] = np.array(rgba_list, dtype=np.float32)
+        new_mesh.active_scalars_name = "colors"
+
+        self.actor.mapper.dataset.copy_from(new_mesh)
+        self.actor.mapper.SetColorModeToDirectScalars()
 
 
 class PlaneSurface:
@@ -472,6 +611,45 @@ class Screen(PlaneSurface):
 
     def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> None:
         return None  # сигнал остановки трассировки
+
+
+class RectangularScreen(PlaneSurface):
+    """Экран, поглощающий лучи, прямоугольный."""
+    def __init__(self, center: np.ndarray, normal: np.ndarray,
+                 width: float, height: float):
+        half_u = width / 2
+        half_v = height / 2
+        tangent1, tangent2 = get_tangents(normal)
+        super().__init__(
+            point=center,
+            normal=normal,
+            n_inside=1.0,
+            lens_origin=center,
+            lens_axis=normal,
+            edge_radius=0.0,             # не используется
+            is_mirror=False,
+            half_sizes=(half_u, half_v),
+            face_tangents=(tangent1, tangent2)
+        )
+        self.width = width
+        self.height = height
+
+    def interact(self, ray_dir, normal, n1, n2):
+        return None   # поглощение
+
+    def get_mesh(self):
+        # Для визуализации прямоугольника
+        t1, t2 = self.face_tangents
+        hu, hv = self.half_sizes
+        c = self.lens_origin
+        p0 = c - hu * t1 - hv * t2
+        p1 = c + hu * t1 - hv * t2
+        p2 = c + hu * t1 + hv * t2
+        p3 = c - hu * t1 + hv * t2
+        vertices = np.array([p0, p1, p2, p3])
+        faces = np.array([[3, 0, 1, 2], [3, 0, 2, 3]])
+        mesh = pv.PolyData(vertices, faces)
+        return mesh
 
 
 class BoxPrism:
@@ -940,10 +1118,33 @@ def visualize_scene(plotter: pv.Plotter, trajectory_list: List[np.ndarray],
     plotter.add_axes()
 
 
+def update_rays(trajectories):
+    """trajectories – список np.array траекторий (последовательностей точек)"""
+    # Собираем все точки и индексы линий
+    points = []
+    lines = []
+    offset = 0
+    for traj in trajectories:
+        n = len(traj)
+        points.extend(traj)
+        lines.append(np.hstack([n, np.arange(offset, offset + n)]))
+        offset += n
+
+    if not points:
+        return
+    points = np.array(points)
+    lines = np.hstack(lines).astype(int)
+
+    # Создаём новый PolyData и копируем в существующий
+    new_pd = pv.PolyData(points, lines=lines)
+    # Быстрое обновление (без удаления актора)
+    plotter.actors["rays_actor"].mapper.dataset.copy_from(new_pd)
+
+
 plotter = pv.Plotter()
 plotter.set_background("black")
 plotter.view_isometric()
 plotter.enable_parallel_projection()
 plotter.enable_terrain_style(mouse_wheel_zooms=True)
 plotter.view_vector((0, 0, 1), viewup=(0, 1, 0))
-plotter.add_axes()
+plotter.add_axes(color="white")
