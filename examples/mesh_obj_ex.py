@@ -1,15 +1,15 @@
 from main import *
 
 
-# mesh = trimesh.load("../Models/Untitled.stl")
-mesh = trimesh.creation.icosphere()
+mesh = trimesh.load("../Models/Untitled.stl")
+# mesh = trimesh.creation.icosphere()
 mesh.apply_scale(5)
 
-surface = MeshSurface(mesh, is_mirror=True)
+surface = MeshSurface(mesh, n_inside=1.5, is_screen=True)
 
 # Лучи идут вдоль оси X, y от -40 до 40 (попадают в сферу)
 origins = []
-for y in np.linspace(-5, 5, 50):
+for y in np.linspace(-7, 7, 5):
     origins.append(np.array([-30, y, 0]))
 direction = normalize([1.0, 0, 0.0])
 

@@ -250,13 +250,17 @@ def _trace_recursive(ray: Ray, elements: List, depth: int, min_energy: float,
 
 class Ray:
     """Луч с началом и единичным направлением."""
-    def __init__(self, origin: np.ndarray, direction: np.ndarray,
-                 energy: float = 1.0, current_n: float = 1.0):
+    def __init__(self, origin, direction,
+                 energy=1.0, current_n=1.0,
+                 color="yellow",              # строка или RGB-кортеж
+                 energy_color_type=2):        # 0, 1, 2
         self.origin = np.array(origin, dtype=float)
         self.direction = np.array(direction, dtype=float)
         self.direction /= np.linalg.norm(self.direction)
         self.energy = energy
         self.current_n = current_n
+        self.color = color
+        self.energy_color_type = energy_color_type
 
 
 class RayCloud:
@@ -369,28 +373,36 @@ class RayCloud:
         self.actor.mapper.dataset.copy_from(new_mesh)
         self.actor.mapper.SetColorModeToDirectScalars()
 
-    def update_from_segments(self, segments: list, base_colors=None):
+    def update_from_segments(self, segments: list,
+                             base_colors=None,
+                             energy_types=None):
         if not segments:
             self.actor.mapper.dataset.copy_from(pv.PolyData())
             return
+
+        if energy_types is not None and len(energy_types) != len(segments):
+            raise ValueError("energy_types length must match segments")
 
         points = []
         lines = []
         offset = 0
         rgba_list = []
 
-        # Проверяем все сегменты
+        # Проверка и фильтрация битых сегментов
         valid_segments = []
+        valid_colors = []
+        valid_types = []
         for i, seg in enumerate(segments):
             p1, p2, energy = seg
-            # Убедимся, что точки имеют правильную размерность
             if p1.shape != (3,) or p2.shape != (3,):
-                print(f"⚠️ Пропущен сегмент {i}: неверная форма точек {p1.shape}, {p2.shape}")
                 continue
             if np.any(np.isnan(p1)) or np.any(np.isnan(p2)):
-                print(f"⚠️ Пропущен сегмент {i}: NaN в точках")
                 continue
             valid_segments.append(seg)
+            if base_colors:
+                valid_colors.append(base_colors[i])
+            if energy_types:
+                valid_types.append(energy_types[i])
 
         if not valid_segments:
             self.actor.mapper.dataset.copy_from(pv.PolyData())
@@ -400,8 +412,23 @@ class RayCloud:
             points.append(p1)
             points.append(p2)
             lines.append([2, offset, offset + 1])
-            color = base_colors[i] if base_colors else self.default_color
-            alpha = self._energy_to_alpha(energy)
+
+            # Определяем цвет
+            color = valid_colors[i] if valid_colors else self.default_color
+
+            # Определяем тип затухания (индивидуальный или глобальный)
+            etype = valid_types[i] if valid_types else self.energy_color_type
+
+            # Вычисляем непрозрачность по нужному закону
+            if etype == 0:
+                alpha = 1.0
+            elif etype == 1:
+                alpha = np.clip(energy, 0.0, 1.0)
+            elif etype == 2:
+                alpha = max(self.min_alpha, energy ** self.gamma)
+            else:
+                alpha = 1.0
+
             rgba = self._build_rgba(color, alpha)
             rgba_list.extend([rgba, rgba])
             offset += 2
@@ -414,6 +441,95 @@ class RayCloud:
 
         self.actor.mapper.dataset.copy_from(new_mesh)
         self.actor.mapper.SetColorModeToDirectScalars()
+
+
+class RayTracer:
+    """
+    Управляет набором лучей и оптических элементов,
+    выполняет трассировку в выбранном режиме.
+    """
+    def __init__(self,
+                 mode: str = "trace_ray_tree",
+                 max_depth: int = 6,
+                 min_energy: float = 0.01,
+                 offset_distance: float = 0.5):
+        """
+        mode: "run_simulation" или "trace_ray_tree"
+        max_depth:  глубина трассировки (max_bounces для run_simulation)
+        min_energy: порог энергии для trace_ray_tree
+        offset_distance: отступ от поверхности (предотвращает самопересечения)
+        """
+        if mode not in ("run_simulation", "trace_ray_tree"):
+            raise ValueError("mode must be 'run_simulation' or 'trace_ray_tree'")
+        self.mode = mode
+        self.max_depth = max_depth
+        self.min_energy = min_energy
+        self.offset_distance = offset_distance
+
+        self.rays: List[Ray] = []
+        self.elements: List = []
+        self.colors: List = []          # цвета для каждого луча (для run_simulation)
+
+    def add_ray(self, ray: Ray, color=None):
+        """Добавить один луч с опциональным цветом."""
+        self.rays.append(ray)
+        if color is not None:
+            self.colors.append(color)
+        elif self.colors:
+            self.colors.append(None)   # сохраняем одинаковую длину
+
+    def add_element(self, *elements):
+        """Добавить оптический элемент (поверхность, экран и т.д.)."""
+        for element in elements:
+            self.elements.append(element)
+
+    def trace_all(self):
+        if self.mode == "run_simulation":
+            trajectories, colors = [], []
+            for ray in self.rays:
+                simple = Ray(origin=ray.origin, direction=ray.direction)
+                traj = run_simulation(simple, self.elements, max_bounces=self.max_depth)
+                trajectories.append(traj)
+                colors.append(ray.color)
+            return trajectories, colors, None
+
+        else:  # trace_ray_tree
+            all_segments = []
+            all_colors = []
+            all_types = []
+            for ray in self.rays:
+                segs = trace_ray_tree(ray, self.elements,
+                                      max_depth=self.max_depth,
+                                      min_energy=self.min_energy)
+                all_segments.extend(segs)
+                # Для каждого отрезка от этого луча запоминаем его цвет и тип
+                all_colors.extend([ray.color] * len(segs))
+                all_types.extend([ray.energy_color_type] * len(segs))
+            return all_segments, all_colors, all_types
+
+    def clear_rays(self):
+        self.rays.clear()
+        self.colors.clear()
+
+    def clear_elements(self):
+        self.elements.clear()
+
+    def render(self, plotter: pv.Plotter, **cloud_kwargs) -> 'RayCloud':
+        """
+        Автоматически создаёт RayCloud с нужными настройками,
+        загружает в него результат трассировки и возвращает облако.
+        """
+        result, colors, types = self.trace_all()
+
+        if self.mode == "run_simulation":
+            # Для обычных лучей: energy_color_type=0 (нет энергии)
+            cloud = RayCloud(plotter, energy_color_type=0, **cloud_kwargs)
+            cloud.update_from_trajectories(result, colors=colors)
+        else:
+            # Для trace_ray_tree: передаём цвета и типы затухания
+            cloud = RayCloud(plotter, energy_color_type=2, **cloud_kwargs)
+            cloud.update_from_segments(result, base_colors=colors, energy_types=types)
+        return cloud
 
 
 class PlaneSurface:
