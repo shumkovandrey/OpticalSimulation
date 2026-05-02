@@ -21,11 +21,7 @@ start_origins = [np.array([-15.0, -1.0 + dy, 0.0]) for dy in np.linspace(-3, 3, 
 
 # Облако лучей с энергией: цветовая карта "plasma",
 # прозрачность от 0.1 до 1.0, слабые лучи видны благодаря низкому min_energy_visible
-ray_cloud = RayCloud(plotter,
-                     use_energy_color=3,
-                     cmap_name="plasma",
-                     min_energy_visible=1e-6,
-                     alpha_range=(0.1, 1.0))
+ray_cloud = RayCloud(plotter, energy_color_type=2, default_color=(0.5, 1, 1, 1))
 
 # Вращение призмы
 rotation_speed_z = 20.0

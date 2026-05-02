@@ -259,107 +259,82 @@ class Ray:
 
 class RayCloud:
     """
-    Единый актор для отрисовки множества отрезков.
-    Гибкая настройка:
-      - Без энергии: можно задать цвет каждому лучу отдельно.
-      - С энергией: используется цветовая карта и логарифмическая прозрачность.
+    Единый актор для множества отрезков.
+    Гибкая настройка прозрачности по энергии.
+
+    Параметры:
+        plotter: pv.Plotter
+        energy_color_type: int (0, 1, 2) – как энергия влияет на непрозрачность.
+                           0 – не используется (opacity=1).
+                           1 – opacity = energy.
+                           2 – opacity = max(min_alpha, energy ** gamma).
+        default_color: цвет по умолчанию (строка или RGB-кортеж).
+        line_width: толщина линий.
+        min_alpha: минимальная непрозрачность для режима 2 (по умолчанию 0.05).
+        gamma: показатель степени для режима 2 (по умолчанию 0.3).
     """
-
     def __init__(self, plotter: pv.Plotter,
-                 use_energy_color: int = 0,
-                 color: str = "yellow",
-                 cmap_name: str = "plasma",
+                 energy_color_type: int = 1,
+                 default_color = "yellow",
                  line_width: float = 2.0,
-                 min_energy_visible: float = 1e-5,
-                 alpha_range: Tuple[float, float] = (0.05, 1.0)):
-        """
-        Параметры:
-          use_energy_color: bool – использовать ли энергию для цвета/прозрачности.
-          color: цвет по умолчанию, если не задан для конкретного луча.
-          cmap_name: имя цветовой карты matplotlib для режима энергии.
-          line_width: толщина линий.
-          min_energy_visible: минимальная видимая энергия (для логарифмической шкалы).
-          alpha_range: (min_alpha, max_alpha) – диапазон непрозрачности.
-        """
+                 min_alpha: float = 0.05,
+                 gamma: float = 0.3):
         self.plotter = plotter
-        self.use_energy_color = use_energy_color
-        self.default_color = color
+        self.energy_color_type = energy_color_type
+        self.default_color = default_color
         self.line_width = line_width
-        self.min_energy_visible = min_energy_visible
-        self.alpha_min, self.alpha_max = alpha_range
-        self.cmap = None
-        if use_energy_color == 3:
-            from matplotlib import cm
-            self.cmap = cm.get_cmap(cmap_name)
+        self.min_alpha = min_alpha
+        self.gamma = gamma
 
-        # Временный меш для инициализации актора
+        # Временный меш для инициализации
         temp_points = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
         temp_mesh = pv.PolyData(temp_points)
-        if use_energy_color > 0:
-            temp_mesh.point_data["colors"] = np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32)
-            self.actor = plotter.add_mesh(
-                temp_mesh,
-                scalars="colors",
-                rgba=True,
-                line_width=line_width,
-                render_lines_as_tubes=False,
-                name="RayCloud"
-            )
-        else:
-            # Даже для простых лучей будем использовать rgba для единообразия,
-            # но инициализируем с фиктивным цветом
-            temp_mesh.point_data["colors"] = np.array([[1.0, 1.0, 0.0, 1.0]], dtype=np.float32)
-            self.actor = plotter.add_mesh(
-                temp_mesh,
-                scalars="colors",
-                rgba=True,
-                line_width=line_width,
-                render_lines_as_tubes=False,
-                name="RayCloud"
-            )
+        # Всегда используем RGBA-актор, чтобы можно было менять прозрачность
+        temp_mesh.point_data["colors"] = np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32)
+        self.actor = plotter.add_mesh(
+            temp_mesh,
+            scalars="colors",
+            rgba=True,
+            line_width=line_width,
+            render_lines_as_tubes=False,
+            name="RayCloud"
+        )
 
-    def _energy_to_rgba(self, energy: float) -> np.ndarray:
-        """Преобразует энергию в массив RGBA."""
-        if self.use_energy_color == 1:
-            # Логарифмическая шкала для альфа
-            alpha = energy
-            rgb = np.array(to_rgb(self.default_color), dtype=np.float32)
-            return np.array([*rgb, alpha], dtype=np.float32)
-        elif self.use_energy_color == 2:
-            alpha = max(0.05, energy ** 0.3)
-            rgb = np.array(to_rgb(self.default_color), dtype=np.float32)
-            return np.array([*rgb, alpha], dtype=np.float32)
-        elif self.use_energy_color == 3:
-            min_vis = self.min_energy_visible
-            alpha = self.alpha_min + (self.alpha_max - self.alpha_min) * np.clip(
-                np.log10(max(energy, min_vis) / min_vis) / np.log10(1.0 / min_vis), 0, 1)
-            rgb = self.cmap(energy)[:3]
-            return np.array([*rgb, alpha], dtype=np.float32)
-        else:
-            # Без энергии – полная непрозрачность
-            rgb = np.array(to_rgb(self.default_color), dtype=np.float32)
-            return np.array([*rgb, 1.0], dtype=np.float32)
+    @staticmethod
+    def _to_rgb(color) -> np.ndarray:
+        """Приводит цвет (строка или RGB-кортеж) к массиву RGB из трёх float."""
+        from matplotlib.colors import to_rgb
+        return np.array(to_rgb(color), dtype=np.float32)
 
-    def _color_to_rgba(self, color) -> np.ndarray:
-        """Преобразует строку или RGB-кортеж в RGBA с альфа=1."""
-        rgb = np.array(to_rgb(color), dtype=np.float32)
-        return np.array([*rgb, 1.0], dtype=np.float32)
+    def _energy_to_alpha(self, energy: float) -> float:
+        """Вычисляет непрозрачность по энергии в зависимости от energy_color_type."""
+        if self.energy_color_type == 0:
+            return 1.0
+        elif self.energy_color_type == 1:
+            return np.clip(energy, 0.0, 1.0)
+        elif self.energy_color_type == 2:
+            return max(self.min_alpha, energy ** self.gamma)
+        else:
+            return 1.0
+
+    def _build_rgba(self, color, alpha: float) -> np.ndarray:
+        """Создаёт массив RGBA из цвета и альфа-канала."""
+        rgb = self._to_rgb(color)
+        return np.array([*rgb, alpha], dtype=np.float32)
 
     # ---------- Методы обновления ----------
 
     def update_from_trajectories(self, trajectories: List[np.ndarray],
                                  colors: Optional[List] = None):
         """
-        Обычные лучи (без энергии).
-        trajectories: список массивов (N,3) – траектории.
-        colors: список цветов (строка или RGB) для каждого луча.
-                Если None, используется self.default_color.
+        Обычные лучи (без энергии). energy_color_type игнорируется – прозрачность = 1.
+        trajectories: список массивов (N,3).
+        colors: список цветов для каждого луча (или None – используется default_color).
         """
         if not trajectories:
             self.actor.mapper.dataset.copy_from(pv.PolyData())
             return
 
-        # Если colors не задан, создаём список из default_color
         n_rays = len(trajectories)
         if colors is None:
             colors = [self.default_color] * n_rays
@@ -377,8 +352,7 @@ class RayCloud:
                 continue
             points.extend(traj)
             lines.append(np.hstack([n, np.arange(offset, offset + n)]))
-            rgba = self._color_to_rgba(color)
-            # Каждой точке луча присваиваем один и тот же цвет
+            rgba = self._build_rgba(color, 1.0)   # прозрачность всегда 1
             for _ in range(n):
                 rgba_list.append(rgba)
             offset += n
@@ -396,25 +370,34 @@ class RayCloud:
         self.actor.mapper.dataset.copy_from(new_mesh)
         self.actor.mapper.SetColorModeToDirectScalars()
 
-    def update_from_segments(self, segments: List[Tuple[np.ndarray, np.ndarray, float]]):
+    def update_from_segments(self, segments: List[Tuple[np.ndarray, np.ndarray, float]],
+                             base_colors: Optional[List] = None):
         """
         Лучи с энергией (trace_ray_tree).
         segments: список (p1, p2, energy).
+        base_colors: список цветов для каждого отрезка (или None – default_color).
+        Прозрачность вычисляется по энергии согласно energy_color_type.
         """
         if not segments:
             self.actor.mapper.dataset.copy_from(pv.PolyData())
             return
+
+        if base_colors is not None and len(base_colors) != len(segments):
+            raise ValueError("base_colors length must match number of segments")
 
         points = []
         lines = []
         offset = 0
         rgba_list = []
 
-        for p1, p2, energy in segments:
+        for i, (p1, p2, energy) in enumerate(segments):
             points.append(p1)
             points.append(p2)
             lines.append([2, offset, offset + 1])
-            rgba = self._energy_to_rgba(energy)
+
+            color = base_colors[i] if base_colors else self.default_color
+            alpha = self._energy_to_alpha(energy)
+            rgba = self._build_rgba(color, alpha)
             rgba_list.append(rgba)
             rgba_list.append(rgba)
             offset += 2
