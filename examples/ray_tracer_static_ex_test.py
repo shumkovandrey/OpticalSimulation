@@ -1,6 +1,8 @@
 from main import *
+from random import uniform
+import time
 
-
+start_time = time.time()
 # lenses = [
 #     ,
 #     UniversalLens(origin=[0, 40, 0], axis_dir=[1,0,0], R1=-10, R2=-10, thickness=2, edge_radius=3, n=1.5),
@@ -10,18 +12,21 @@ from main import *
 # ]
 
 
+
 # Создаём трассировщик
 tracer = RayTracer(mode="trace_ray_tree", max_depth=6, min_energy=0.005)
 
-lens = UniversalLens(origin=[0, 0, 0], axis_dir=[1,0,0], R1=10, R2=10, thickness=2, edge_radius=3, n=1.5)
+lens = UniversalLens(origin=[0, 0, 0], axis_dir=[1,0,0], R1=20, R2=10, thickness=2, edge_radius=3, n=1.5)
+
 
 # Добавляем объекты сцены
-tracer.add_element(*lens.get_surfaces())          # BoxPrism или любая поверхность
+tracer.add_elements(*lens.get_surfaces())          # BoxPrism или любая поверхность
 
 # Генерируем лучи
-for y in np.linspace(-2, 2, 5):
+for y in np.linspace(-2, 2, 5000):
     origin = np.array([-15.0, y, 0.0])
-    ray = Ray(origin=origin, direction=[1, 0, 0], energy=1.0, current_n=1.0, color=["red", "blue", "green", "yellow", "orange"][round(y)+2], energy_color_type=[1, 2, 0, 1, 0][round(y)+2])
+    # ray = Ray(origin=origin, direction=[1, 0, 0], energy=1.0, current_n=1.0, color=["red", "blue", "green", "yellow", "orange"][round(y)+2], energy_color_type=[1, 2, 0, 1, 0][round(y)+2])
+    ray = Ray(origin=origin, direction=[1, 0, 0], energy=1.0, current_n=1.0, color=(uniform(0, 1), uniform(0, 1), uniform(0, 1)), energy_color_type=1)
     tracer.add_ray(ray, color=(1, 1, 1))
 
 # Трассируем всё сразу
@@ -32,5 +37,6 @@ cloud = tracer.render(plotter, line_width=2)
 
 plotter.add_mesh(lens.get_mesh(), opacity=0.5, color="silver", pbr=True, metallic=0.9)
 
+print("Total time taken:", time.time() - start_time)
 plotter.reset_camera()
 plotter.show()

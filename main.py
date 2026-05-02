@@ -235,7 +235,7 @@ def _trace_recursive(ray: Ray, elements: List, depth: int, min_energy: float,
         _trace_recursive(new_ray, elements, depth-1, min_energy, segments, total_limit)
         return
 
-    if isinstance(hit_obj, Screen):
+    if isinstance(hit_obj, Screen) or getattr(hit_obj, 'is_screen', False):
         return
 
     # Преломляющая поверхность – делим луч
@@ -478,7 +478,7 @@ class RayTracer:
         elif self.colors:
             self.colors.append(None)   # сохраняем одинаковую длину
 
-    def add_element(self, *elements):
+    def add_elements(self, *elements):
         """Добавить оптический элемент (поверхность, экран и т.д.)."""
         for element in elements:
             self.elements.append(element)
@@ -860,6 +860,7 @@ class RectangularScreen(PlaneSurface):
         )
         self.width = width
         self.height = height
+        self.is_screen = True
 
     def interact(self, ray_dir, normal, n1, n2):
         return None   # поглощение

@@ -5,12 +5,6 @@ from main import *
 # --------------------------------
 # Сцена с вращающейся призмой
 # --------------------------------
-# plotter = pv.Plotter()
-# plotter.set_background("black")
-# plotter.show_grid(color="white")
-# plotter.view_isometric()
-# plotter.enable_parallel_projection()
-# plotter.enable_terrain_style(mouse_wheel_zooms=True)
 
 # Призма
 origin = np.array([0.0, 0.0, 0.0])
