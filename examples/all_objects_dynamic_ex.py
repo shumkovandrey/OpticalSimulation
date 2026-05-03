@@ -21,29 +21,29 @@ sphere_mirror = SphereSurface(
 lens = UniversalLens(
     origin=[0, 20, 0], rotation_degrees=(0, 0, 30),
     R1=10.0, R2=10.0, thickness=2.0, edge_radius=3.0, n=1.5,
-    refraction_range=(0, 10000)
+    refraction_range=(0, 10000), reflection_range=(0, 10000)
 )
 
-tri = trimesh.load("../Models/Prism.stl")
+tri = trimesh.load("../Models/Egg.stl")
 tri.apply_scale(3)
-mesh_obj = MeshSurface(tri, n_inside=1.0, reflection_range=(0, 10000),
-                       translation=[0, 60, 0])
+mesh_obj = MeshSurface(tri, n_inside=1.5, reflection_range=(0, 10000),
+                       translation=[0, 60, 0], rotation_degrees=(90, 0, 0),)
 
 
 # Акторы для визуализации геометрии
 plane_actor  = plotter.add_mesh(plane_mirror.get_mesh(), color="white", show_edges=True, name="plane")
 sphere_actor = plotter.add_mesh(sphere_mirror.get_mesh(), color="white", pbr=True, metallic=0.9, name="sphere")
 lens_actor   = plotter.add_mesh(lens.get_mesh(), color="cyan", opacity=0.5, name="lens")
-mesh_actor   = plotter.add_mesh(mesh_obj.get_mesh(), color="gold", name="mesh")
+mesh_actor   = plotter.add_mesh(mesh_obj.get_mesh(), color="gold", opacity=0.5, name="mesh")
 
 # Создаём трассировщик с единственным облаком лучей
 tracer = RayTracer(
     plotter,
-    mode='simple',
+    mode='tree',
     max_depth=6,
     min_energy=0.01,
     offset_distance=0.3,
-    energy_color_type=2,
+    energy_color_type=1,
     default_color="yellow"
 )
 
@@ -76,7 +76,7 @@ while plotter.render:
 
     plane_angle += 30 * dt
     plane_target_x = 2.0 * np.sin(np.radians(plane_angle))  # начальное смещение от 0
-    plane_mirror.rotate((0, 0, 30 * dt))  # вращение вокруг своего центра
+    plane_mirror.rotate((0, 0, 6 * dt))  # вращение вокруг своего центра
     plane_mirror.translate(np.array([plane_target_x - plane_mirror.point[0], 0.0, 0.0]))  # перемещение вдоль X
 
     # ---------- Обновление позиций ----------
@@ -91,12 +91,12 @@ while plotter.render:
         lens_x = -10.0
         lens_dir = 1
 
-    plane_mirror.rotate((0, 0, 30 * dt))
+    plane_mirror.rotate((0, 0, 6 * dt))
 
-    sphere_mirror.rotate((0, 0, 20 * dt))
-    mesh_obj.rotate((0, 0, 25 * dt))
+    sphere_mirror.rotate((0, 0, 4 * dt))
+    mesh_obj.rotate((0, 0, 5 * dt))
     lens.translate(np.array([lens_x - lens.origin[0], 0.0, 0.0]))
-    lens.rotate((0, 0, 20 * dt))
+    lens.rotate((0, 0, 4 * dt))
 
     # ---------- Визуализация мешей ----------
     plane_actor.mapper.dataset.copy_from(plane_mirror.get_mesh())
@@ -110,13 +110,13 @@ while plotter.render:
 
     # Добавляем лучи
     for y in np.linspace(-19, -21, 4):
-        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="red", wavelength=650, energy_color_type=2))
+        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="red", wavelength=650, energy_color_type=1))
     for y in np.linspace(8, 10, 4):
-        tracer.add_ray(Ray([5, y, 0], [1, 0, 0], color="blue", wavelength=450, energy_color_type=2))
+        tracer.add_ray(Ray([5, y, 0], [1, 0, 0], color="blue", wavelength=450, energy_color_type=1))
     for y in np.linspace(19, 21, 5):
-        tracer.add_ray(Ray([-10, y, 0], [1, 0, 0], color="green", wavelength=550, energy_color_type=2))
+        tracer.add_ray(Ray([-10, y, 0], [1, 0, 0], color="green", wavelength=550, energy_color_type=1))
     for y in np.linspace(59, 61, 5):
-        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="magenta", wavelength=500, energy_color_type=2))
+        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="magenta", wavelength=500, energy_color_type=1))
 
     # Автоматически обновляем RayCloud (правильный метод выбирается по self.mode)
     tracer.render()

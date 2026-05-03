@@ -7,9 +7,9 @@ plane_mirror = PlaneSurface(
     point=[0, -20, 0],
     rotation_degrees=(0, 0, 45),   # нормаль вдоль X
     half_sizes=(2.0, 1.5),
-    # reflection_range=(0, 10000),
+    reflection_range=(0, 10000),
     # refraction_range=(0, 10000),
-    absorption_range=(0, 10000),
+    # absorption_range=(0, 10000),
     n_inside=1.5
 )
 # Визуализация: используем get_mesh
@@ -38,7 +38,7 @@ lens = UniversalLens(
     thickness=2.0, edge_radius=3.0,
     n=1.5,
     refraction_range=(0, 10000),
-    reflection_range=(0, 10000),
+    # reflection_range=(0, 10000),
 )
 plotter.add_mesh(lens.get_mesh(), color="cyan", opacity=0.5, smooth_shading=True)
 
@@ -61,9 +61,9 @@ if t is not None:
     print("Hit point:", hp)
 
 # ---------- Трассировка ----------
-tracer = RayTracer(mode='simple', max_depth=8, min_energy=0.005, offset_distance=0.1)
+tracer = RayTracer(plotter=plotter, mode='simple', max_depth=8, min_energy=0.005, offset_distance=0.1)
 for elem in [plane_mirror, sphere_mirror, *lens.get_surfaces(), mesh_obj]:
-    tracer.add_element(elem)  # lens автоматически развернётся в две поверхности
+    tracer.add_elements(elem)  # lens автоматически развернётся в две поверхности
 
 def add_ray(origin, direction, color, wavelength=550):
     tracer.add_ray(Ray(origin=origin, direction=direction,
@@ -71,15 +71,15 @@ def add_ray(origin, direction, color, wavelength=550):
                        energy=1.0, energy_color_type=2))
 
 # Лучи
-for y in np.linspace(-19, -21, 4):
+for y in np.linspace(-19, -21, 400):
     add_ray(np.array([-15, y, 0]), np.array([1, 0, 0]), "red", 650)
-for y in np.linspace(10, 8, 4):
+for y in np.linspace(10, 8, 400):
     add_ray(np.array([5, y, 0]), np.array([1, 0, 0]), "blue", 450)
-for y in np.linspace(19, 21, 5):
+for y in np.linspace(19, 21, 500):
     add_ray(np.array([-10, y, 0]), np.array([1, 0, 0]), "green", 550)
-for y in np.linspace(59, 61, 5):
+for y in np.linspace(59, 61, 500):
     add_ray(np.array([-15, y, 0]), np.array([1, 0, 0]), "magenta", 500)
 
-cloud = tracer.render(plotter, line_width=2)
+cloud = tracer.render()
 plotter.reset_camera()
 plotter.show()

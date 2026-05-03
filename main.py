@@ -232,6 +232,17 @@ def _trace_recursive(ray, elements, depth, min_energy, segments,
 
     hit_point = ray.origin + ray.direction * best_t
     segments.append((ray.origin, hit_point, ray.energy))
+    
+    if isinstance(hit_obj, ThinLens):
+        new_dir = hit_obj.thin_lens_deflection(ray.direction, hit_point)
+        new_ray = Ray(hit_point + offset_distance * new_dir, new_dir,
+                      energy=ray.energy, current_n=ray.current_n,
+                      color=ray.color, wavelength=ray.wavelength,
+                      energy_color_type=ray.energy_color_type)
+        segments.append((hit_point, new_ray.origin, new_ray.energy))
+        _trace_recursive(new_ray, elements, depth - 1, min_energy, segments,
+                         total_limit, offset_distance)
+        return
 
     # Поглощение
     if hasattr(hit_obj, 'absorption_range') and hit_obj.absorption_range is not None:
@@ -894,6 +905,200 @@ class MeshSurface:
         self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
 
 
+class AsphericSurface:
+    def __init__(self, center, radius, conic_constant=0.0, aspheric_coeffs=None,
+                 rotation_degrees=(0,0,0), n_inside=1.0,
+                 edge_radius=None, thickness=0.0,
+                 reflection_range=None, refraction_range=None,
+                 absorption_range=None,
+                 lens_origin=None, lens_axis=None):
+        self.center = np.array(center, dtype=float)
+        self.radius = radius
+        self.k = conic_constant
+        self.aspheric_coeffs = aspheric_coeffs if aspheric_coeffs else []
+
+        base_axis = np.array([1.0, 0.0, 0.0])
+        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        default_axis = rot @ base_axis
+
+        self.lens_origin = np.array(lens_origin, dtype=float) if lens_origin is not None else self.center.copy()
+        self.lens_axis = np.array(lens_axis, dtype=float) if lens_axis is not None else default_axis.copy()
+        self.lens_axis /= np.linalg.norm(self.lens_axis)
+
+        self.n = n_inside
+        self.edge_radius = edge_radius if edge_radius is not None else 0.0
+        self.thickness = thickness
+        self.reflection_range = reflection_range
+        self.refraction_range = refraction_range
+        self.absorption_range = absorption_range
+
+        self._t1, self._t2 = get_tangents(self.lens_axis)
+        self._rot_local_to_world = np.column_stack([self.lens_axis, self._t1, self._t2])
+        self._rot_world_to_local = self._rot_local_to_world.T
+
+    def _world_to_local(self, point):
+        return self._rot_world_to_local @ (point - self.lens_origin)
+
+    def _local_to_world(self, local_point):
+        return self.lens_origin + self._rot_local_to_world @ local_point
+
+    def sag(self, r):
+        c = 1.0 / self.radius if self.radius != 0 else 0.0
+        if abs(c) < 1e-12:
+            sag0 = np.zeros_like(r)
+        else:
+            discr = 1.0 - (1.0 + self.k) * c**2 * r**2
+            safe_discr = np.maximum(0.0, discr)
+            sag0 = np.where(discr >= 0,
+                            (c * r**2) / (1.0 + np.sqrt(safe_discr)),
+                            np.inf)
+        sag_asp = np.zeros_like(r)
+        for i, A in enumerate(self.aspheric_coeffs):
+            sag_asp += A * r**(2 * (i + 1))
+        return sag0 + sag_asp
+
+    def sag_derivative(self, r):
+        c = 1.0 / self.radius if self.radius != 0 else 0.0
+        if abs(c) < 1e-12:
+            dsag0 = np.zeros_like(r)
+        else:
+            discr = 1.0 - (1.0 + self.k) * c**2 * r**2
+            safe_discr = np.maximum(0.0, discr)
+            dsag0 = np.where(discr >= 0,
+                             (c * r) / np.sqrt(safe_discr),
+                             0.0)
+        dsag_asp = np.zeros_like(r)
+        for i, A in enumerate(self.aspheric_coeffs):
+            power = 2 * (i + 1)
+            dsag_asp += A * power * r**(power - 1)
+        return dsag0 + dsag_asp
+
+    def intersect(self, ray: Ray) -> Optional[float]:
+        origin_loc = self._world_to_local(ray.origin)
+        dir_loc = self._rot_world_to_local @ ray.direction
+
+        # Плоская поверхность
+        if abs(self.radius) > 1e8:
+            if abs(dir_loc[0]) < 1e-12: return None
+            t = -origin_loc[0] / dir_loc[0]
+            if t <= 1e-6: return None
+            p = origin_loc + t * dir_loc
+            if np.sqrt(p[1] ** 2 + p[2] ** 2) > self.edge_radius + 1e-6:
+                return None
+            return t
+
+        R = self.radius
+        # Опорная сфера (центр в (R,0,0))
+        a = dir_loc[0] ** 2 + dir_loc[1] ** 2 + dir_loc[2] ** 2
+        b = 2 * (origin_loc[0] * dir_loc[0] + origin_loc[1] * dir_loc[1] + origin_loc[2] * dir_loc[2]) - 2 * R * \
+            dir_loc[0]
+        c_coeff = origin_loc[0] ** 2 + origin_loc[1] ** 2 + origin_loc[2] ** 2 - 2 * R * origin_loc[0]
+        disc = b ** 2 - 4 * a * c_coeff
+        if disc < 0:
+            return None
+        t1 = (-b - np.sqrt(disc)) / (2 * a)
+        t2 = (-b + np.sqrt(disc)) / (2 * a)
+        t_guess = t1 if t1 > 1e-6 else (t2 if t2 > 1e-6 else None)
+        if t_guess is None:
+            return None
+
+        # Уточнение Ньютоном (до 50 итераций)
+        t = t_guess
+        for _ in range(50):
+            p = origin_loc + t * dir_loc
+            r = np.sqrt(p[1] ** 2 + p[2] ** 2)
+            sag_val = self.sag(r)
+            if np.isinf(sag_val):
+                # ушли за границу – пробуем откатиться назад
+                t = t_guess * 0.5
+                continue
+            F = p[0] - sag_val
+            if abs(F) < 1e-9:
+                break
+            if r < 1e-12:
+                drdt = 0.0
+                dsag = 0.0
+            else:
+                drdt = (p[1] * dir_loc[1] + p[2] * dir_loc[2]) / r
+                dsag = self.sag_derivative(r)
+            dFdt = dir_loc[0] - dsag * drdt
+            if abs(dFdt) < 1e-15:
+                break
+            t -= F / dFdt
+            if t <= 0:
+                # перелетели – возвращаемся к последнему положительному значению
+                t = t * 0.5  # грубая коррекция, но обычно не задействуется
+        else:
+            # fallback: проверяем, не подошло ли начальное приближение
+            p_init = origin_loc + t_guess * dir_loc
+            r_init = np.sqrt(p_init[1] ** 2 + p_init[2] ** 2)
+            if not np.isinf(self.sag(r_init)) and abs(p_init[0] - self.sag(r_init)) < 1e-4:
+                t = t_guess
+            else:
+                return None
+
+        if t <= 1e-6:
+            return None
+
+        # Проверка апертуры
+        hit_point = self._local_to_world(origin_loc + t * dir_loc)
+        # пересчитываем в локальную, чтобы проверить радиус (уже сделано внутри)
+        r_hit = np.sqrt((origin_loc[1] + t * dir_loc[1]) ** 2 + (origin_loc[2] + t * dir_loc[2]) ** 2)
+        if r_hit > self.edge_radius + 1e-6:
+            return None
+        return t
+
+    def get_normal(self, point: np.ndarray) -> np.ndarray:
+        p_loc = self._world_to_local(point)
+        r = np.sqrt(p_loc[1]**2 + p_loc[2]**2)
+        if r < 1e-12:
+            normal_loc = np.array([1.0, 0.0, 0.0])
+        else:
+            dsag = self.sag_derivative(r)
+            normal_loc = np.array([1.0, -dsag * p_loc[1] / r, -dsag * p_loc[2] / r])
+        normal_loc /= np.linalg.norm(normal_loc)
+        return self._rot_local_to_world @ normal_loc
+
+    def get_mesh(self, n_radial=40, n_azimuth=80):
+        rs = np.linspace(0, self.edge_radius, n_radial)
+        phis = np.linspace(0, 2*np.pi, n_azimuth)
+        r_grid, phi_grid = np.meshgrid(rs, phis)
+        y_loc = r_grid * np.cos(phi_grid)
+        z_loc = r_grid * np.sin(phi_grid)
+        r = np.sqrt(y_loc**2 + z_loc**2)
+        x_loc = self.sag(r)
+        x_loc = np.where(np.isfinite(x_loc), x_loc, 0.0)
+        grid = pv.StructuredGrid(x_loc, y_loc, z_loc)
+        poly = grid.extract_surface(algorithm='dataset_surface')
+        matrix = np.eye(4)
+        matrix[:3, :3] = self._rot_local_to_world
+        matrix[:3, 3] = self.lens_origin
+        poly.transform(matrix, inplace=True)
+        return poly
+
+    def rotate(self, angles_deg):
+        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        v = self.center - self.lens_origin
+        self.center = self.lens_origin + rot @ v
+        self.lens_axis = rot @ self.lens_axis
+        self._t1, self._t2 = get_tangents(self.lens_axis)
+        self._rot_local_to_world = np.column_stack([self.lens_axis, self._t1, self._t2])
+        self._rot_world_to_local = self._rot_local_to_world.T
+
+    def translate(self, vec):
+        self.center += np.asarray(vec)
+        self.lens_origin += np.asarray(vec)
+
+    def is_active(self, wavelength):
+        if wavelength is None: return True
+        if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
+            return False
+        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        return in_ref or in_refr or in_abs
+
+
 class RectangularScreen(PlaneSurface):
     def __init__(self, center, normal, width, height, absorption_range=(0,10000)):
         center = np.asarray(center, dtype=float)
@@ -991,6 +1196,56 @@ class BoxPrism:
             if surf.face_tangents is not None:
                 t1, t2 = surf.face_tangents
                 surf.face_tangents = (rot @ t1, rot @ t2)
+
+
+class ThinLens:
+    """Тонкая линза (параксиальное приближение)."""
+    def __init__(self, center, focal_length, edge_radius=3.0,
+                 axis_dir=np.array([1.0, 0.0, 0.0]),
+                 refraction_range=(0, np.inf)):
+        self.center = np.asarray(center, dtype=float)
+        self.f = focal_length          # положительное – собирающая, отрицательное – рассеивающая
+        self.edge_radius = edge_radius
+        self.axis_dir = np.asarray(axis_dir, dtype=float)
+        self.axis_dir /= np.linalg.norm(self.axis_dir)
+        self.refraction_range = refraction_range
+        self.n = 1.0  # заглушка
+        self._t1, self._t2 = get_tangents(self.axis_dir)
+
+    def intersect(self, ray: Ray) -> Optional[float]:
+        # Плоскость, проходящая через center с нормалью axis_dir
+        dot_dir = np.dot(ray.direction, self.axis_dir)
+        if abs(dot_dir) < 1e-6:
+            return None
+        t = np.dot(self.center - ray.origin, self.axis_dir) / dot_dir
+        if t <= 1e-6:
+            return None
+        hit = ray.origin + ray.direction * t
+        # Проверка круглой апертуры
+        r_vec = (hit - self.center) - self.axis_dir * np.dot(hit - self.center, self.axis_dir)
+        if np.linalg.norm(r_vec) > self.edge_radius + 1e-6:
+            return None
+        return t
+
+    def thin_lens_deflection(self, ray_dir, hit_point):
+        """Изменение направления луча в параксиальном приближении."""
+        r_vec = (hit_point - self.center) - self.axis_dir * np.dot(hit_point - self.center, self.axis_dir)
+        h = np.linalg.norm(r_vec)
+        if h < 1e-12:
+            return ray_dir       # на оси – без отклонения
+        r_unit = r_vec / h
+        # Отклонение луча: delta = (h/f) * r_unit (знак уже учтён)
+        new_dir = ray_dir - (h / self.f) * r_unit
+        new_dir /= np.linalg.norm(new_dir)
+        return new_dir
+
+    def get_mesh(self) -> pv.PolyData:
+        disc = pv.Disc(center=self.center, normal=self.axis_dir,
+                       inner=0, outer=self.edge_radius, c_res=64)
+        return disc
+
+    def is_active(self, wavelength):
+        return self.refraction_range is not None
 
 
 class UniversalLens:

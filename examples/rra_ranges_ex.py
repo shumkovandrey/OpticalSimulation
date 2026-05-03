@@ -6,7 +6,6 @@ if __name__ == "__main__":
     # Поглощает 700–780 нм (дальний красный) – добавим для полноты.
     special_surface = PlaneSurface(
         point=np.array([0.0, 0.0, 0.0]),
-        normal=np.array([1.0, 0.0, 0.0]),
         n_inside=1.5,                     # материал для преломления
         lens_origin=np.array([0.0, 0.0, 0.0]),
         lens_axis=np.array([1.0, 0.0, 0.0]),
