@@ -11,7 +11,7 @@ from matplotlib.colors import to_rgb
 
 pv.global_theme.allow_empty_mesh = True
 # Глобальная константа – длина отрезка, которым луч уходит в бесконечность
-RAY_INFINITY_DISTANCE = 25.0
+RAY_INFINITY_DISTANCE = 100
 
 # -------------------------------
 # Утилиты для оптических расчётов
@@ -108,15 +108,16 @@ def normalize(vec):
 
 
 def get_tangents(normal):
-    # Выбираем произвольный вектор, не параллельный normal
+    normal = np.array(normal, dtype=float)  # <-- гарантирует float
+    normal /= np.linalg.norm(normal)
     if abs(normal[0]) < 0.9:
-        arbitrary = np.array([1, 0, 0])
+        arbitrary = np.array([1.0, 0.0, 0.0])
     else:
-        arbitrary = np.array([0, 1, 0])
+        arbitrary = np.array([0.0, 1.0, 0.0])
     t1 = np.cross(normal, arbitrary)
-    t1 /= np.linalg.norm(t1)
+    t1 = t1.astype(float) / np.linalg.norm(t1)  # явное преобразование
     t2 = np.cross(normal, t1)
-    t2 /= np.linalg.norm(t2)
+    t2 = t2.astype(float) / np.linalg.norm(t2)
     return t1, t2
 
 
@@ -320,10 +321,9 @@ class RayCloud:
         self.min_alpha = min_alpha
         self.gamma = gamma
 
-        # Временный меш для инициализации
+        # Временная точка, чтобы PyVista не ругался на пустой меш
         temp_points = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
         temp_mesh = pv.PolyData(temp_points)
-        # Всегда используем RGBA-актор, чтобы можно было менять прозрачность
         temp_mesh.point_data["colors"] = np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32)
         self.actor = plotter.add_mesh(
             temp_mesh,
@@ -333,6 +333,8 @@ class RayCloud:
             render_lines_as_tubes=False,
             name="RayCloud"
         )
+        # Сразу очищаем геометрию – точка не будет видна
+        self.actor.mapper.dataset.copy_from(pv.PolyData())
 
     @staticmethod
     def _to_rgb(color) -> np.ndarray:
@@ -472,21 +474,29 @@ class RayCloud:
 
 
 class RayTracer:
-    def __init__(self, mode='tree', max_depth=6, min_energy=0.01, offset_distance=0.5):
-        if mode not in ('simple', 'tree'):
-            raise ValueError("mode must be 'simple' or 'tree'")
+    def __init__(self, plotter, mode='tree', max_depth=6, min_energy=0.01,
+                 offset_distance=0.5, **cloud_kwargs):
+        self.plotter = plotter
         self.mode = mode
         self.max_depth = max_depth
         self.min_energy = min_energy
         self.offset_distance = offset_distance
         self.rays = []
         self.elements = []
+        # Один‑единственный RayCloud на всё время жизни трейсера
+        self.cloud = RayCloud(plotter, **cloud_kwargs)
 
-    def add_ray(self, ray: Ray):
+    def add_ray(self, ray):
         self.rays.append(ray)
 
-    def add_element(self, element):
-        self.elements.append(element)
+    def add_elements(self, *elements):
+        for element in elements:
+            self.elements.append(element)
+
+    def set_mode(self, mode):
+        if mode not in ('simple', 'tree'):
+            raise ValueError("mode must be 'simple' or 'tree'")
+        self.mode = mode
 
     def trace_all(self):
         if self.mode == 'simple':
@@ -510,38 +520,63 @@ class RayTracer:
                 all_types.extend([ray.energy_color_type] * len(segs))
             return all_segments, all_colors, all_types
 
-    def render(self, plotter, **cloud_kwargs):
+    def render(self):
+        """Обновляет существующий RayCloud и очищает список лучей."""
         result, colors, types = self.trace_all()
         if self.mode == 'simple':
-            cloud = RayCloud(plotter, energy_color_type=0, **cloud_kwargs)
-            cloud.update_from_trajectories(result, colors=colors)
+            self.cloud.update_from_trajectories(result, colors=colors)
         else:
-            cloud = RayCloud(plotter, energy_color_type=2, **cloud_kwargs)
-            cloud.update_from_segments(result, base_colors=colors, energy_types=types)
-        return cloud
+            self.cloud.update_from_segments(result, base_colors=colors, energy_types=types)
+        self.rays.clear()       # подготовка к следующему кадру
+        self.elements.clear()   # (опционально, если элементы каждый кадр обновляются)
+
+    def remove(self):
+        """Удаляет облако с графика (если нужно полностью убрать лучи)."""
+        self.plotter.remove_actor(self.cloud.actor)
 
 
 class PlaneSurface:
-    def __init__(self, point, normal, n_inside,
-                 lens_origin, lens_axis, edge_radius,
-                 half_sizes=None, face_tangents=None, reflection_range=None, refraction_range=None,
-                 absorption_range=None):
+    def __init__(self, point, rotation_degrees=(0,0,0), n_inside=1.0,
+                 half_sizes=None, edge_radius=None,
+                 reflection_range=None, refraction_range=None,
+                 absorption_range=None,
+                 lens_origin=None, lens_axis=None):
         self.point = np.array(point, dtype=float)
-        self.normal = np.array(normal, dtype=float)
-        self.normal /= np.linalg.norm(self.normal)
+        base_normal = np.array([1.0, 0.0, 0.0])
+        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        self.normal = rot @ base_normal
         self.n = n_inside
-        self.lens_origin = np.array(lens_origin, dtype=float)
-        self.lens_axis = np.array(lens_axis, dtype=float)
-        self.lens_axis /= np.linalg.norm(self.lens_axis)
-        self.edge_radius = edge_radius
-        # Прямоугольная апертура (опционально)
-        self.half_sizes = half_sizes
-        self.face_tangents = face_tangents
 
-        # Диапазоны отражения, преломления, поглощения
+        # Автоматические lens_origin/lens_axis, если не заданы явно
+        self.lens_origin = np.array(lens_origin, dtype=float) if lens_origin is not None else self.point.copy()
+        self.lens_axis = np.array(lens_axis, dtype=float) if lens_axis is not None else self.normal.copy()
+        self.lens_axis /= np.linalg.norm(self.lens_axis)
+
+        # Прямоугольная апертура
+        if half_sizes is not None:
+            self.half_sizes = half_sizes
+            self.edge_radius = 0.0
+            self.face_tangents = get_tangents(self.normal)
+        else:
+            self.half_sizes = None
+            self.face_tangents = None
+            self.edge_radius = edge_radius if edge_radius is not None else 0.0
+
         self.reflection_range = reflection_range
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
+
+    def rotate(self, angles_deg):
+        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        # point и lens_origin остаются на месте
+        self.normal = rot @ self.normal
+        self.lens_axis = rot @ self.lens_axis
+        if self.face_tangents is not None:
+            self.face_tangents = (rot @ self.face_tangents[0], rot @ self.face_tangents[1])
+
+    def translate(self, vec):
+        self.point += np.asarray(vec)
+        self.lens_origin += np.asarray(vec)
 
     def intersect(self, ray: Ray) -> Optional[float]:
         dot_dn = np.dot(ray.direction, self.normal)
@@ -596,29 +631,71 @@ class PlaneSurface:
         in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
         return in_ref or in_refr or in_abs
 
+    def get_mesh(self) -> pv.PolyData:
+        if self.half_sizes is not None and self.face_tangents is not None:
+            # Прямоугольник
+            t1, t2 = self.face_tangents
+            hu, hv = self.half_sizes
+            c = self.lens_origin
+            p0 = c - hu * t1 - hv * t2
+            p1 = c + hu * t1 - hv * t2
+            p2 = c + hu * t1 + hv * t2
+            p3 = c - hu * t1 + hv * t2
+            vertices = np.array([p0, p1, p2, p3])
+            faces = np.array([[3, 0, 1, 2], [3, 0, 2, 3]])
+            return pv.PolyData(vertices, faces)
+        else:
+            # Круглое (диск) с edge_radius
+            radius = self.edge_radius if self.edge_radius else 1.0
+            disc = pv.Disc(center=(0, 0, 0), normal=(0, 0, 1), inner=0, outer=radius, c_res=64)
+            # Поворот и перенос
+            v_from = np.array([0., 0., 1.])
+            v_to = self.normal
+            # ... матрица поворота (используем calculate_rotation_matrix или аналогичную)
+            rot = calculate_rotation_matrix(v_to)  # уже есть в main
+            transform = np.eye(4)
+            transform[:3, :3] = rot
+            transform[:3, 3] = self.lens_origin
+            return disc.transform(transform, inplace=False)
+
 
 class SphereSurface:
     """
     Сферическая поверхность с ограничениями по радиусу апертуры и продольному
     положению (толщине) вдоль оптической оси линзы.
     """
-    def __init__(self, center: np.ndarray, radius: float, n_inside: float,
-                 lens_origin: np.ndarray, lens_axis: np.ndarray,
-                 edge_radius: float, thickness: float, reflection_range=None, refraction_range=None,
-                 absorption_range=None):
+    def __init__(self, center, radius, rotation_degrees=(0,0,0), n_inside=1.0,
+                 edge_radius=None, thickness=0.0,
+                 reflection_range=None, refraction_range=None,
+                 absorption_range=None,
+                 lens_origin=None, lens_axis=None):
         self.center = np.array(center, dtype=float)
         self.radius = radius
-        self.n = n_inside
-        self.lens_origin = np.array(lens_origin, dtype=float)
-        self.lens_axis = np.array(lens_axis, dtype=float)
-        self.lens_axis /= np.linalg.norm(self.lens_axis)
-        self.edge_radius = edge_radius
-        self.thickness = thickness
+        base_axis = np.array([1.0, 0.0, 0.0])
+        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        default_axis = rot @ base_axis
 
-        # Диапазоны отражения, преломления, поглощения
+        # Явные lens_origin/lens_axis имеют приоритет
+        self.lens_origin = np.array(lens_origin, dtype=float) if lens_origin is not None else self.center.copy()
+        self.lens_axis = np.array(lens_axis, dtype=float) if lens_axis is not None else default_axis.copy()
+        self.lens_axis = self.lens_axis.astype(float) / np.linalg.norm(self.lens_axis)
+
+        self.n = n_inside
+        self.edge_radius = edge_radius if edge_radius is not None else 0.0
+        self.thickness = thickness
         self.reflection_range = reflection_range
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
+
+    def rotate(self, angles_deg):
+        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        v = self.center - self.lens_origin  # вектор от вершины к центру
+        self.center = self.lens_origin + rot @ v
+        self.lens_axis = rot @ self.lens_axis
+
+    def translate(self, vec):
+        self.center += np.asarray(vec)
+        self.lens_origin += np.asarray(vec)
 
     def intersect(self, ray: Ray) -> Optional[float]:
         """Пересечение луча со сферой с учётом границ линзы."""
@@ -729,148 +806,121 @@ class MeshSurface:
     Произвольная треугольная поверхность, загружаемая из файла или создаваемая из меша.
     Может быть зеркальной, преломляющей или поглощающей.
     """
-    def __init__(self, mesh,  # может быть путём к файлу или готовым trimesh.Trimesh / pv.PolyData
-                 n_inside: float = 1.0, reflection_range=None, refraction_range=None,
+
+    def __init__(self, mesh, rotation_degrees=(0,0,0), translation=(0,0,0),
+                 n_inside=1.0, reflection_range=None, refraction_range=None,
                  absorption_range=None):
-        # Загрузка, если передан путь
+        # Загрузка тримеша (как и раньше)
         if isinstance(mesh, str):
             self.trimesh_obj = trimesh.load(mesh)
             if isinstance(self.trimesh_obj, trimesh.Scene):
                 self.trimesh_obj = trimesh.util.concatenate(
-                    [g for g in self.trimesh_obj.geometry.values()
-                     if isinstance(g, trimesh.Trimesh)]
-                )
+                    [g for g in self.trimesh_obj.geometry.values() if isinstance(g, trimesh.Trimesh)])
             if not isinstance(self.trimesh_obj, trimesh.Trimesh):
                 raise TypeError("Файл не содержит треугольной сетки")
         elif isinstance(mesh, trimesh.Trimesh):
             self.trimesh_obj = mesh
         elif isinstance(mesh, pv.PolyData):
-            # Конвертируем PyVista → trimesh
-            verts = mesh.points
-            faces = mesh.faces.reshape(-1, 4)[:, 1:4]
+            verts, faces = mesh.points, mesh.faces.reshape(-1, 4)[:, 1:4]
             self.trimesh_obj = trimesh.Trimesh(vertices=verts, faces=faces)
         else:
             raise TypeError("mesh должен быть str, trimesh.Trimesh или pv.PolyData")
 
+        # Применяем поворот и перенос
+        rot_4x4 = np.eye(4)
+        rot_4x4[:3, :3] = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        self.trimesh_obj.apply_transform(rot_4x4)
+        if translation is not None:
+            self.trimesh_obj.apply_translation(translation)
+
         self.mesh = self.trimesh_obj
-        # Ускоритель для пересечений
         self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
-
         self.n = n_inside
-
-        # Кэш последнего пересечения
-        self._last_ray_origin = None
-        self._last_ray_direction = None
-        self._last_hit_triangle_idx = None
-
-        # Диапазоны отражения, преломления, поглощения
         self.reflection_range = reflection_range
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
-
-
-    def intersect(self, ray: Ray) -> Optional[float]:
-        """
-        Возвращает параметр t для ближайшего пересечения > 0,
-        либо None, если пересечений нет.
-        """
-        origins = np.array([ray.origin])
-        directions = np.array([ray.direction])
-
-        # Ищем все пересечения, trimesh возвращает их уже отсортированными по расстоянию
-        locations, _, tri_indices = self.intersector.intersects_location(
-            origins, directions, multiple_hits=False
-        )
-
-        if len(locations) == 0:
-            return None
-
-        hit_point = locations[0]
-        t = np.linalg.norm(hit_point - ray.origin)
-
-        if t <= 1e-6:
-            return None
-
-        # Сохраняем для get_normal
-        self._last_ray_origin = ray.origin.copy()
-        self._last_ray_direction = ray.direction.copy()
-        self._last_hit_triangle_idx = tri_indices[0]
-        return t
-
-    def get_normal(self, point: np.ndarray) -> np.ndarray:
-        """
-        Возвращает нормаль к поверхности в точке пересечения.
-        Использует нормаль треугольника из последнего пересечения.
-        """
-        if self._last_hit_triangle_idx is not None:
-            # Берём нормаль треугольника, который был пересечён
-            normal = self.mesh.face_normals[self._last_hit_triangle_idx]
-        else:
-            # Запасной вариант: ищем ближайший треугольник
-            _, _, tri_idx = trimesh.proximity.closest_point(self.mesh, [point])
-            normal = self.mesh.face_normals[tri_idx[0]]
-
-        # Нормализуем
-        return normal / np.linalg.norm(normal)
-
-    # def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
-    #     """
-    #     Определяет поведение луча при столкновении:
-    #       - зеркало: отражение
-    #       - экран/поглотитель: остановка (возвращает None)
-    #       - иначе: преломление (вызывается refract)
-    #     """
-    #     if self.is_screen:
-    #         return None  # луч поглощён
-    #
-    #     if self.is_mirror:
-    #         # Отражение (нормаль всегда направлена против луча)
-    #         dot = np.dot(normal, ray_dir)
-    #         actual_normal = normal if dot < 0 else -normal
-    #         reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
-    #         return reflected_dir / np.linalg.norm(reflected_dir)
-    #
-    #     # Преломление
-    #     return refract(ray_dir, normal, n1, n2)
-
-    def get_mesh(self) -> pv.PolyData:
-        """
-        Возвращает PyVista меш для визуализации.
-        """
-        verts = self.mesh.vertices
-        faces = np.hstack([np.full((len(self.mesh.faces), 1), 3),
-                           self.mesh.faces])
-        return pv.PolyData(verts, faces)
+        self._last_hit_triangle_idx = None
 
     def is_active(self, wavelength):
-        """Возвращает True, если поверхность должна взаимодействовать с данной длиной волны."""
         if wavelength is None:
             return True
-        # Если ни один диапазон не задан, объект невидим (прозрачен) – нет взаимодействия
         if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
             return False
-        # Проверяем попадание хотя бы в один диапазон
         in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
         in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
         in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
         return in_ref or in_refr or in_abs
 
+    def intersect(self, ray: Ray) -> Optional[float]:
+        origins = np.array([ray.origin])
+        directions = np.array([ray.direction])
+        locations, _, tri_indices = self.intersector.intersects_location(
+            origins, directions, multiple_hits=False)
+        if len(locations) == 0:
+            return None
+        hit_point = locations[0]
+        t = np.linalg.norm(hit_point - ray.origin)
+        if t <= 1e-6:
+            return None
+        self._last_hit_triangle_idx = tri_indices[0]
+        return t
 
-class Screen(PlaneSurface):
-    """Экран, поглощающий лучи."""
-    def __init__(self, point: np.ndarray, normal: np.ndarray, size: float):
+    def get_normal(self, point):
+        if self._last_hit_triangle_idx is not None:
+            return self.mesh.face_normals[self._last_hit_triangle_idx]
+        _, _, tri_idx = trimesh.proximity.closest_point(self.mesh, [point])
+        return self.mesh.face_normals[tri_idx[0]]
+
+    def get_mesh(self):
+        verts = self.mesh.vertices
+        faces = np.hstack([np.full((len(self.mesh.faces), 1), 3), self.mesh.faces])
+        return pv.PolyData(verts, faces)
+
+    def rotate(self, angles_deg):
+        rot_4x4 = np.eye(4)
+        rot_4x4[:3, :3] = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        # Вращение вокруг локального центра (bounding box center)
+        center = self.mesh.bounding_box.center_mass
+        # Перенос в нуль, поворот, возврат
+        T1 = np.eye(4)
+        T1[:3, 3] = -center
+        T2 = np.eye(4)
+        T2[:3, 3] = center
+        self.mesh.apply_transform(T2 @ rot_4x4 @ T1)
+        self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
+
+    def translate(self, vec):
+        self.mesh.apply_translation(vec)
+        self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
+
+
+class RectangularScreen(PlaneSurface):
+    def __init__(self, center, normal, width, height, absorption_range=(0,10000)):
+        center = np.asarray(center, dtype=float)
+        normal = np.asarray(normal, dtype=float)    # ← обязательно float
+        half_u, half_v = width/2, height/2
+        t1, t2 = get_tangents(normal)
         super().__init__(
-            point=point,
-            normal=normal,
-            n_inside=1.0,
-            lens_origin=point,
-            lens_axis=normal,
-            edge_radius=size / 2
+            point=center, normal=normal, n_inside=1.0,
+            lens_origin=center, lens_axis=normal,
+            edge_radius=0.0,
+            half_sizes=(half_u, half_v),
+            face_tangents=(t1, t2),
+            absorption_range=absorption_range
         )
-        self.size = size
+        self.width, self.height = width, height
 
-    def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> None:
-        return None  # сигнал остановки трассировки
+    def get_mesh(self) -> pv.PolyData:
+        t1, t2 = self.face_tangents
+        hu, hv = self.half_sizes
+        c = self.lens_origin
+        p0 = c - hu * t1 - hv * t2
+        p1 = c + hu * t1 - hv * t2
+        p2 = c + hu * t1 + hv * t2
+        p3 = c - hu * t1 + hv * t2
+        vertices = np.array([p0, p1, p2, p3])
+        faces = np.array([[3, 0, 1, 2], [3, 0, 2, 3]])
+        return pv.PolyData(vertices, faces)
 
 
 class BoxPrism:
@@ -954,84 +1004,118 @@ class UniversalLens:
         edge_radius – радиус апертуры,
         n           – показатель преломления материала.
     """
-    def __init__(self, origin: np.ndarray, axis_dir: np.ndarray,
-                 R1: Optional[float], R2: Optional[float],
-                 thickness: float, edge_radius: float, n: float = 1.5):
-        self.R1 = R1
-        self.R2 = R2
+    def __init__(self, origin, rotation_degrees=(0,0,0), R1=None, R2=None,
+                 thickness=2.0, edge_radius=3.0, n=1.5,
+                 reflection_range=None, refraction_range=(0, np.inf),
+                 absorption_range=None):
+        self.origin = np.array(origin, dtype=float)
+        # Сохраняем углы Эйлера для возможного использования
+        self.rotation_degrees = rotation_degrees
+        # Вычисляем начальную оптическую ось
+        base_axis = np.array([1.0, 0.0, 0.0])
+        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        self.axis_dir = rot @ base_axis
         self.thickness = thickness
         self.edge_radius = edge_radius
         self.n = n
-        self.origin = np.array(origin, dtype=float)
-        self.axis_dir = np.array(axis_dir, dtype=float)
-        self.axis_dir /= np.linalg.norm(self.axis_dir)
+        self.R1, self.R2 = R1, R2
 
-        # Матрица поворота от локальной оси X к axis_dir
-        v_old = np.array([1, 0, 0])
+        # Спектральные диапазоны (применяются к обеим поверхностям)
+        self.reflection_range = reflection_range
+        self.refraction_range = refraction_range
+        self.absorption_range = absorption_range
+
+        # Построение поверхностей
+        self._create_surfaces()
+
+        # Расчёт оптических параметров (фокус и пр.)
+        self._calc_optical_params()
+
+    def _create_surfaces(self):
+        """Пересоздаёт front и back на основе текущих origin, axis_dir, R1, R2."""
+        # Матрица поворота от базовой оси (X) к axis_dir
+        v_old = np.array([1.0, 0.0, 0.0])
         v_new = self.axis_dir
         if np.allclose(v_old, v_new):
-            self.rotation = np.eye(3)
+            rot = np.eye(3)
         elif np.allclose(v_old, -v_new):
-            self.rotation = np.diag([-1, -1, 1])
+            rot = np.diag([-1, -1, 1])
         else:
             v = np.cross(v_old, v_new)
             s = np.linalg.norm(v)
             c = np.dot(v_old, v_new)
             vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-            self.rotation = np.eye(3) + vx + vx @ vx * ((1 - c) / (s ** 2))
+            rot = np.eye(3) + vx + vx @ vx * ((1 - c) / (s ** 2))
+        self.rotation = rot
 
-        half = thickness / 2
+        half = self.thickness / 2
         v1_local = -half
         v2_local = half
 
         # Передняя поверхность
-        if R1 is None:
-            p1_world = self.origin + self.rotation @ np.array([v1_local, 0, 0])
-            n1_world = self.rotation @ np.array([-1, 0, 0])
+        if self.R1 is None:
+            p1 = self.origin + rot @ np.array([v1_local, 0, 0])
+            n1 = rot @ np.array([-1, 0, 0])
             self.front = PlaneSurface(
-                point=p1_world, normal=n1_world, n_inside=n,
-                lens_origin=self.origin, lens_axis=self.axis_dir, edge_radius=edge_radius, reflection_range=(0, np.inf), refraction_range=(0, np.inf)
+                point=p1, normal=n1, n_inside=self.n,
+                lens_origin=self.origin, lens_axis=self.axis_dir,
+                edge_radius=self.edge_radius,
+                reflection_range=self.reflection_range,
+                refraction_range=self.refraction_range,
+                absorption_range=self.absorption_range
             )
         else:
-            c1_world = self.origin + self.rotation @ np.array([v1_local + R1, 0, 0])
+            c1 = self.origin + rot @ np.array([v1_local + self.R1, 0, 0])
             self.front = SphereSurface(
-                center=c1_world, radius=abs(R1), n_inside=n,
+                center=c1, radius=abs(self.R1), n_inside=self.n,
                 lens_origin=self.origin, lens_axis=self.axis_dir,
-                edge_radius=edge_radius, thickness=thickness,
-                reflection_range=(0, np.inf),refraction_range=(0, np.inf)
+                edge_radius=self.edge_radius, thickness=self.thickness,
+                reflection_range=self.reflection_range,
+                refraction_range=self.refraction_range,
+                absorption_range=self.absorption_range
             )
 
         # Задняя поверхность
-        if R2 is None:
-            p2_world = self.origin + self.rotation @ np.array([v2_local, 0, 0])
-            n2_world = self.rotation @ np.array([1, 0, 0])
+        if self.R2 is None:
+            p2 = self.origin + rot @ np.array([v2_local, 0, 0])
+            n2 = rot @ np.array([1, 0, 0])
             self.back = PlaneSurface(
-                point=p2_world, normal=n2_world, n_inside=n,
-                lens_origin=self.origin, lens_axis=self.axis_dir, edge_radius=edge_radius, reflection_range=(0, np.inf), refraction_range=(0, np.inf)
-            )
-        else:
-            c2_world = self.origin + self.rotation @ np.array([v2_local - R2, 0, 0])
-            self.back = SphereSurface(
-                center=c2_world, radius=abs(R2), n_inside=n,
+                point=p2, normal=n2, n_inside=self.n,
                 lens_origin=self.origin, lens_axis=self.axis_dir,
-                edge_radius=edge_radius, thickness=thickness,
-                reflection_range=(0, np.inf), refraction_range=(0, np.inf)
+                edge_radius=self.edge_radius,
+                reflection_range=self.reflection_range,
+                refraction_range=self.refraction_range,
+                absorption_range=self.absorption_range
+            )
+        else:
+            c2 = self.origin + rot @ np.array([v2_local - self.R2, 0, 0])
+            self.back = SphereSurface(
+                center=c2, radius=abs(self.R2), n_inside=self.n,
+                lens_origin=self.origin, lens_axis=self.axis_dir,
+                edge_radius=self.edge_radius, thickness=self.thickness,
+                reflection_range=self.reflection_range,
+                refraction_range=self.refraction_range,
+                absorption_range=self.absorption_range
             )
 
-        # 2. РАСЧЕТ ОПТИЧЕСКИХ ПАРАМЕТРОВ (Формула толстой линзы)
-        # Для формулы: r1 и r2 (радиус второй берется с инверсией знака)
-        r1_val = R1 if R1 else 1e10
-        r2_val = -R2 if R2 else -1e10
+    def _calc_optical_params(self):
+        # (оставьте ваш существующий расчёт f_dist)
+        r1_val = self.R1 if self.R1 else 1e10
+        r2_val = -self.R2 if self.R2 else -1e10
+        inv_f = (self.n - 1) * (1 / r1_val - 1 / r2_val +
+                                ((self.n - 1) * self.thickness) / (self.n * r1_val * r2_val))
+        self.f_dist = 1 / inv_f if abs(inv_f) > 1e-10 else float('inf')
 
-        inv_f = (n - 1) * (1 / r1_val - 1 / r2_val + ((n - 1) * thickness) / (n * r1_val * r2_val))
+    def rotate(self, angles_deg):
+        """Поворот линзы вокруг её центра (origin)."""
+        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        self.axis_dir = rot @ self.axis_dir
+        self.axis_dir /= np.linalg.norm(self.axis_dir)
+        self._create_surfaces()
 
-        if abs(inv_f) < 1e-10:
-            self.f_dist = float('inf')
-        else:
-            self.f_dist = 1 / inv_f
-
-        # Расчет положения главной плоскости H2 для корректного draw_axis
-        self.h2 = -(self.f_dist * (n - 1) * thickness) / (n * r1_val)
+    def translate(self, vec):
+        self.origin += np.asarray(vec)
+        self._create_surfaces()
 
     def get_surfaces(self) -> List:
         return [self.front, self.back]
@@ -1059,14 +1143,14 @@ class UniversalLens:
         x_front = get_local_x(self.R1, v1_local, r_grid, True)
         x_back = get_local_x(self.R2, v2_local, r_grid, False)
 
-        front_mesh = pv.StructuredGrid(x_front, y, z).extract_surface()
-        back_mesh = pv.StructuredGrid(x_back, y, z).extract_surface()
+        front_mesh = pv.StructuredGrid(x_front, y, z).extract_surface(algorithm='dataset_surface')
+        back_mesh = pv.StructuredGrid(x_back, y, z).extract_surface(algorithm='dataset_surface')
 
         # Ободок (соединение краёв)
         rim_x = np.array([x_front[:, -1], x_back[:, -1]])
         rim_y = np.array([y[:, -1], y[:, -1]])
         rim_z = np.array([z[:, -1], z[:, -1]])
-        rim_mesh = pv.StructuredGrid(rim_x, rim_y, rim_z).extract_surface()
+        rim_mesh = pv.StructuredGrid(rim_x, rim_y, rim_z).extract_surface(algorithm='dataset_surface')
 
         local_mesh = front_mesh.merge(back_mesh).merge(rim_mesh)
 
@@ -1074,7 +1158,7 @@ class UniversalLens:
         matrix = np.eye(4)
         matrix[:3, :3] = self.rotation
         matrix[:3, 3] = self.origin
-        return local_mesh.transform(matrix)
+        return local_mesh.transform(matrix, inplace=False)
 
     def draw_axis(self, plot, length=100):
         # if not self.show_axis:
@@ -1124,21 +1208,38 @@ class UniversalLens:
 
 class Aperture(PlaneSurface):
     """Диафрагма: непрозрачная плоскость с круглым отверстием."""
-    def __init__(self, point: np.ndarray, normal: np.ndarray,
-                 aperture_radius: float, outer_radius: float = 3.0,
-                 n_inside: float = 1.0):
-        super().__init__(
-            point=point,
-            normal=normal,
-            n_inside=n_inside,
-            lens_origin=point,
-            lens_axis=normal,
-            edge_radius=0.0,
-            is_mirror=False
-        )
-        self.aperture_radius = aperture_radius
-        self.outer_radius = outer_radius
-        self._hit_opaque = False
+
+    class Aperture(PlaneSurface):
+        def __init__(self, point, normal, aperture_radius, outer_radius=3.0,
+                     absorption_range=(0, 10000), n_inside=1.0):
+            super().__init__(
+                point=point, normal=normal, n_inside=n_inside,
+                lens_origin=point, lens_axis=normal,
+                edge_radius=0.0,
+                absorption_range=absorption_range
+            )
+            self.aperture_radius = aperture_radius
+            self.outer_radius = outer_radius
+
+        def get_mesh(self) -> pv.PolyData:
+            disc = pv.Disc(center=(0, 0, 0), normal=(0, 0, 1),
+                           inner=self.aperture_radius, outer=self.outer_radius, c_res=100)
+            # Поворот к нормали
+            v_from = np.array([0., 0., 1.])
+            v_to = self.normal
+            if np.allclose(v_from, v_to):
+                rot = np.eye(3)
+            elif np.allclose(v_from, -v_to):
+                rot = -np.eye(3)
+            else:
+                v = np.cross(v_from, v_to)
+                c = np.dot(v_from, v_to)
+                K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                rot = np.eye(3) + K + (K @ K) * (1 / (1 + c))
+            transform = np.eye(4)
+            transform[:3, :3] = rot
+            transform[:3, 3] = self.lens_origin
+            return disc.transform(transform, inplace=False)
 
     def intersect(self, ray: Ray) -> Optional[float]:
         dot_dn = np.dot(ray.direction, self.normal)
@@ -1159,56 +1260,6 @@ class Aperture(PlaneSurface):
         # Попадание в отверстие или в непрозрачную часть?
         self._hit_opaque = (dist_to_axis > self.aperture_radius + 1e-6)
         return t
-
-    def interact(self, ray_dir: np.ndarray, normal: np.ndarray,
-                 n1: float, n2: float) -> Optional[np.ndarray]:
-        if self._hit_opaque:
-            self._hit_opaque = False
-            return None
-        return ray_dir
-
-    def get_mesh(self) -> pv.PolyData:
-        """Кольцо, правильно ориентированное по self.normal."""
-        # Диск в плоскости XY (нормаль Z) с центром в (0,0,0)
-        disc = pv.Disc(
-            center=(0, 0, 0),
-            normal=(0, 0, 1),
-            inner=self.aperture_radius,
-            outer=self.outer_radius,
-            c_res=100
-        )
-
-        # Строим матрицу поворота от [0,0,1] к self.normal
-        v_from = np.array([0.0, 0.0, 1.0])
-        v_to = self.normal
-        v_from = v_from / np.linalg.norm(v_from)
-        v_to = v_to / np.linalg.norm(v_to)
-
-        if np.allclose(v_from, v_to):
-            rot_matrix = np.eye(3)
-        elif np.allclose(v_from, -v_to):
-            # Поворот на 180° вокруг оси, перпендикулярной v_from
-            if abs(v_from[0]) < 0.9:
-                perp = np.array([1.0, 0.0, 0.0])
-            else:
-                perp = np.array([0.0, 1.0, 0.0])
-            rot_matrix = -np.eye(3) + 2 * np.outer(perp, perp) / np.dot(perp, perp)
-        else:
-            v = np.cross(v_from, v_to)
-            c = np.dot(v_from, v_to)
-            K = np.array([
-                [0, -v[2], v[1]],
-                [v[2], 0, -v[0]],
-                [-v[1], v[0], 0]
-            ])
-            rot_matrix = np.eye(3) + K + (K @ K) * (1.0 / (1.0 + c))
-
-        # Мировая матрица: поворот + перенос
-        transform = np.eye(4)
-        transform[:3, :3] = rot_matrix
-        transform[:3, 3] = self.lens_origin
-
-        return disc.transform(transform, inplace=False)
 
 
 # --------------------------------
@@ -1256,7 +1307,6 @@ def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 20) -> np.
 
 def _trace_simple(ray: Ray, elements: List, max_bounces: int,
                   offset_distance: float) -> np.ndarray:
-    print(f"[SIMPLE] origin={ray.origin}, direction={ray.direction}, n={ray.current_n}")
     path = [ray.origin]
     current_ray = ray
     current_n = ray.current_n
@@ -1294,8 +1344,6 @@ def _trace_simple(ray: Ray, elements: List, max_bounces: int,
             if current_ray.wavelength is None or (hit_obj.refraction_range[0] <= current_ray.wavelength <= hit_obj.refraction_range[1]):
                 allow_refraction = True
 
-        print(f"[SIMPLE] hit {type(hit_obj).__name__} at {hit_point}, active={hit_obj.is_active(ray.wavelength)}")
-        print(f"         allow_reflection={allow_reflection}, allow_refraction={allow_refraction}")
 
         # Ничего не разрешено – проходим сквозь
         if not allow_reflection and not allow_refraction:
