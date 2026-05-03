@@ -11,7 +11,7 @@ if __name__ == "__main__":
         lens_origin=np.array([0.0, 0.0, 0.0]),
         lens_axis=np.array([1.0, 0.0, 0.0]),
         edge_radius=3.0,                  # круглое пятно радиусом 3
-        reflection_range=(380, 500),      # отражает фиолетовый/синий
+        reflection_range=(380, 700),      # отражает фиолетовый/синий
         refraction_range=(500, 700),      # преломляет зелёный-красный
         absorption_range=(700, 780)       # поглощает дальний красный
     )

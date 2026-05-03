@@ -10,6 +10,8 @@ import trimesh
 from matplotlib.colors import to_rgb
 
 pv.global_theme.allow_empty_mesh = True
+# Глобальная константа – длина отрезка, которым луч уходит в бесконечность
+RAY_INFINITY_DISTANCE = 25.0
 
 # -------------------------------
 # Утилиты для оптических расчётов
@@ -223,7 +225,7 @@ def _trace_recursive(ray, elements, depth, min_energy, segments,
             hit_obj = obj
 
     if hit_obj is None:
-        p2 = ray.origin + ray.direction * 500.0
+        p2 = ray.origin + ray.direction * RAY_INFINITY_DISTANCE
         segments.append((ray.origin, p2, ray.energy))
         return
 
@@ -811,25 +813,25 @@ class MeshSurface:
         # Нормализуем
         return normal / np.linalg.norm(normal)
 
-    def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
-        """
-        Определяет поведение луча при столкновении:
-          - зеркало: отражение
-          - экран/поглотитель: остановка (возвращает None)
-          - иначе: преломление (вызывается refract)
-        """
-        if self.is_screen:
-            return None  # луч поглощён
-
-        if self.is_mirror:
-            # Отражение (нормаль всегда направлена против луча)
-            dot = np.dot(normal, ray_dir)
-            actual_normal = normal if dot < 0 else -normal
-            reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
-            return reflected_dir / np.linalg.norm(reflected_dir)
-
-        # Преломление
-        return refract(ray_dir, normal, n1, n2)
+    # def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
+    #     """
+    #     Определяет поведение луча при столкновении:
+    #       - зеркало: отражение
+    #       - экран/поглотитель: остановка (возвращает None)
+    #       - иначе: преломление (вызывается refract)
+    #     """
+    #     if self.is_screen:
+    #         return None  # луч поглощён
+    #
+    #     if self.is_mirror:
+    #         # Отражение (нормаль всегда направлена против луча)
+    #         dot = np.dot(normal, ray_dir)
+    #         actual_normal = normal if dot < 0 else -normal
+    #         reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
+    #         return reflected_dir / np.linalg.norm(reflected_dir)
+    #
+    #     # Преломление
+    #     return refract(ray_dir, normal, n1, n2)
 
     def get_mesh(self) -> pv.PolyData:
         """
@@ -869,35 +871,6 @@ class Screen(PlaneSurface):
 
     def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> None:
         return None  # сигнал остановки трассировки
-
-
-class RectangularMirror(PlaneSurface):
-    def __init__(self, center: np.ndarray, normal: np.ndarray,
-                 width: float, height: float,
-                 n_inside: float = 1.0,
-                 reflection_range=(0, 10000)):   # ← теперь диапазон
-        self.width = width
-        self.height = height
-        half_u = width / 2.0
-        half_v = height / 2.0
-
-        center = np.asarray(center, dtype=float)
-        normal = np.asarray(normal, dtype=float)
-        normal /= np.linalg.norm(normal)
-
-        tangent1, tangent2 = get_tangents(normal)
-
-        super().__init__(
-            point=center,
-            normal=normal,
-            n_inside=n_inside,
-            lens_origin=center,
-            lens_axis=normal,
-            edge_radius=0.0,
-            half_sizes=(half_u, half_v),
-            face_tangents=(tangent1, tangent2),
-            reflection_range=reflection_range   # зеркало
-        )
 
 
 class BoxPrism:
@@ -1025,7 +998,7 @@ class UniversalLens:
                 center=c1_world, radius=abs(R1), n_inside=n,
                 lens_origin=self.origin, lens_axis=self.axis_dir,
                 edge_radius=edge_radius, thickness=thickness,
-                reflection_range=(0, np.inf), refraction_range=(0, np.inf)
+                reflection_range=(0, np.inf),refraction_range=(0, np.inf)
             )
 
         # Задняя поверхность
@@ -1149,61 +1122,6 @@ class UniversalLens:
                                      shape=None, show_points=False)
 
 
-class RectangularMirror(PlaneSurface):
-    """
-    Прямоугольное плоское зеркало.
-    Параметры:
-        center  – геометрический центр зеркала,
-        normal  – нормаль к поверхности (единичный вектор),
-        width   – полная ширина (размер вдоль первой касательной),
-        height  – полная высота (размер вдоль второй касательной),
-        n_inside – показатель преломления внутри (по умолчанию 1.0).
-    """
-    def __init__(self, center: np.ndarray, normal: np.ndarray,
-                 width: float, height: float, n_inside: float = 1.0):
-        self.width = width
-        self.height = height
-        half_u = width / 2.0
-        half_v = height / 2.0
-
-        center = np.asarray(center, dtype=float)
-        normal = np.asarray(normal, dtype=float)
-        normal /= np.linalg.norm(normal)
-
-        tangent1, tangent2 = get_tangents(normal)
-
-        super().__init__(
-            point=center,
-            normal=normal,
-            n_inside=n_inside,
-            lens_origin=center,
-            lens_axis=normal,
-            edge_radius=0.0,         # не используется
-            is_mirror=True,
-            half_sizes=(half_u, half_v),
-            face_tangents=(tangent1, tangent2)
-        )
-
-    def get_mesh(self) -> pv.PolyData:
-        """Прямоугольник, заданный центром, касательными и полуразмерами."""
-        t1, t2 = self.face_tangents
-        hu, hv = self.half_sizes
-        center = self.lens_origin
-
-        # Четыре угла прямоугольника
-        p0 = center - hu * t1 - hv * t2
-        p1 = center + hu * t1 - hv * t2
-        p2 = center + hu * t1 + hv * t2
-        p3 = center - hu * t1 + hv * t2
-
-        # Два треугольника
-        vertices = np.array([p0, p1, p2, p3])
-        faces = np.array([[3, 0, 1, 2],
-                          [3, 0, 2, 3]])  # полигоны: треугольники (0,1,2) и (0,2,3)
-        mesh = pv.PolyData(vertices, faces)
-        return mesh
-
-
 class Aperture(PlaneSurface):
     """Диафрагма: непрозрачная плоскость с круглым отверстием."""
     def __init__(self, point: np.ndarray, normal: np.ndarray,
@@ -1315,7 +1233,7 @@ def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 20) -> np.
                 hit_obj = obj
 
         if hit_obj is None:
-            path.append(current_ray.origin + current_ray.direction * 50)
+            path.append(current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE)
             break
 
         hit_point = current_ray.origin + current_ray.direction * best_t
@@ -1338,6 +1256,7 @@ def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 20) -> np.
 
 def _trace_simple(ray: Ray, elements: List, max_bounces: int,
                   offset_distance: float) -> np.ndarray:
+    print(f"[SIMPLE] origin={ray.origin}, direction={ray.direction}, n={ray.current_n}")
     path = [ray.origin]
     current_ray = ray
     current_n = ray.current_n
@@ -1354,7 +1273,7 @@ def _trace_simple(ray: Ray, elements: List, max_bounces: int,
                 hit_obj = obj
 
         if hit_obj is None:
-            path.append(current_ray.origin + current_ray.direction * 500)
+            path.append(current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE)
             break
 
         hit_point = current_ray.origin + current_ray.direction * best_t
@@ -1374,6 +1293,9 @@ def _trace_simple(ray: Ray, elements: List, max_bounces: int,
         if hasattr(hit_obj, 'refraction_range') and hit_obj.refraction_range is not None:
             if current_ray.wavelength is None or (hit_obj.refraction_range[0] <= current_ray.wavelength <= hit_obj.refraction_range[1]):
                 allow_refraction = True
+
+        print(f"[SIMPLE] hit {type(hit_obj).__name__} at {hit_point}, active={hit_obj.is_active(ray.wavelength)}")
+        print(f"         allow_reflection={allow_reflection}, allow_refraction={allow_refraction}")
 
         # Ничего не разрешено – проходим сквозь
         if not allow_reflection and not allow_refraction:
