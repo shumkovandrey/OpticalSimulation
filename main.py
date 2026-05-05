@@ -121,97 +121,131 @@ def get_tangents(normal):
     return t1, t2
 
 
-def fresnel_coeffs(n1: float, n2: float, cos_i: float) -> Tuple[float, float]:
+def fresnel_amplitudes(n1, n2, cos_i):
     """
-    Возвращает (коэффициент отражения R, коэффициент пропускания T).
-    cos_i – косинус угла падения (положительный, от 0 до 1).
+    Возвращает комплексные амплитудные коэффициенты для s и p поляризаций:
+    (r_s, r_p, t_s, t_p).
+    cos_i – положительный косинус угла падения.
     """
-    # sin_i**2
-    sin2_i = max(0.0, 1.0 - cos_i * cos_i)
-    # sin2_t по закону Снелла
     eta = n1 / n2
-    sin2_t = (eta ** 2) * sin2_i
-
-    if sin2_t > 1.0:
-        # Полное внутреннее отражение
-        return 1.0, 0.0
-
+    sin2_i = max(0.0, 1.0 - cos_i*cos_i)
+    sin2_t = (eta**2) * sin2_i
+    if sin2_t > 1.0:   # полное внутреннее отражение
+        # r_s = 1, r_p = 1 (фаза сдвигается, но для амплитуд модуль 1)
+        # t_s = 0, t_p = 0
+        return 1.0+0j, 1.0+0j, 0.0+0j, 0.0+0j
     cos_t = np.sqrt(1.0 - sin2_t)
 
-    # Амплитудные коэффициенты Френеля
-    # s-поляризация
-    r_s = (n1 * cos_i - n2 * cos_t) / (n1 * cos_i + n2 * cos_t)
-    # p-поляризация
-    r_p = (n2 * cos_i - n1 * cos_t) / (n2 * cos_i + n1 * cos_t)
+    # Амплитудные коэффициенты (действительные для диэлектриков без поглощения)
+    r_s = (n1*cos_i - n2*cos_t) / (n1*cos_i + n2*cos_t)
+    r_p = (n2*cos_i - n1*cos_t) / (n2*cos_i + n1*cos_t)
+    t_s = 2.0 * n1 * cos_i / (n1*cos_i + n2*cos_t)
+    t_p = 2.0 * n1 * cos_i / (n2*cos_i + n1*cos_t)
+    # Фазы для проходящих волн? Обычно t положительные для прозрачных сред.
+    return r_s, r_p, t_s, t_p
 
-    # Интенсивность (коэффициенты отражения)
-    R_s = r_s * r_s
-    R_p = r_p * r_p
-    R = 0.5 * (R_s + R_p)
+def fresnel_coeffs(n1, n2, cos_i):
+    r_s, r_p, _, _ = fresnel_amplitudes(n1, n2, cos_i)
+    R = 0.5 * (abs(r_s)**2 + abs(r_p)**2)
     T = 1.0 - R
     return R, T
 
 
-def split_ray(ray, normal, n_next, start_point,
-              allow_reflection=True, allow_refraction=True,
-              offset_distance=0.01):
+def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray,
+              allow_reflection: bool = True, allow_refraction: bool = True,
+              offset_distance: float = 0.01,
+              use_polarization_color: bool = False) -> List[Ray]:
     EPS = offset_distance
+
     cos_i = np.dot(normal, ray.direction)
     if cos_i > 0:
         normal = -normal
         cos_i = np.dot(normal, ray.direction)
     cos_i = -cos_i
+
     n1, n2 = ray.current_n, n_next
 
-    R, T = fresnel_coeffs(n1, n2, cos_i)
+    # Локальный базис плоскости падения
+    s_dir = np.cross(normal, ray.direction)
+    if np.linalg.norm(s_dir) < 1e-10:
+        s_dir = np.array([0.0, 1.0, 0.0])
+    s_dir /= np.linalg.norm(s_dir)
+    p_dir = np.cross(ray.direction, s_dir)
+    p_dir /= np.linalg.norm(p_dir)
 
-    # Логика переопределения коэффициентов
-    if not allow_refraction:
-        T = 0.0
-        if allow_reflection:
-            R = 1.0   # идеальное зеркало
-    if not allow_reflection:
-        R = 0.0
-        if allow_refraction:
-            T = 1.0   # идеальное просветление (нет отражения)
+    if ray.polarization is not None:
+        E_s = np.dot(ray.polarization, s_dir)
+        E_p = np.dot(ray.polarization, p_dir)
+    else:
+        E_s = complex(1.0, 0.0)
+        E_p = complex(0.0, 0.0)
 
-    if R == 0.0 and T == 0.0:
+    r_s, r_p, t_s, t_p = fresnel_amplitudes(n1, n2, cos_i)
+
+    if not allow_reflection and not allow_refraction:
         return []
+    if allow_reflection and not allow_refraction:
+        r_s, r_p = -1.0 + 0j, 1.0 + 0j
+        t_s, t_p = 0j, 0j
+    elif not allow_reflection and allow_refraction:
+        t_s, t_p = 1.0 + 0j, 1.0 + 0j
+        r_s, r_p = 0j, 0j
 
     new_rays = []
-    if R > 1e-6:
-        reflected_dir = ray.direction - 2 * np.dot(ray.direction, normal) * normal
-        reflected_energy = ray.energy * R
-        origin = start_point + EPS * reflected_dir
-        new_rays.append(Ray(origin, reflected_dir, reflected_energy, n1,
-                            color=ray.color, wavelength=ray.wavelength,
-                            energy_color_type=ray.energy_color_type))
-    if T > 1e-6:
-        eta = n1 / n2
-        cos_t = np.sqrt(max(0.0, 1.0 - (eta**2) * (1.0 - cos_i**2)))
-        refracted_dir = eta * ray.direction + (eta * cos_i - cos_t) * normal
-        refracted_dir /= np.linalg.norm(refracted_dir)
-        refracted_energy = ray.energy * T
-        origin = start_point + EPS * refracted_dir
-        new_rays.append(Ray(origin, refracted_dir, refracted_energy, n2,
-                            color=ray.color, wavelength=ray.wavelength,
-                            energy_color_type=ray.energy_color_type))
+
+    # Отражённый луч
+    if allow_reflection and (abs(r_s) > 1e-9 or abs(r_p) > 1e-9):
+        new_E_s = r_s * E_s
+        new_E_p = r_p * E_p
+        energy = abs(new_E_s)**2 + abs(new_E_p)**2
+        if energy > 1e-9:
+            reflected_dir = ray.direction - 2 * np.dot(ray.direction, normal) * normal
+            new_pol = new_E_s * s_dir + new_E_p * p_dir
+            new_ray = Ray(start_point + EPS * reflected_dir, reflected_dir, energy, n1,
+                          color=ray.color, wavelength=ray.wavelength,
+                          energy_color_type=ray.energy_color_type,
+                          polarization=new_pol)
+            if use_polarization_color:
+                new_ray.update_color_from_polarization()
+                print(f"Polarization color: {new_ray.color} for ray with energy {energy:.3f}")
+            new_rays.append(new_ray)
+
+    # Преломлённый луч
+    if allow_refraction and (abs(t_s) > 1e-9 or abs(t_p) > 1e-9):
+        new_E_s = t_s * E_s
+        new_E_p = t_p * E_p
+        energy = abs(new_E_s)**2 + abs(new_E_p)**2
+        if energy > 1e-9:
+            eta = n1 / n2
+            cos_t = np.sqrt(max(0.0, 1.0 - (eta**2) * (1.0 - cos_i**2)))
+            refracted_dir = eta * ray.direction + (eta * cos_i - cos_t) * normal
+            refracted_dir /= np.linalg.norm(refracted_dir)
+            new_pol = new_E_s * s_dir + new_E_p * p_dir
+            new_ray = Ray(start_point + EPS * refracted_dir, refracted_dir, energy, n2,
+                          color=ray.color, wavelength=ray.wavelength,
+                          energy_color_type=ray.energy_color_type,
+                          polarization=new_pol)
+            if use_polarization_color:
+                new_ray.update_color_from_polarization()
+                print(f"Polarization color: {new_ray.color} for ray with energy {energy:.3f}")
+            new_rays.append(new_ray)
+
     return new_rays
 
 
 def trace_ray_tree(ray: Ray, elements: List, max_depth: int,
-                   min_energy: float = 0.01) -> List[Tuple[np.ndarray, np.ndarray, float]]:
+                   min_energy: float = 0.01, use_polarization_color=False) -> List[Tuple[np.ndarray, np.ndarray, float]]:
     """
     Возвращает список отрезков в виде (p1, p2, energy).
     Глубина ограничена max_depth, лучи с энергией < min_energy отбрасываются.
     """
     segments = []
-    _trace_recursive(ray, elements, max_depth, min_energy, segments)
+    _trace_recursive(ray, elements, max_depth, min_energy, segments, use_polarization_color=use_polarization_color)
     return segments
 
 
 def _trace_recursive(ray, elements, depth, min_energy, segments,
-                     total_limit=5000, offset_distance=0.01):
+                     total_limit=5000, offset_distance=0.01, use_polarization_color=False):
     if len(segments) >= total_limit or depth <= 0 or ray.energy < min_energy:
         return
 
@@ -227,21 +261,21 @@ def _trace_recursive(ray, elements, depth, min_energy, segments,
 
     if hit_obj is None:
         p2 = ray.origin + ray.direction * RAY_INFINITY_DISTANCE
-        segments.append((ray.origin, p2, ray.energy))
+        segments.append((ray.origin, p2, ray.energy, ray.color))
         return
 
     hit_point = ray.origin + ray.direction * best_t
-    segments.append((ray.origin, hit_point, ray.energy))
-    
+    segments.append((ray.origin, hit_point, ray.energy, ray.color))
+
     if isinstance(hit_obj, ThinLens):
         new_dir = hit_obj.thin_lens_deflection(ray.direction, hit_point)
         new_ray = Ray(hit_point + offset_distance * new_dir, new_dir,
                       energy=ray.energy, current_n=ray.current_n,
                       color=ray.color, wavelength=ray.wavelength,
                       energy_color_type=ray.energy_color_type)
-        segments.append((hit_point, new_ray.origin, new_ray.energy))
+        segments.append((hit_point, new_ray.origin, new_ray.energy, ray.color))
         _trace_recursive(new_ray, elements, depth - 1, min_energy, segments,
-                         total_limit, offset_distance)
+                         total_limit, offset_distance, use_polarization_color=use_polarization_color)
         return
 
     # Поглощение
@@ -265,21 +299,22 @@ def _trace_recursive(ray, elements, depth, min_energy, segments,
                       energy=ray.energy, current_n=ray.current_n,
                       color=ray.color, wavelength=ray.wavelength,
                       energy_color_type=ray.energy_color_type)
-        segments.append((hit_point, new_ray.origin, new_ray.energy))   # соединительный отрезок
+        segments.append((hit_point, new_ray.origin, new_ray.energy, ray.color))   # соединительный отрезок
         _trace_recursive(new_ray, elements, depth-1, min_energy, segments,
-                         total_limit, offset_distance)
+                         total_limit, offset_distance, use_polarization_color=use_polarization_color)
         return
 
     n_next = hit_obj.n if abs(ray.current_n - 1.0) < 1e-6 else 1.0
     new_rays = split_ray(ray, hit_obj.get_normal(hit_point), n_next, hit_point,
                          allow_reflection=allow_reflection,
                          allow_refraction=allow_refraction,
-                         offset_distance=offset_distance)
+                         offset_distance=offset_distance,
+                         use_polarization_color=use_polarization_color)
     for new_ray in new_rays:
         # Соединительный отрезок от точки удара до старта нового луча
-        segments.append((hit_point, new_ray.origin, new_ray.energy))
+        segments.append((hit_point, new_ray.origin, new_ray.energy, ray.color))
         _trace_recursive(new_ray, elements, depth-1, min_energy, segments,
-                         total_limit, offset_distance)
+                         total_limit, offset_distance, use_polarization_color=use_polarization_color)
 
 
 # ---------------------
@@ -292,7 +327,8 @@ class Ray:
                  energy=1.0, current_n=1.0,
                  color="yellow",
                  energy_color_type=2,
-                 wavelength=None):          # новая опция
+                 wavelength=None,
+                 polarization=None):          # ← теперь трёхмерный комплексный вектор
         self.origin = np.array(origin, dtype=float)
         self.direction = np.array(direction, dtype=float)
         self.direction /= np.linalg.norm(self.direction)
@@ -300,7 +336,62 @@ class Ray:
         self.current_n = current_n
         self.color = color
         self.energy_color_type = energy_color_type
-        self.wavelength = wavelength        # например, 550 (нм)
+        self.wavelength = wavelength
+        if polarization is not None:
+            self.polarization = np.array(polarization, dtype=complex)
+        else:
+            self.polarization = None
+
+    def update_color_from_polarization(self):
+        if self.polarization is None:
+            return
+        E = self.polarization
+        # Глобальные оси: Y – p-компонента, Z – s-компонента
+        I_y = abs(E[1])**2
+        I_z = abs(E[2])**2
+        total = I_y + I_z
+        if total < 1e-9:
+            self.color = (1.0, 1.0, 1.0)
+        else:
+            r = I_y / total
+            b = I_z / total
+            self.color = (r, 0.0, b)
+
+
+class RayPool:
+    """Пул переиспользуемых лучей для снижения аллокаций."""
+    def __init__(self, initial_size=100):
+        self.pool = [self._create_blank() for _ in range(initial_size)]
+
+    def _create_blank(self):
+        return Ray(np.zeros(3), np.zeros(3))
+
+    def acquire(self, origin, direction, energy=1.0, current_n=1.0,
+                color="yellow", energy_color_type=2, wavelength=None,
+                polarization=None):
+        """Взять луч из пула и инициализировать поля."""
+        if self.pool:
+            ray = self.pool.pop()
+        else:
+            ray = Ray(np.zeros(3), np.zeros(3))
+        # Заполняем все атрибуты
+        ray.origin[:] = origin
+        ray.direction[:] = direction
+        ray.direction /= np.linalg.norm(ray.direction)
+        ray.energy = energy
+        ray.current_n = current_n
+        ray.color = color
+        ray.energy_color_type = energy_color_type
+        ray.wavelength = wavelength
+        if polarization is not None:
+            ray.polarization = np.array(polarization, dtype=complex)
+        else:
+            ray.polarization = None
+        return ray
+
+    def release(self, ray: Ray):
+        """Вернуть луч в пул."""
+        self.pool.append(ray)
 
 
 class RayCloud:
@@ -434,7 +525,7 @@ class RayCloud:
         valid_colors = []
         valid_types = []
         for i, seg in enumerate(segments):
-            p1, p2, energy = seg
+            p1, p2, energy = seg[0], seg[1], seg[2]
             if p1.shape != (3,) or p2.shape != (3,):
                 continue
             if np.any(np.isnan(p1)) or np.any(np.isnan(p2)):
@@ -449,13 +540,18 @@ class RayCloud:
             self.actor.mapper.dataset.copy_from(pv.PolyData())
             return
 
-        for i, (p1, p2, energy) in enumerate(valid_segments):
+        for i, seg in enumerate(valid_segments):
+            if len(seg) == 4:
+                p1, p2, energy, color = seg
+            else:  # обратная совместимость
+                p1, p2, energy = seg
+                color = None
             points.append(p1)
             points.append(p2)
             lines.append([2, offset, offset + 1])
 
             # Определяем цвет
-            color = valid_colors[i] if valid_colors else self.default_color
+            color = color if color is not None else (valid_colors[i] if valid_colors else self.default_color)
 
             # Определяем тип затухания (индивидуальный или глобальный)
             etype = valid_types[i] if valid_types else self.energy_color_type
@@ -486,7 +582,7 @@ class RayCloud:
 
 class RayTracer:
     def __init__(self, plotter, mode='tree', max_depth=6, min_energy=0.01,
-                 offset_distance=0.5, **cloud_kwargs):
+                 offset_distance=0.5, use_polarization_color=False, pool=None, **cloud_kwargs):
         self.plotter = plotter
         self.mode = mode
         self.max_depth = max_depth
@@ -494,6 +590,9 @@ class RayTracer:
         self.offset_distance = offset_distance
         self.rays = []
         self.elements = []
+        self.emitters = []
+        self.use_polarization_color = use_polarization_color
+        self.pool = pool
         # Один‑единственный RayCloud на всё время жизни трейсера
         self.cloud = RayCloud(plotter, **cloud_kwargs)
 
@@ -504,18 +603,28 @@ class RayTracer:
         for element in elements:
             self.elements.append(element)
 
+    def add_emitter(self, emitter: BeamEmitter):
+        if not hasattr(self, 'emitters'):
+            self.emitters = []
+        self.emitters.append(emitter)
+
     def set_mode(self, mode):
         if mode not in ('simple', 'tree'):
             raise ValueError("mode must be 'simple' or 'tree'")
         self.mode = mode
 
     def trace_all(self):
+        if hasattr(self, 'emitters'):
+            for emitter in self.emitters:
+                for ray in emitter.emit():
+                    self.rays.append(ray)
+
         if self.mode == 'simple':
             trajectories, colors = [], []
             for ray in self.rays:
                 traj = trace_ray(ray, self.elements, mode='simple',
                                  max_depth=self.max_depth,
-                                 offset_distance=self.offset_distance)
+                                 offset_distance=self.offset_distance, use_polarization_color=self.use_polarization_color)
                 trajectories.append(traj)
                 colors.append(ray.color)
             return trajectories, colors, None
@@ -525,7 +634,7 @@ class RayTracer:
                 segs = trace_ray(ray, self.elements, mode='tree',
                                  max_depth=self.max_depth,
                                  min_energy=self.min_energy,
-                                 offset_distance=self.offset_distance)
+                                 offset_distance=self.offset_distance, use_polarization_color=self.use_polarization_color)
                 all_segments.extend(segs)
                 all_colors.extend([ray.color] * len(segs))
                 all_types.extend([ray.energy_color_type] * len(segs))
@@ -538,12 +647,88 @@ class RayTracer:
             self.cloud.update_from_trajectories(result, colors=colors)
         else:
             self.cloud.update_from_segments(result, base_colors=colors, energy_types=types)
-        self.rays.clear()       # подготовка к следующему кадру
-        self.elements.clear()   # (опционально, если элементы каждый кадр обновляются)
+        if self.pool:
+            for ray in self.rays:
+                self.pool.release(ray)
+        self.rays.clear()
+        self.elements.clear()
+        return self.cloud
 
     def remove(self):
         """Удаляет облако с графика (если нужно полностью убрать лучи)."""
         self.plotter.remove_actor(self.cloud.actor)
+
+
+class BeamEmitter:
+    """
+    Излучатель пучка лучей. Трансформируется (поворот, перемещение), может генерировать
+    набор параллельных лучей или выдавать лучи из заданного пользователем списка.
+    """
+    def __init__(self, origin, direction=np.array([1.0, 0.0, 0.0]),
+                 rotation_degrees=(0,0,0), pool=None,
+                 num_rays=5, min_offset=-2.0, max_offset=2.0,
+                 color="yellow", wavelength=550, energy_color_type=2,
+                 energy=1.0, current_n=1.0):
+        self.origin = np.asarray(origin, dtype=float)
+        self.direction = np.asarray(direction, dtype=float)
+        self.direction /= np.linalg.norm(self.direction)
+        # Применяем начальный поворот
+        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        self.direction = rot @ self.direction
+        self.rotation_matrix = rot
+        # Параметры генерации
+        self.num_rays = num_rays
+        self.min_offset = min_offset
+        self.max_offset = max_offset
+        self.color = color
+        self.wavelength = wavelength
+        self.energy_color_type = energy_color_type
+        self.energy = energy
+        self.current_n = current_n
+
+        self.pool = pool
+
+        # Пользовательские лучи (храним в локальной системе)
+        self.custom_rays: List[Ray] = []
+        self.use_custom = False   # если True, используются custom_rays вместо сетки
+
+    def add_ray(self, ray: Ray):
+        """Добавить пользовательский луч (в локальной системе излучателя)."""
+        self.custom_rays.append(ray)
+        self.use_custom = True
+
+    def rotate(self, angles_deg):
+        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        self.direction = rot @ self.direction
+        self.rotation_matrix = rot @ self.rotation_matrix
+
+    def translate(self, vec):
+        self.origin += np.asarray(vec)
+
+    def emit(self) -> List[Ray]:
+        rays = []
+        perp1, perp2 = get_tangents(self.direction)
+        offsets = np.linspace(self.min_offset, self.max_offset, self.num_rays)
+        for dy in offsets:
+            world_origin = self.origin + dy * perp1
+            if self.pool:
+                ray = self.pool.acquire(origin=world_origin, direction=self.direction,
+                                        energy=self.energy, current_n=self.current_n,
+                                        color=self.color, wavelength=self.wavelength,
+                                        energy_color_type=self.energy_color_type,
+                                        polarization=None)
+            else:
+                ray = Ray(origin=world_origin, direction=self.direction,
+                          energy=self.energy, current_n=self.current_n,
+                          color=self.color, wavelength=self.wavelength,
+                          energy_color_type=self.energy_color_type)
+            rays.append(ray)
+        return rays
+
+    def get_mesh(self) -> pv.PolyData:
+        """Маленькая стрелка для визуализации излучателя."""
+        arrow = pv.Arrow(start=self.origin, direction=self.direction, scale=0.5)
+        return arrow
 
 
 class PlaneSurface:
@@ -1641,7 +1826,7 @@ def _trace_simple(ray: Ray, elements: List, max_bounces: int,
 
 def trace_ray(ray: Ray, elements: List, mode: str = 'tree',
               max_depth: int = 10, min_energy: float = 0.01,
-              offset_distance: float = 0.5):
+              offset_distance: float = 0.5, use_polarization_color=False):
     """
     Универсальная трассировка луча.
 
@@ -1658,7 +1843,7 @@ def trace_ray(ray: Ray, elements: List, mode: str = 'tree',
     elif mode == 'tree':
         segments = []
         _trace_recursive(ray, elements, max_depth, min_energy, segments,
-                         total_limit=5000, offset_distance=offset_distance)
+                         total_limit=5000, offset_distance=offset_distance, use_polarization_color=use_polarization_color)
         return segments
     else:
         raise ValueError("mode must be 'simple' or 'tree'")

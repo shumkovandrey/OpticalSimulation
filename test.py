@@ -1,11 +1,17 @@
 import pyvista as pv
-mesh = pv.Sphere()
-pl = pv.Plotter()
-pl.add_mesh(mesh)
 
-# Отобразить оси с координатами
-# pl.show_bounds(xtitle="X [m]", ytitle="Y [m]", ztitle="Z [m]")
-# Или сетку
-pl.show_grid()
+plotter = pv.Plotter()
 
-pl.show()
+# Путь к шрифту с поддержкой кириллицы (для Windows)
+font_path = '/System/Library/Fonts/Supplemental/Arial.ttf'
+
+plotter.add_text(
+    "Привет, мир!",
+    font_file=font_path,
+    font_size=18,
+    position='upper_left'
+)
+
+plotter.add_mesh(pv.Sphere())
+plotter.show()
+

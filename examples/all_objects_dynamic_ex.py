@@ -24,10 +24,10 @@ lens = UniversalLens(
     refraction_range=(0, 10000), reflection_range=(0, 10000)
 )
 
-tri = trimesh.load("../Models/Egg.stl")
+tri = trimesh.load("../Models/Prism.stl")
 tri.apply_scale(3)
-mesh_obj = MeshSurface(tri, n_inside=1.5, reflection_range=(0, 10000),
-                       translation=[0, 60, 0], rotation_degrees=(90, 0, 0),)
+mesh_obj = MeshSurface(tri, n_inside=1.5, refraction_range=(0, 10000), reflection_range=(0, 10000),
+                       translation=[0, 60, 0], rotation_degrees=(0, 0, 0),)
 
 
 # Акторы для визуализации геометрии
@@ -40,10 +40,10 @@ mesh_actor   = plotter.add_mesh(mesh_obj.get_mesh(), color="gold", opacity=0.5, 
 tracer = RayTracer(
     plotter,
     mode='tree',
-    max_depth=6,
-    min_energy=0.01,
-    offset_distance=0.3,
-    energy_color_type=1,
+    max_depth=12,
+    min_energy=0.0001,
+    offset_distance=0.01,
+    energy_color_type=0,
     default_color="yellow"
 )
 
@@ -94,7 +94,7 @@ while plotter.render:
     plane_mirror.rotate((0, 0, 6 * dt))
 
     sphere_mirror.rotate((0, 0, 4 * dt))
-    mesh_obj.rotate((0, 0, 5 * dt))
+    mesh_obj.rotate((0, 0, 20 * dt))
     lens.translate(np.array([lens_x - lens.origin[0], 0.0, 0.0]))
     lens.rotate((0, 0, 4 * dt))
 
@@ -110,13 +110,13 @@ while plotter.render:
 
     # Добавляем лучи
     for y in np.linspace(-19, -21, 4):
-        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="red", wavelength=650, energy_color_type=1))
+        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="red", wavelength=650, energy_color_type=2))
     for y in np.linspace(8, 10, 4):
-        tracer.add_ray(Ray([5, y, 0], [1, 0, 0], color="blue", wavelength=450, energy_color_type=1))
+        tracer.add_ray(Ray([5, y, 0], [1, 0, 0], color="blue", wavelength=450, energy_color_type=2))
     for y in np.linspace(19, 21, 5):
-        tracer.add_ray(Ray([-10, y, 0], [1, 0, 0], color="green", wavelength=550, energy_color_type=1))
-    for y in np.linspace(59, 61, 5):
-        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="magenta", wavelength=500, energy_color_type=1))
+        tracer.add_ray(Ray([-10, y, 0], [1, 0, 0], color="green", wavelength=550, energy_color_type=2))
+    for y in np.linspace(60, 61, 5):
+        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="magenta", wavelength=500, energy_color_type=2))
 
     # Автоматически обновляем RayCloud (правильный метод выбирается по self.mode)
     tracer.render()
