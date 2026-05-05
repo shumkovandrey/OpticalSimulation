@@ -40,8 +40,8 @@ mesh_actor   = plotter.add_mesh(mesh_obj.get_mesh(), color="gold", opacity=0.5, 
 tracer = RayTracer(
     plotter,
     mode='tree',
-    max_depth=12,
-    min_energy=0.0001,
+    max_depth=3,
+    min_energy=0.03,
     offset_distance=0.01,
     energy_color_type=0,
     default_color="yellow"
@@ -110,13 +110,13 @@ while plotter.render:
 
     # Добавляем лучи
     for y in np.linspace(-19, -21, 4):
-        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="red", wavelength=650, energy_color_type=2))
-    for y in np.linspace(8, 10, 4):
-        tracer.add_ray(Ray([5, y, 0], [1, 0, 0], color="blue", wavelength=450, energy_color_type=2))
+        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="red", wavelength=650, energy_color_type=1))
+    for y in np.linspace(8, 10, 400):
+        tracer.add_ray(Ray([5, y, 0], [1, 0, 0], color="blue", wavelength=450, energy_color_type=1))
     for y in np.linspace(19, 21, 5):
-        tracer.add_ray(Ray([-10, y, 0], [1, 0, 0], color="green", wavelength=550, energy_color_type=2))
+        tracer.add_ray(Ray([-10, y, 0], [1, 0, 0], color="green", wavelength=550, energy_color_type=1))
     for y in np.linspace(60, 61, 5):
-        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="magenta", wavelength=500, energy_color_type=2))
+        tracer.add_ray(Ray([-15, y, 0], [1, 0, 0], color="magenta", wavelength=500, energy_color_type=1))
 
     # Автоматически обновляем RayCloud (правильный метод выбирается по self.mode)
     tracer.render()

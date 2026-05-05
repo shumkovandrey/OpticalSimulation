@@ -5,6 +5,9 @@ import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 from typing import List, Optional, Tuple
 
+from numba import njit
+from fast_math import *
+
 import trimesh
 
 from matplotlib.colors import to_rgb
@@ -121,34 +124,34 @@ def get_tangents(normal):
     return t1, t2
 
 
-def fresnel_amplitudes(n1, n2, cos_i):
-    """
-    Возвращает комплексные амплитудные коэффициенты для s и p поляризаций:
-    (r_s, r_p, t_s, t_p).
-    cos_i – положительный косинус угла падения.
-    """
-    eta = n1 / n2
-    sin2_i = max(0.0, 1.0 - cos_i*cos_i)
-    sin2_t = (eta**2) * sin2_i
-    if sin2_t > 1.0:   # полное внутреннее отражение
-        # r_s = 1, r_p = 1 (фаза сдвигается, но для амплитуд модуль 1)
-        # t_s = 0, t_p = 0
-        return 1.0+0j, 1.0+0j, 0.0+0j, 0.0+0j
-    cos_t = np.sqrt(1.0 - sin2_t)
-
-    # Амплитудные коэффициенты (действительные для диэлектриков без поглощения)
-    r_s = (n1*cos_i - n2*cos_t) / (n1*cos_i + n2*cos_t)
-    r_p = (n2*cos_i - n1*cos_t) / (n2*cos_i + n1*cos_t)
-    t_s = 2.0 * n1 * cos_i / (n1*cos_i + n2*cos_t)
-    t_p = 2.0 * n1 * cos_i / (n2*cos_i + n1*cos_t)
-    # Фазы для проходящих волн? Обычно t положительные для прозрачных сред.
-    return r_s, r_p, t_s, t_p
-
-def fresnel_coeffs(n1, n2, cos_i):
-    r_s, r_p, _, _ = fresnel_amplitudes(n1, n2, cos_i)
-    R = 0.5 * (abs(r_s)**2 + abs(r_p)**2)
-    T = 1.0 - R
-    return R, T
+# def fresnel_amplitudes(n1, n2, cos_i):
+#     """
+#     Возвращает комплексные амплитудные коэффициенты для s и p поляризаций:
+#     (r_s, r_p, t_s, t_p).
+#     cos_i – положительный косинус угла падения.
+#     """
+#     eta = n1 / n2
+#     sin2_i = max(0.0, 1.0 - cos_i*cos_i)
+#     sin2_t = (eta**2) * sin2_i
+#     if sin2_t > 1.0:   # полное внутреннее отражение
+#         # r_s = 1, r_p = 1 (фаза сдвигается, но для амплитуд модуль 1)
+#         # t_s = 0, t_p = 0
+#         return 1.0+0j, 1.0+0j, 0.0+0j, 0.0+0j
+#     cos_t = np.sqrt(1.0 - sin2_t)
+#
+#     # Амплитудные коэффициенты (действительные для диэлектриков без поглощения)
+#     r_s = (n1*cos_i - n2*cos_t) / (n1*cos_i + n2*cos_t)
+#     r_p = (n2*cos_i - n1*cos_t) / (n2*cos_i + n1*cos_t)
+#     t_s = 2.0 * n1 * cos_i / (n1*cos_i + n2*cos_t)
+#     t_p = 2.0 * n1 * cos_i / (n2*cos_i + n1*cos_t)
+#     # Фазы для проходящих волн? Обычно t положительные для прозрачных сред.
+#     return r_s, r_p, t_s, t_p
+#
+# def fresnel_coeffs(n1, n2, cos_i):
+#     r_s, r_p, _, _ = fresnel_amplitudes(n1, n2, cos_i)
+#     R = 0.5 * (abs(r_s)**2 + abs(r_p)**2)
+#     T = 1.0 - R
+#     return R, T
 
 
 def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray,
@@ -774,7 +777,7 @@ class PlaneSurface:
         self.point += np.asarray(vec)
         self.lens_origin += np.asarray(vec)
 
-    def intersect(self, ray: Ray) -> Optional[float]:
+    def _slow_intersect(self, ray: Ray) -> Optional[float]:
         dot_dn = np.dot(ray.direction, self.normal)
         if abs(dot_dn) < 1e-6:
             return None
@@ -803,16 +806,22 @@ class PlaneSurface:
             return t
         return None
 
+    def intersect(self, ray: Ray) -> Optional[float]:
+        use_rect = self.half_sizes is not None and self.face_tangents is not None
+        tangents = None
+        half = None
+        if use_rect:
+            tangents = np.array(self.face_tangents)
+            half = np.array(self.half_sizes)
+        t = plane_intersect(ray.origin, ray.direction, self.point, self.normal,
+                            self.lens_origin, self.lens_axis, self.edge_radius,
+                            half, tangents, use_rect)
+        if t < 0.0:
+            return None
+        return t
+
     def get_normal(self, point: np.ndarray) -> np.ndarray:
         return self.normal
-
-    # def interact(self, ray_dir, normal, n1, n2):
-    #     if self.is_mirror:
-    #         dot = np.dot(normal, ray_dir)
-    #         actual_normal = normal if dot < 0 else -normal
-    #         reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
-    #         return reflected_dir / np.linalg.norm(reflected_dir)
-    #     return refract(ray_dir, normal, n1, n2)
 
     def is_active(self, wavelength):
         """Возвращает True, если поверхность должна взаимодействовать с данной длиной волны."""
@@ -894,6 +903,13 @@ class SphereSurface:
         self.lens_origin += np.asarray(vec)
 
     def intersect(self, ray: Ray) -> Optional[float]:
+        t = sphere_intersect(ray.origin, ray.direction, self.center, self.radius,
+                             self.lens_origin, self.lens_axis, self.edge_radius, self.thickness)
+        if t < 0.0:
+            return None
+        return t
+
+    def _slow_intersect(self, ray: Ray) -> Optional[float]:
         """Пересечение луча со сферой с учётом границ линзы."""
 
         oc = ray.origin - self.center
@@ -931,20 +947,6 @@ class SphereSurface:
     def get_normal(self, point: np.ndarray) -> np.ndarray:
         normal = (point - self.center) / self.radius
         return normal / np.linalg.norm(normal)
-
-    # def interact(self, ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
-    #     if self.is_mirror:
-    #         # Находим косинус угла падения
-    #         dot = np.dot(normal, ray_dir)
-    #
-    #         # ГЛАВНЫЙ СЕКРЕТ: нормаль должна всегда смотреть НАВСТРЕЧУ лучу
-    #         # Если dot > 0, значит нормаль и луч смотрят в одну сторону -> разворачиваем нормаль
-    #         actual_normal = normal if dot < 0 else -normal
-    #
-    #         # Формула отражения
-    #         reflected_dir = ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
-    #         return reflected_dir / np.linalg.norm(reflected_dir)
-    #     return refract(ray_dir, normal, n1, n2)
 
     def get_mesh(self) -> pv.PolyData:
         """Полигональная модель сферической поверхности (линзы или зеркала)."""
@@ -1158,80 +1160,102 @@ class AsphericSurface:
             dsag_asp += A * power * r**(power - 1)
         return dsag0 + dsag_asp
 
-    def intersect(self, ray: Ray) -> Optional[float]:
-        origin_loc = self._world_to_local(ray.origin)
-        dir_loc = self._rot_world_to_local @ ray.direction
-
+    @staticmethod
+    @njit
+    def _intersect_numba(origin, direction, radius, k, coeffs, edge_radius):
         # Плоская поверхность
-        if abs(self.radius) > 1e8:
-            if abs(dir_loc[0]) < 1e-12: return None
-            t = -origin_loc[0] / dir_loc[0]
-            if t <= 1e-6: return None
-            p = origin_loc + t * dir_loc
-            if np.sqrt(p[1] ** 2 + p[2] ** 2) > self.edge_radius + 1e-6:
-                return None
+        if abs(radius) > 1e8:
+            if abs(direction[0]) < 1e-12:
+                return -1.0
+            t = -origin[0] / direction[0]
+            if t <= 1e-6:
+                return -1.0
+            p = origin + t * direction
+            if p[1] ** 2 + p[2] ** 2 > edge_radius ** 2:
+                return -1.0
             return t
 
-        R = self.radius
-        # Опорная сфера (центр в (R,0,0))
-        a = dir_loc[0] ** 2 + dir_loc[1] ** 2 + dir_loc[2] ** 2
-        b = 2 * (origin_loc[0] * dir_loc[0] + origin_loc[1] * dir_loc[1] + origin_loc[2] * dir_loc[2]) - 2 * R * \
-            dir_loc[0]
-        c_coeff = origin_loc[0] ** 2 + origin_loc[1] ** 2 + origin_loc[2] ** 2 - 2 * R * origin_loc[0]
-        disc = b ** 2 - 4 * a * c_coeff
-        if disc < 0:
-            return None
-        t1 = (-b - np.sqrt(disc)) / (2 * a)
-        t2 = (-b + np.sqrt(disc)) / (2 * a)
-        t_guess = t1 if t1 > 1e-6 else (t2 if t2 > 1e-6 else None)
-        if t_guess is None:
-            return None
+        # Опорная сфера
+        R = radius
+        a = direction[0] ** 2 + direction[1] ** 2 + direction[2] ** 2
+        b = 2.0 * (origin[0] * direction[0] + origin[1] * direction[1] + origin[2] * direction[2]) - 2 * R * direction[
+            0]
+        c = origin[0] ** 2 + origin[1] ** 2 + origin[2] ** 2 - 2 * R * origin[0]
+        disc = b * b - 4.0 * a * c
+        if disc < 0.0:
+            return -1.0
+        sqrt_disc = np.sqrt(disc)
+        t1 = (-b - sqrt_disc) / (2.0 * a)
+        t2 = (-b + sqrt_disc) / (2.0 * a)
+        t_guess = t1 if t1 > 1e-6 else (t2 if t2 > 1e-6 else -1.0)
+        if t_guess < 0.0:
+            return -1.0
 
-        # Уточнение Ньютоном (до 50 итераций)
+        # Ньютон
         t = t_guess
         for _ in range(50):
-            p = origin_loc + t * dir_loc
+            p = origin + t * direction
             r = np.sqrt(p[1] ** 2 + p[2] ** 2)
-            sag_val = self.sag(r)
-            if np.isinf(sag_val):
-                # ушли за границу – пробуем откатиться назад
-                t = t_guess * 0.5
-                continue
-            F = p[0] - sag_val
+            c = 1.0 / R
+            discr = 1.0 - (1.0 + k) * c ** 2 * r ** 2
+            if discr < 0.0:
+                return -1.0
+            sqrt_discr = np.sqrt(discr)
+            sag = (c * r ** 2) / (1.0 + sqrt_discr)
+            # Асферические члены
+            for i, A in enumerate(coeffs):
+                sag += A * r ** (2 * (i + 1))
+            F = p[0] - sag
             if abs(F) < 1e-9:
                 break
+            # Производная sag
             if r < 1e-12:
-                drdt = 0.0
                 dsag = 0.0
+                drdt = 0.0
             else:
-                drdt = (p[1] * dir_loc[1] + p[2] * dir_loc[2]) / r
-                dsag = self.sag_derivative(r)
-            dFdt = dir_loc[0] - dsag * drdt
+                dsag = (c * r) / sqrt_discr
+                for i, A in enumerate(coeffs):
+                    power = 2 * (i + 1)
+                    dsag += A * power * r ** (power - 1)
+                drdt = (p[1] * direction[1] + p[2] * direction[2]) / r
+            dFdt = direction[0] - dsag * drdt
             if abs(dFdt) < 1e-15:
                 break
             t -= F / dFdt
-            if t <= 0:
-                # перелетели – возвращаемся к последнему положительному значению
-                t = t * 0.5  # грубая коррекция, но обычно не задействуется
+            if t < 0.0:
+                return -1.0
         else:
-            # fallback: проверяем, не подошло ли начальное приближение
-            p_init = origin_loc + t_guess * dir_loc
+            # fallback – проверка начального приближения
+            p_init = origin + t_guess * direction
             r_init = np.sqrt(p_init[1] ** 2 + p_init[2] ** 2)
-            if not np.isinf(self.sag(r_init)) and abs(p_init[0] - self.sag(r_init)) < 1e-4:
-                t = t_guess
+            discr_init = 1.0 - (1.0 + k) * (1.0 / R) ** 2 * r_init ** 2
+            if discr_init >= 0.0:
+                sag_init = (1.0 / R * r_init ** 2) / (1.0 + np.sqrt(discr_init))
+                if abs(p_init[0] - sag_init) < 1e-4:
+                    t = t_guess
+                else:
+                    return -1.0
             else:
-                return None
+                return -1.0
 
-        if t <= 1e-6:
-            return None
-
-        # Проверка апертуры
-        hit_point = self._local_to_world(origin_loc + t * dir_loc)
-        # пересчитываем в локальную, чтобы проверить радиус (уже сделано внутри)
-        r_hit = np.sqrt((origin_loc[1] + t * dir_loc[1]) ** 2 + (origin_loc[2] + t * dir_loc[2]) ** 2)
-        if r_hit > self.edge_radius + 1e-6:
-            return None
+        p_final = origin + t * direction
+        if p_final[1] ** 2 + p_final[2] ** 2 > edge_radius ** 2:
+            return -1.0
         return t
+
+    def intersect(self, ray: Ray) -> Optional[float]:
+        # Переводим луч в локальные координаты
+        origin_loc = self._world_to_local(ray.origin)
+        dir_loc = self._rot_world_to_local @ ray.direction
+        # Вызываем ускоренную функцию
+        t = self._intersect_numba(origin_loc.astype(np.float64),
+                                  dir_loc.astype(np.float64),
+                                  self.radius, self.k,
+                                  np.array(self.aspheric_coeffs, dtype=np.float64),
+                                  self.edge_radius)
+        if t < 0.0:
+            return None
+        return float(t)
 
     def get_normal(self, point: np.ndarray) -> np.ndarray:
         p_loc = self._world_to_local(point)

@@ -5,7 +5,7 @@ import time
 # ---------- Объекты ----------
 parabolic_mirror = AsphericSurface(
     center=[0, 10, 0],
-    radius=5.0, conic_constant=0.5,
+    radius=5.0, conic_constant=-1,
     edge_radius=5.0, thickness=20.0,
     reflection_range=(0, 10000), n_inside=1.0
 )
@@ -67,7 +67,7 @@ while plotter.render:
     tracer.add_elements(parabolic_mirror, hyperbolic_lens)
 
     # Лучи
-    for y_shift in np.linspace(-3, 3, 50):
+    for y_shift in np.linspace(-3, 3, 500):
         tracer.add_ray(Ray([-15, 10 + y_shift, 0], [1, 0, 0], color="red", wavelength=650, energy_color_type=2))
     for y_shift in np.linspace(-2.5, 2.5, 50):
         tracer.add_ray(Ray([-15, -10 + y_shift, 0], [1, 0, 0], color="blue", wavelength=450, energy_color_type=2))
