@@ -10,7 +10,6 @@ from fast_math import *
 
 import trimesh
 
-from matplotlib.colors import to_rgb
 
 pv.global_theme.allow_empty_mesh = True
 # Глобальная константа – длина отрезка, которым луч уходит в бесконечность
@@ -735,18 +734,28 @@ class BeamEmitter:
 
 
 class PlaneSurface:
-    def __init__(self, point, rotation_degrees=(0,0,0), n_inside=1.0,
+    def __init__(self, point,
+                 normal=None,                 # <-- новый параметр
+                 rotation_degrees=(0,0,0),
+                 n_inside=1.0,
                  half_sizes=None, edge_radius=None,
                  reflection_range=None, refraction_range=None,
                  absorption_range=None,
                  lens_origin=None, lens_axis=None):
         self.point = np.array(point, dtype=float)
-        base_normal = np.array([1.0, 0.0, 0.0])
-        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
-        self.normal = rot @ base_normal
+
+        # Определяем нормаль
+        if normal is not None:
+            self.normal = np.array(normal, dtype=float)
+            self.normal /= np.linalg.norm(self.normal)
+        else:
+            base_normal = np.array([1.0, 0.0, 0.0])
+            rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+            self.normal = rot @ base_normal
+
         self.n = n_inside
 
-        # Автоматические lens_origin/lens_axis, если не заданы явно
+        # Автоматические lens_origin/lens_axis
         self.lens_origin = np.array(lens_origin, dtype=float) if lens_origin is not None else self.point.copy()
         self.lens_axis = np.array(lens_axis, dtype=float) if lens_axis is not None else self.normal.copy()
         self.lens_axis /= np.linalg.norm(self.lens_axis)
@@ -776,6 +785,20 @@ class PlaneSurface:
     def translate(self, vec):
         self.point += np.asarray(vec)
         self.lens_origin += np.asarray(vec)
+
+    def apply_transform(self, mat):
+        """Применить аффинное преобразование 4x4 (без масштаба для нормали)."""
+        R = mat[:3, :3]
+        t = mat[:3, 3]
+        # Обновляем точки
+        self.point = R @ self.point + t
+        self.lens_origin = R @ self.lens_origin + t
+        # Нормаль и ось – только поворот
+        self.normal = R @ self.normal
+        self.lens_axis = R @ self.lens_axis
+        if self.face_tangents is not None:
+            t1, t2 = self.face_tangents
+            self.face_tangents = (R @ t1, R @ t2)
 
     def _slow_intersect(self, ray: Ray) -> Optional[float]:
         dot_dn = np.dot(ray.direction, self.normal)
@@ -808,17 +831,22 @@ class PlaneSurface:
 
     def intersect(self, ray: Ray) -> Optional[float]:
         use_rect = self.half_sizes is not None and self.face_tangents is not None
-        tangents = None
-        half = None
         if use_rect:
-            tangents = np.array(self.face_tangents)
-            half = np.array(self.half_sizes)
-        t = plane_intersect(ray.origin, ray.direction, self.point, self.normal,
-                            self.lens_origin, self.lens_axis, self.edge_radius,
-                            half, tangents, use_rect)
+            tangents = np.array(self.face_tangents, dtype=np.float64)
+            half = np.array(self.half_sizes, dtype=np.float64)
+        else:
+            # Фиктивные массивы – не будут использованы из-за use_rect=False
+            tangents = np.zeros((2, 3), dtype=np.float64)
+            half = np.zeros(2, dtype=np.float64)
+
+        t = plane_intersect(
+            ray.origin, ray.direction, self.point, self.normal,
+            self.lens_origin, self.lens_axis, self.edge_radius,
+            half, tangents, use_rect
+        )
         if t < 0.0:
             return None
-        return t
+        return float(t)
 
     def get_normal(self, point: np.ndarray) -> np.ndarray:
         return self.normal
@@ -949,40 +977,33 @@ class SphereSurface:
         return normal / np.linalg.norm(normal)
 
     def get_mesh(self) -> pv.PolyData:
-        """Полигональная модель сферической поверхности (линзы или зеркала)."""
         abs_radius = abs(self.radius)
-        # Полная сфера в начале координат
-        mesh = pv.Sphere(radius=abs_radius, center=(0.0, 0.0, 0.0),
+        mesh = pv.Sphere(radius=abs_radius, center=(0, 0, 0),
                          phi_resolution=80, theta_resolution=80)
-
-        # Стрелка прогиба (sagitta) для апертуры edge_radius
         sagitta = abs_radius - np.sqrt(max(0.0, abs_radius ** 2 - self.edge_radius ** 2))
+        R = self.radius
 
-        # Вершина в локальных координатах
-        R = self.radius  # со знаком
+        # Правильное отсечение (оставляем нужную «чашу»)
         if R > 0:
-            # Вогнутая поверхность: вершина на +X, обрезаем всё, что левее (X < R - sagitta)
-            clip_normal = [1, 0, 0]
-            clip_origin = [R - sagitta, 0, 0]
-            mesh = mesh.clip(normal=clip_normal, origin=clip_origin, invert=False)
+            mesh = mesh.clip(normal=[1, 0, 0], origin=[R - sagitta, 0, 0], invert=False)
         else:
-            # Выпуклая поверхность: вершина на -X (R отрицателен), обрезаем всё, что правее (X > R + sagitta)
-            clip_normal = [-1, 0, 0]
-            clip_origin = [R + sagitta, 0, 0]  # R + sagitta находится ближе к нулю
-            mesh = mesh.clip(normal=clip_normal, origin=clip_origin, invert=False)
+            # R < 0: вершина в точке (R,0,0) = (-|R|, 0, 0)
+            clip_origin = [R + sagitta, 0, 0]  # R+sagitta ближе к нулю
+            mesh = mesh.clip(normal=[-1, 0, 0], origin=clip_origin, invert=True)
 
-        # Мировая матрица: поворот + перенос
+        # Поворот: локальную ось X направляем вдоль lens_axis (без минуса!)
+        rot_matrix = calculate_rotation_matrix(self.lens_axis)
+
+        # Центр сферы в мире: вершина (R,0,0) должна перейти в lens_origin.
+        # Вершина в локальных координатах — (R, 0, 0).
+        # Хотим: rot_matrix @ (R,0,0) + world_center = lens_origin
+        # => world_center = lens_origin - rot_matrix @ (R,0,0)
+        # rot_matrix @ (R,0,0) = R * lens_axis
+        world_center = self.lens_origin - R * self.lens_axis
+
         matrix = np.eye(4)
-        # Локальная ось X направлена от центра к вершине (точка (R,0,0)).
-        # Нам нужно, чтобы после поворота эта ось совпала с направлением от центра к lens_origin.
-        # Центр в мировых координатах: world_center = lens_origin + lens_axis * self.radius.
-        # Вектор от центра к вершине: lens_origin - world_center = -lens_axis * self.radius / |self.radius|?
-        # Но проще использовать уже проверенный метод:
-        rot_matrix = -calculate_rotation_matrix(self.lens_axis)
         matrix[:3, :3] = rot_matrix
-        world_center = self.lens_origin + self.lens_axis * self.radius
         matrix[:3, 3] = world_center
-
         return mesh.transform(matrix, inplace=False)
 
     def is_active(self, wavelength):
@@ -1309,17 +1330,14 @@ class AsphericSurface:
 
 
 class RectangularScreen(PlaneSurface):
-    def __init__(self, center, normal, width, height, absorption_range=(0,10000)):
+    def __init__(self, center, rotation_degrees, width, height, absorption_range=(0,10000)):
         center = np.asarray(center, dtype=float)
-        normal = np.asarray(normal, dtype=float)    # ← обязательно float
+        rotation_degrees = np.asarray(rotation_degrees, dtype=float)    # ← обязательно float
         half_u, half_v = width/2, height/2
-        t1, t2 = get_tangents(normal)
         super().__init__(
-            point=center, normal=normal, n_inside=1.0,
-            lens_origin=center, lens_axis=normal,
+            point=center, rotation_degrees=rotation_degrees, n_inside=1.0,
             edge_radius=0.0,
             half_sizes=(half_u, half_v),
-            face_tangents=(t1, t2),
             absorption_range=absorption_range
         )
         self.width, self.height = width, height
@@ -1489,6 +1507,8 @@ class UniversalLens:
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
 
+        self._last_hit_surface = None # для методов intersect, get_normal
+
         # Построение поверхностей
         self._create_surfaces()
 
@@ -1569,6 +1589,31 @@ class UniversalLens:
         inv_f = (self.n - 1) * (1 / r1_val - 1 / r2_val +
                                 ((self.n - 1) * self.thickness) / (self.n * r1_val * r2_val))
         self.f_dist = 1 / inv_f if abs(inv_f) > 1e-10 else float('inf')
+
+    def intersect(self, ray: Ray) -> Optional[float]:
+        """Возвращает ближайшее пересечение с любой из двух поверхностей."""
+        t1 = self.front.intersect(ray)
+        t2 = self.back.intersect(ray)
+        self._last_hit_surface = None
+        best_t = None
+        if t1 is not None:
+            best_t = t1
+            self._last_hit_surface = self.front
+        if t2 is not None and (best_t is None or t2 < best_t):
+            best_t = t2
+            self._last_hit_surface = self.back
+        return best_t
+
+    def get_normal(self, point: np.ndarray) -> np.ndarray:
+        """Нормаль последней пересечённой поверхности."""
+        if self._last_hit_surface is not None:
+            return self._last_hit_surface.get_normal(point)
+        # Запасной вариант: возвращаем нормаль передней поверхности
+        return self.front.get_normal(point)
+
+    def is_active(self, wavelength) -> bool:
+        """Линза активна, если хотя бы одна поверхность активна."""
+        return self.front.is_active(wavelength) or self.back.is_active(wavelength)
 
     def rotate(self, angles_deg):
         """Поворот линзы вокруг её центра (origin)."""

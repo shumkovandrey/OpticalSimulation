@@ -23,7 +23,7 @@ elliptical_mirror = AsphericSurface(
 )
 
 # Акторы (прямые ссылки)
-parabolic_actor = plotter.add_mesh(parabolic_mirror.get_mesh(), color="silver", pbr=True, metallic=0.9)
+parabolic_actor = plotter.add_mesh(parabolic_mirror.get_mesh(), color="lightblue", opacity=0.5)
 hyperbolic_actor = plotter.add_mesh(hyperbolic_lens.get_mesh(), color="lightblue", opacity=0.5)
 # elliptical_actor = plotter.add_mesh(elliptical_mirror.get_mesh(), color="gold", pbr=True, metallic=0.7)
 
@@ -53,18 +53,17 @@ while plotter.render:
     if dt > 0.1: dt = 0.1
 
     # Вращение объектов
-    for i, obj in enumerate([parabolic_mirror, hyperbolic_lens, elliptical_mirror]):
+    for i, obj in enumerate([hyperbolic_lens, parabolic_mirror]):
         angles[i] += speeds[i] * dt
         obj.rotate((0, 0, speeds[i] * dt))
 
-    # Обновление мешей (используем прямые ссылки на акторы)
-    parabolic_actor.mapper.dataset.copy_from(parabolic_mirror.get_mesh())
     hyperbolic_actor.mapper.dataset.copy_from(hyperbolic_lens.get_mesh())
+    parabolic_actor.mapper.dataset.copy_from(parabolic_mirror.get_mesh())
     # elliptical_actor.mapper.dataset.copy_from(elliptical_mirror.get_mesh())
 
     # Трассировка
     tracer.elements.clear()
-    tracer.add_elements(parabolic_mirror, hyperbolic_lens)
+    tracer.add_elements(hyperbolic_lens, parabolic_mirror)
 
     # Лучи
     for y_shift in np.linspace(-3, 3, 500):
