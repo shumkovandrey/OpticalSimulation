@@ -12,7 +12,7 @@ plane_mirror = PlaneSurface(
 )
 
 sphere_mirror = SphereSurface(
-    center=[25, 8, 0], radius=-15.0, rotation_degrees=(0, 0, 0),
+    radius=-15.0, rotation_degrees=(0, 0, 0),
     edge_radius=3.0, thickness=10.0,
     lens_origin=[10, 8, 0], lens_axis=[-1, 0, 0],
     n_inside=1.0, reflection_range=(0, 10000)
@@ -43,7 +43,7 @@ tracer = RayTracer(
     max_depth=6,
     min_energy=0.001,
     offset_distance=0.01,
-    energy_color_type=0,
+    energy_color_type=2,
     default_color="yellow"
 )
 

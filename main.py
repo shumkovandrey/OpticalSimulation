@@ -897,21 +897,40 @@ class SphereSurface:
     Сферическая поверхность с ограничениями по радиусу апертуры и продольному
     положению (толщине) вдоль оптической оси линзы.
     """
-    def __init__(self, center, radius, rotation_degrees=(0,0,0), n_inside=1.0,
+    def __init__(self, radius, rotation_degrees=(0,0,0), n_inside=1.0,
                  edge_radius=None, thickness=0.0,
                  reflection_range=None, refraction_range=None,
                  absorption_range=None,
                  lens_origin=None, lens_axis=None):
-        self.center = np.array(center, dtype=float)
-        self.radius = radius
-        base_axis = np.array([1.0, 0.0, 0.0])
-        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
-        default_axis = rot @ base_axis
+        """
+        Параметры:
+        radius : float
+            Радиус кривизны. Положительный – выпуклая поверхность,
+            отрицательный – вогнутая.
+        rotation_degrees : tuple (3,)
+            Углы Эйлера (в градусах) для поворота оптической оси.
+        lens_origin : array-like (3,)
+            Вершина поверхности (точка на оси, где поверхность пересекает ось).
+            По умолчанию (0,0,0).
+        """
+        # Вершина
+        if lens_origin is None:
+            self.lens_origin = np.array([0.0, 0.0, 0.0])
+        else:
+            self.lens_origin = np.array(lens_origin, dtype=float)
 
-        # Явные lens_origin/lens_axis имеют приоритет
-        self.lens_origin = np.array(lens_origin, dtype=float) if lens_origin is not None else self.center.copy()
-        self.lens_axis = np.array(lens_axis, dtype=float) if lens_axis is not None else default_axis.copy()
-        self.lens_axis = self.lens_axis.astype(float) / np.linalg.norm(self.lens_axis)
+        self.radius = radius
+
+        # Оптическая ось – поворот базового вектора (1,0,0)
+        if lens_axis is not None:
+            self.lens_axis = np.array(lens_axis, dtype=float) / np.linalg.norm(lens_axis)
+        else:
+            base_axis = np.array([1.0, 0.0, 0.0])
+            rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+            self.lens_axis = rot @ base_axis
+            self.lens_axis /= np.linalg.norm(self.lens_axis)
+        # Центр вычисляется однозначно:
+        self.center = self.lens_origin - self.radius * self.lens_axis
 
         self.n = n_inside
         self.edge_radius = edge_radius if edge_radius is not None else 0.0
@@ -983,23 +1002,19 @@ class SphereSurface:
         sagitta = abs_radius - np.sqrt(max(0.0, abs_radius ** 2 - self.edge_radius ** 2))
         R = self.radius
 
-        # Правильное отсечение (оставляем нужную «чашу»)
+        # Правильное отсечение нужной «чаши»
         if R > 0:
+            # выпуклая: оставляем x >= R - sagitta (вершина в +R)
             mesh = mesh.clip(normal=[1, 0, 0], origin=[R - sagitta, 0, 0], invert=False)
         else:
-            # R < 0: вершина в точке (R,0,0) = (-|R|, 0, 0)
-            clip_origin = [R + sagitta, 0, 0]  # R+sagitta ближе к нулю
-            mesh = mesh.clip(normal=[-1, 0, 0], origin=clip_origin, invert=True)
+            # вогнутая: оставляем x <= R + sagitta (вершина в отрицательной области R)
+            mesh = mesh.clip(normal=[-1, 0, 0], origin=[R + sagitta, 0, 0], invert=False)
 
-        # Поворот: локальную ось X направляем вдоль lens_axis (без минуса!)
+        # Поворот: локальную ось X направляем вдоль lens_axis (без отражения!)
         rot_matrix = calculate_rotation_matrix(self.lens_axis)
 
-        # Центр сферы в мире: вершина (R,0,0) должна перейти в lens_origin.
-        # Вершина в локальных координатах — (R, 0, 0).
-        # Хотим: rot_matrix @ (R,0,0) + world_center = lens_origin
-        # => world_center = lens_origin - rot_matrix @ (R,0,0)
-        # rot_matrix @ (R,0,0) = R * lens_axis
-        world_center = self.lens_origin - R * self.lens_axis
+        # Мировой центр: вершина (R,0,0) должна совпасть с lens_origin
+        world_center = self.lens_origin - self.radius * self.lens_axis
 
         matrix = np.eye(4)
         matrix[:3, :3] = rot_matrix
@@ -1486,85 +1501,62 @@ class UniversalLens:
         edge_radius – радиус апертуры,
         n           – показатель преломления материала.
     """
-    def __init__(self, origin, rotation_degrees=(0,0,0), R1=None, R2=None,
+
+    def __init__(self, origin, rotation_degrees=(0, 0, 0), R1=None, R2=None,
                  thickness=2.0, edge_radius=3.0, n=1.5,
                  reflection_range=None, refraction_range=(0, np.inf),
                  absorption_range=None):
         self.origin = np.array(origin, dtype=float)
-        # Сохраняем углы Эйлера для возможного использования
-        self.rotation_degrees = rotation_degrees
-        # Вычисляем начальную оптическую ось
-        base_axis = np.array([1.0, 0.0, 0.0])
-        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
-        self.axis_dir = rot @ base_axis
+        self.rotation_degrees = rotation_degrees  # сохраняем для rotate
+        # Матрица поворота из углов Эйлера (нужна для get_mesh)
+        self.rotation = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        # Оптическая ось – повёрнутый базовый вектор (1,0,0)
+        self.axis_dir = self.rotation @ np.array([1.0, 0.0, 0.0])
         self.thickness = thickness
         self.edge_radius = edge_radius
         self.n = n
         self.R1, self.R2 = R1, R2
-
-        # Спектральные диапазоны (применяются к обеим поверхностям)
         self.reflection_range = reflection_range
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
 
-        self._last_hit_surface = None # для методов intersect, get_normal
-
-        # Построение поверхностей
         self._create_surfaces()
-
-        # Расчёт оптических параметров (фокус и пр.)
         self._calc_optical_params()
 
     def _create_surfaces(self):
-        """Пересоздаёт front и back на основе текущих origin, axis_dir, R1, R2."""
-        # Матрица поворота от базовой оси (X) к axis_dir
-        v_old = np.array([1.0, 0.0, 0.0])
-        v_new = self.axis_dir
-        if np.allclose(v_old, v_new):
-            rot = np.eye(3)
-        elif np.allclose(v_old, -v_new):
-            rot = np.diag([-1, -1, 1])
-        else:
-            v = np.cross(v_old, v_new)
-            s = np.linalg.norm(v)
-            c = np.dot(v_old, v_new)
-            vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-            rot = np.eye(3) + vx + vx @ vx * ((1 - c) / (s ** 2))
-        self.rotation = rot
-
         half = self.thickness / 2
-        v1_local = -half
-        v2_local = half
+        p1 = self.origin - self.axis_dir * half  # вершина передней поверхности
+        p2 = self.origin + self.axis_dir * half  # вершина задней поверхности
 
         # Передняя поверхность
         if self.R1 is None:
-            p1 = self.origin + rot @ np.array([v1_local, 0, 0])
-            n1 = rot @ np.array([-1, 0, 0])
             self.front = PlaneSurface(
-                point=p1, normal=n1, n_inside=self.n,
-                lens_origin=self.origin, lens_axis=self.axis_dir,
+                point=p1, normal=-self.axis_dir,
+                n_inside=self.n,
+                lens_origin=self.origin, lens_axis=-self.axis_dir,
                 edge_radius=self.edge_radius,
                 reflection_range=self.reflection_range,
                 refraction_range=self.refraction_range,
                 absorption_range=self.absorption_range
             )
         else:
-            c1 = self.origin + rot @ np.array([v1_local + self.R1, 0, 0])
             self.front = SphereSurface(
-                center=c1, radius=abs(self.R1), n_inside=self.n,
-                lens_origin=self.origin, lens_axis=self.axis_dir,
-                edge_radius=self.edge_radius, thickness=self.thickness,
+                radius=self.R1,
+                n_inside=self.n,
+                edge_radius=self.edge_radius,
+                thickness=self.thickness,
                 reflection_range=self.reflection_range,
                 refraction_range=self.refraction_range,
-                absorption_range=self.absorption_range
+                absorption_range=self.absorption_range,
+                lens_origin=p1,
+                lens_axis=-self.axis_dir  # ось направлена вперёд (по ходу лучей)
             )
 
         # Задняя поверхность
         if self.R2 is None:
-            p2 = self.origin + rot @ np.array([v2_local, 0, 0])
-            n2 = rot @ np.array([1, 0, 0])
             self.back = PlaneSurface(
-                point=p2, normal=n2, n_inside=self.n,
+                point=p2, normal=self.axis_dir,
+                n_inside=self.n,
                 lens_origin=self.origin, lens_axis=self.axis_dir,
                 edge_radius=self.edge_radius,
                 reflection_range=self.reflection_range,
@@ -1572,14 +1564,16 @@ class UniversalLens:
                 absorption_range=self.absorption_range
             )
         else:
-            c2 = self.origin + rot @ np.array([v2_local - self.R2, 0, 0])
             self.back = SphereSurface(
-                center=c2, radius=abs(self.R2), n_inside=self.n,
-                lens_origin=self.origin, lens_axis=self.axis_dir,
-                edge_radius=self.edge_radius, thickness=self.thickness,
+                radius=self.R2,
+                n_inside=self.n,
+                edge_radius=self.edge_radius,
+                thickness=self.thickness,
                 reflection_range=self.reflection_range,
                 refraction_range=self.refraction_range,
-                absorption_range=self.absorption_range
+                absorption_range=self.absorption_range,
+                lens_origin=p2,
+                lens_axis=self.axis_dir  # ось направлена назад (против хода лучей)
             )
 
     def _calc_optical_params(self):
@@ -1616,10 +1610,10 @@ class UniversalLens:
         return self.front.is_active(wavelength) or self.back.is_active(wavelength)
 
     def rotate(self, angles_deg):
-        """Поворот линзы вокруг её центра (origin)."""
         rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
         self.axis_dir = rot @ self.axis_dir
         self.axis_dir /= np.linalg.norm(self.axis_dir)
+        self.rotation = rot @ self.rotation  # <-- добавить эту строку
         self._create_surfaces()
 
     def translate(self, vec):
