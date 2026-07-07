@@ -1809,7 +1809,7 @@ def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 20) -> np.
 
 
 def _trace_simple(ray: Ray, elements: List, max_bounces: int,
-                  offset_distance: float) -> np.ndarray:
+                  offset_distance: float, prioritize_refraction: bool = False) -> np.ndarray:
     path = [ray.origin]
     current_ray = ray
     current_n = ray.current_n
@@ -1832,7 +1832,7 @@ def _trace_simple(ray: Ray, elements: List, max_bounces: int,
         hit_point = current_ray.origin + current_ray.direction * best_t
         path.append(hit_point)
 
-        # Поглощение?
+        # Поглощение
         if hasattr(hit_obj, 'absorption_range') and hit_obj.absorption_range is not None:
             if current_ray.wavelength is None or (hit_obj.absorption_range[0] <= current_ray.wavelength <= hit_obj.absorption_range[1]):
                 break
@@ -1847,6 +1847,9 @@ def _trace_simple(ray: Ray, elements: List, max_bounces: int,
             if current_ray.wavelength is None or (hit_obj.refraction_range[0] <= current_ray.wavelength <= hit_obj.refraction_range[1]):
                 allow_refraction = True
 
+        # Приоритет преломления в simple-режиме
+        if prioritize_refraction and allow_refraction:
+            allow_reflection = False
 
         # Ничего не разрешено – проходим сквозь
         if not allow_reflection and not allow_refraction:
@@ -1872,7 +1875,6 @@ def _trace_simple(ray: Ray, elements: List, max_bounces: int,
             else:  # полное внутреннее отражение
                 allow_reflection = True
                 allow_refraction = False
-                # принудительно отражаем
 
         if allow_reflection:
             new_dir = (current_ray.direction - 2 * np.dot(current_ray.direction, actual_normal) * actual_normal)
@@ -1890,23 +1892,14 @@ def _trace_simple(ray: Ray, elements: List, max_bounces: int,
 def trace_ray(ray: Ray, elements: List, mode: str = 'tree',
               max_depth: int = 10, min_energy: float = 0.01,
               offset_distance: float = 0.5, use_polarization_color=False):
-    """
-    Универсальная трассировка луча.
-
-    mode:
-        'simple' – без разделения энергии (аналог run_simulation).
-        'tree'   – с разделением и учётом энергии (аналог trace_ray_tree).
-
-    Возвращает:
-        при mode='simple': массив точек траектории (np.ndarray)
-        при mode='tree'  : список отрезков (p1, p2, energy)
-    """
     if mode == 'simple':
-        return _trace_simple(ray, elements, max_depth, offset_distance)
+        return _trace_simple(ray, elements, max_depth, offset_distance,
+                             prioritize_refraction=True)
     elif mode == 'tree':
         segments = []
         _trace_recursive(ray, elements, max_depth, min_energy, segments,
-                         total_limit=5000, offset_distance=offset_distance, use_polarization_color=use_polarization_color)
+                         total_limit=5000, offset_distance=offset_distance,
+                         use_polarization_color=use_polarization_color)
         return segments
     else:
         raise ValueError("mode must be 'simple' or 'tree'")
