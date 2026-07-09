@@ -128,7 +128,8 @@ def get_tangents(normal):
 def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray,
               allow_reflection: bool = True, allow_refraction: bool = True,
               offset_distance: float = 0.01,
-              use_polarization_color: bool = False) -> List[Ray]:
+              use_polarization_color: bool = False,
+              pool: Optional[RayPool] = None) -> List[Ray]:
     EPS = offset_distance
 
     cos_i = np.dot(normal, ray.direction)
@@ -175,13 +176,16 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
         if energy > 1e-9:
             reflected_dir = ray.direction - 2 * np.dot(ray.direction, normal) * normal
             new_pol = new_E_s * s_dir + new_E_p * p_dir
-            new_ray = Ray(start_point + EPS * reflected_dir, reflected_dir, energy, n1,
-                          color=ray.color, wavelength=ray.wavelength,
-                          energy_color_type=ray.energy_color_type,
-                          polarization=new_pol)
+            if pool:
+                new_ray = pool.acquire(start_point + EPS * reflected_dir, reflected_dir,
+                                       energy, n1, ray.color, ray.wavelength,
+                                       ray.energy_color_type, new_pol)
+            else:
+                new_ray = Ray(start_point + EPS * reflected_dir, reflected_dir,
+                              energy, n1, ray.color, ray.wavelength,
+                              ray.energy_color_type, new_pol)
             if use_polarization_color:
                 new_ray.update_color_from_polarization()
-                print(f"Polarization color: {new_ray.color} for ray with energy {energy:.3f}")
             new_rays.append(new_ray)
 
     # Преломлённый луч
@@ -195,10 +199,17 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
             refracted_dir = eta * ray.direction + (eta * cos_i - cos_t) * normal
             refracted_dir /= np.linalg.norm(refracted_dir)
             new_pol = new_E_s * s_dir + new_E_p * p_dir
-            new_ray = Ray(start_point + EPS * refracted_dir, refracted_dir, energy, n2,
-                          color=ray.color, wavelength=ray.wavelength,
-                          energy_color_type=ray.energy_color_type,
-                          polarization=new_pol)
+            if pool:
+                new_ray = pool.acquire(start_point + EPS * refracted_dir, refracted_dir, energy, n2,
+                              color=ray.color, wavelength=ray.wavelength,
+                              energy_color_type=ray.energy_color_type,
+                              polarization=new_pol)
+            else:
+                new_ray = Ray(start_point + EPS * refracted_dir, refracted_dir, energy, n2,
+                                       color=ray.color, wavelength=ray.wavelength,
+                                       energy_color_type=ray.energy_color_type,
+                                       polarization=new_pol)
+
             if use_polarization_color:
                 new_ray.update_color_from_polarization()
                 print(f"Polarization color: {new_ray.color} for ray with energy {energy:.3f}")
@@ -262,8 +273,9 @@ class HitInfo:
 # ------------------------------------------------------------
 class TraceMode(ABC):
     """Общий интерфейс для любых алгоритмов трассировки."""
-    def __init__(self, energy_color_type: int = 1):
+    def __init__(self, energy_color_type: int = 1, pool: Optional['RayPool'] = None):
         self.energy_color_type = energy_color_type
+        self.pool = pool
 
     @abstractmethod
     def trace(self, ray: 'Ray', elements: List) -> List[Segment]:
@@ -287,7 +299,8 @@ class SimpleMode(TraceMode):
                  max_bounces: int = 10,
                  offset_distance: float = 0.01,
                  prioritize_refraction: bool = True,
-                 energy_color_type=1):
+                 energy_color_type=1,
+                 pool=None):
         """
         Параметры
         ---------
@@ -301,7 +314,7 @@ class SimpleMode(TraceMode):
             если поверхность допускает и то и другое). Полезно для
             моделирования линз без паразитных отражений.
         """
-        super().__init__(energy_color_type)
+        super().__init__(energy_color_type, pool)
 
         self.max_bounces = max_bounces
         self.offset_distance = offset_distance
@@ -313,7 +326,8 @@ class SimpleMode(TraceMode):
             elements,
             max_bounces=self.max_bounces,
             offset_distance=self.offset_distance,
-            prioritize_refraction=self.prioritize_refraction
+            prioritize_refraction=self.prioritize_refraction,
+            pool=self.pool
         )
 
 
@@ -332,7 +346,8 @@ class TreeMode(TraceMode):
                  offset_distance: float = 0.01,
                  use_polarization_color: bool = False,
                  total_limit: int = 5000,
-                 energy_color_type: int = 1):
+                 energy_color_type: int = 1,
+                 pool=None):
         """
         Параметры
         ---------
@@ -348,7 +363,7 @@ class TreeMode(TraceMode):
             Аварийное ограничение на общее количество отрезков во всех
             рекурсивных ветвях (защита от бесконечного роста).
         """
-        super().__init__(energy_color_type)
+        super().__init__(energy_color_type, pool)
 
         self.max_depth = max_depth
         self.min_energy = min_energy
@@ -364,7 +379,8 @@ class TreeMode(TraceMode):
             min_energy=self.min_energy,
             offset_distance=self.offset_distance,
             use_polarization_color=self.use_polarization_color,
-            total_limit=self.total_limit
+            total_limit=self.total_limit,
+            pool=self.pool
         )
 
 
@@ -574,9 +590,9 @@ class RayTracer:
         if isinstance(mode, TraceMode):
             self._mode = mode
         elif mode == 'simple':
-            self._mode = SimpleMode()
+            self._mode = SimpleMode(pool=self.pool)
         elif mode == 'tree':
-            self._mode = TreeMode()
+            self._mode = TreeMode(pool=self.pool)
         else:
             raise ValueError("mode must be 'simple', 'tree' or a TraceMode instance")
 
@@ -1700,86 +1716,141 @@ def _trace_simple(ray: 'Ray',
                   elements: List,
                   max_bounces: int = 10,
                   offset_distance: float = 0.01,
-                  prioritize_refraction: bool = True) -> List[Segment]:
+                  prioritize_refraction: bool = True,
+                  pool: Optional['RayPool'] = None) -> List[Segment]:
     """
-    Однолучевой последовательный обход без ветвления.
+    Однолучевая последовательная трассировка без ветвления.
     Возвращает список отрезков Segment.
     """
-    segments = []
+    segments: List[Segment] = []
     current_ray = ray
     current_n = ray.current_n
+    current_from_pool = False          # изначально луч передан извне, не из пула
 
     for _ in range(max_bounces):
         hit = find_best_hit(current_ray, elements)
+
+        # Нет пересечения – луч уходит в бесконечность
         if hit is None:
             end_point = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
             segments.append(Segment(current_ray.origin, end_point,
                                     current_ray.energy, current_ray.color))
             break
 
-        # Отрезок до точки удара
+        # Отрезок от начала до точки удара
         segments.append(Segment(current_ray.origin, hit.point,
                                 current_ray.energy, current_ray.color))
 
+        # Поглощение
         if hit.absorbed:
             break
 
-        # Тонкая линза
+        # Тонкая линза – специальная обработка
         if hit.is_thin_lens:
             new_dir = hit.obj.thin_lens_deflection(current_ray.direction, hit.point)
             start = hit.point + offset_distance * new_dir
-            current_ray = Ray(start, new_dir,
-                              energy=current_ray.energy,
-                              current_n=current_n,
-                              color=current_ray.color,
-                              wavelength=current_ray.wavelength,
-                              energy_color_type=current_ray.energy_color_type)
-            continue
 
-        allow_refl = hit.allow_reflection
-        allow_refr = hit.allow_refraction
-
-        if prioritize_refraction and allow_refr:
-            allow_refl = False
-
-        # Полная прозрачность – проходим сквозь
-        if not allow_refl and not allow_refr:
-            start = hit.point + offset_distance * current_ray.direction
-            current_ray = Ray(start, current_ray.direction,
-                              energy=current_ray.energy,
-                              current_n=current_n,
-                              color=current_ray.color,
-                              wavelength=current_ray.wavelength,
-                              energy_color_type=current_ray.energy_color_type)
-            continue
-
-        # Преломление (если разрешено)
-        if allow_refr:
-            n_next = hit.n_inside if abs(current_n - 1.0) < 1e-6 else 1.0
-            refracted = refract(current_ray.direction, hit.normal, current_n, n_next)
-            if refracted is not None:
-                current_n = n_next
-                new_dir = refracted
-                allow_refl = False
+            # Переход на новый луч (с поддержкой пула)
+            if pool:
+                if current_from_pool:
+                    pool.release(current_ray)
+                next_ray = pool.acquire(start, new_dir,
+                                        energy=current_ray.energy,
+                                        current_n=current_n,
+                                        color=current_ray.color,
+                                        wavelength=current_ray.wavelength,
+                                        energy_color_type=current_ray.energy_color_type)
+                current_from_pool = True
             else:
-                # Полное внутреннее отражение
-                allow_refl = True
+                next_ray = Ray(start, new_dir,
+                               energy=current_ray.energy,
+                               current_n=current_n,
+                               color=current_ray.color,
+                               wavelength=current_ray.wavelength,
+                               energy_color_type=current_ray.energy_color_type)
+                current_from_pool = False
+            current_ray = next_ray
+            continue
 
-        # Отражение (если разрешено)
-        if allow_refl:
+        # Определяем доступные действия
+        allow_reflection = hit.allow_reflection
+        allow_refraction = hit.allow_refraction
+
+        # В simple‑режиме приоритет преломления подавляет отражение,
+        # если преломление доступно
+        if prioritize_refraction and allow_refraction:
+            allow_reflection = False
+
+        # Полностью прозрачный объект – проходим насквозь без изменения направления
+        if not allow_reflection and not allow_refraction:
+            start = hit.point + offset_distance * current_ray.direction
+            if pool:
+                if current_from_pool:
+                    pool.release(current_ray)
+                next_ray = pool.acquire(start, current_ray.direction,
+                                        energy=current_ray.energy,
+                                        current_n=current_n,
+                                        color=current_ray.color,
+                                        wavelength=current_ray.wavelength,
+                                        energy_color_type=current_ray.energy_color_type)
+                current_from_pool = True
+            else:
+                next_ray = Ray(start, current_ray.direction,
+                               energy=current_ray.energy,
+                               current_n=current_n,
+                               color=current_ray.color,
+                               wavelength=current_ray.wavelength,
+                               energy_color_type=current_ray.energy_color_type)
+                current_from_pool = False
+            current_ray = next_ray
+            continue
+
+        # Преломление
+        if allow_refraction:
+            n_next = hit.n_inside if abs(current_n - 1.0) < 1e-6 else 1.0
+            refracted_dir = refract(current_ray.direction, hit.normal, current_n, n_next)
+            if refracted_dir is not None:
+                current_n = n_next
+                new_dir = refracted_dir
+                # Подавляем отражение, если преломление успешно
+                allow_reflection = False
+            else:
+                # Полное внутреннее отражение – включаем отражение принудительно
+                allow_reflection = True
+
+        # Отражение (если разрешено и не было подавлено преломлением)
+        if allow_reflection:
             normal = hit.normal
             if np.dot(normal, current_ray.direction) > 0:
                 normal = -normal
             new_dir = current_ray.direction - 2 * np.dot(current_ray.direction, normal) * normal
             new_dir /= np.linalg.norm(new_dir)
 
+        # Создаём новый луч в выбранном направлении
         start = hit.point + offset_distance * new_dir
-        current_ray = Ray(start, new_dir,
-                          energy=current_ray.energy,
-                          current_n=current_n,
-                          color=current_ray.color,
-                          wavelength=current_ray.wavelength,
-                          energy_color_type=current_ray.energy_color_type)
+        if pool:
+            if current_from_pool:
+                pool.release(current_ray)
+            next_ray = pool.acquire(start, new_dir,
+                                    energy=current_ray.energy,
+                                    current_n=current_n,
+                                    color=current_ray.color,
+                                    wavelength=current_ray.wavelength,
+                                    energy_color_type=current_ray.energy_color_type)
+            current_from_pool = True
+        else:
+            next_ray = Ray(start, new_dir,
+                           energy=current_ray.energy,
+                           current_n=current_n,
+                           color=current_ray.color,
+                           wavelength=current_ray.wavelength,
+                           energy_color_type=current_ray.energy_color_type)
+            current_from_pool = False
+        current_ray = next_ray
+
+    # Цикл завершён – если последний луч был из пула, возвращаем его
+    if current_from_pool and pool:
+        pool.release(current_ray)
 
     return segments
 
@@ -1789,14 +1860,15 @@ def _trace_recursive(ray: 'Ray',
                      min_energy: float = 0.01,
                      offset_distance: float = 0.01,
                      use_polarization_color: bool = False,
-                     total_limit: int = 5000) -> List[Segment]:
+                     total_limit: int = 5000,
+                     pool: Optional[RayPool] = None) -> List[Segment]:
     """
     Рекурсивная трассировка с ветвлением (дерево лучей).
     Возвращает плоский список отрезков Segment.
     """
     segments = []
 
-    def recurse(current_ray: 'Ray', d: int):
+    def recurse(current_ray: 'Ray', d: int, from_pool: bool):
         nonlocal segments
 
         if len(segments) >= total_limit or d <= 0 or current_ray.energy < min_energy:
@@ -1809,56 +1881,74 @@ def _trace_recursive(ray: 'Ray',
                                     current_ray.energy, current_ray.color))
             return
 
-        # Отрезок до точки удара
         segments.append(Segment(current_ray.origin, hit.point,
                                 current_ray.energy, current_ray.color))
 
         if hit.absorbed:
             return
 
-        # Тонкая линза
         if hit.is_thin_lens:
             new_dir = hit.obj.thin_lens_deflection(current_ray.direction, hit.point)
             start = hit.point + offset_distance * new_dir
-            new_ray = Ray(start, new_dir,
-                          energy=current_ray.energy,
-                          current_n=current_ray.current_n,
-                          color=current_ray.color,
-                          wavelength=current_ray.wavelength,
-                          energy_color_type=current_ray.energy_color_type)
+            if pool:
+                new_ray = pool.acquire(start, new_dir,
+                                       energy=current_ray.energy,
+                                       current_n=current_ray.current_n,
+                                       color=current_ray.color,
+                                       wavelength=current_ray.wavelength,
+                                       energy_color_type=current_ray.energy_color_type)
+            else:
+                new_ray = Ray(start, new_dir,
+                              energy=current_ray.energy,
+                              current_n=current_ray.current_n,
+                              color=current_ray.color,
+                              wavelength=current_ray.wavelength,
+                              energy_color_type=current_ray.energy_color_type)
             segments.append(Segment(hit.point, start, current_ray.energy, current_ray.color))
-            recurse(new_ray, d - 1)
+            recurse(new_ray, d - 1, from_pool=pool is not None)
+            if pool:  # новый луч больше не нужен
+                pool.release(new_ray)
             return
 
-        # Определяем n_next в зависимости от того, где мы находимся
-        n1 = current_ray.current_n
-        n_next = hit.n_inside if abs(n1 - 1.0) < 1e-6 else 1.0
+        # Прозрачный проход или отражение/преломление
+        n_next = hit.n_inside if abs(current_ray.current_n - 1.0) < 1e-6 else 1.0
 
-        # Если нет ни отражения, ни преломления – проходим сквозь
         if not hit.allow_reflection and not hit.allow_refraction:
             start = hit.point + offset_distance * current_ray.direction
-            new_ray = Ray(start, current_ray.direction,
-                          energy=current_ray.energy,
-                          current_n=current_ray.current_n,
-                          color=current_ray.color,
-                          wavelength=current_ray.wavelength,
-                          energy_color_type=current_ray.energy_color_type)
+            if pool:
+                new_ray = pool.acquire(start, current_ray.direction,
+                                       energy=current_ray.energy,
+                                       current_n=current_ray.current_n,
+                                       color=current_ray.color,
+                                       wavelength=current_ray.wavelength,
+                                       energy_color_type=current_ray.energy_color_type)
+            else:
+                new_ray = Ray(start, current_ray.direction,
+                              energy=current_ray.energy,
+                              current_n=current_ray.current_n,
+                              color=current_ray.color,
+                              wavelength=current_ray.wavelength,
+                              energy_color_type=current_ray.energy_color_type)
             segments.append(Segment(hit.point, start, current_ray.energy, current_ray.color))
-            recurse(new_ray, d - 1)
+            recurse(new_ray, d - 1, from_pool=pool is not None)
+            if pool:
+                pool.release(new_ray)
             return
 
-        # Порождаем отражённый и/или преломлённый лучи через split_ray
+        # Вызов split_ray с пулом
         new_rays = split_ray(current_ray, hit.normal, n_next, hit.point,
                              allow_reflection=hit.allow_reflection,
                              allow_refraction=hit.allow_refraction,
                              offset_distance=offset_distance,
-                             use_polarization_color=use_polarization_color)
+                             use_polarization_color=use_polarization_color,
+                             pool=pool)
         for nr in new_rays:
-            # Соединительный отрезок от точки удара до начала нового луча
             segments.append(Segment(hit.point, nr.origin, nr.energy, nr.color))
-            recurse(nr, d - 1)
+            recurse(nr, d - 1, from_pool=pool is not None)
+            if pool:
+                pool.release(nr)  # после обработки каждого порождённого луча
 
-    recurse(ray, depth)
+    recurse(ray, depth, from_pool=False)
     return segments
 
 def trace_ray(ray: Ray, elements: List, mode: str = 'tree',

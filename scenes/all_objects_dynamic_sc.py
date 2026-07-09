@@ -268,11 +268,12 @@ for obj, name, _ in objects:
     actor = plotter.add_mesh(obj.get_mesh(), color="white", opacity=0.8, name=name)
     actors[name] = actor
 
-
+pool = RayPool(initial_size=200)
 tracer = RayTracer(
     plotter,
     mode=TreeMode(max_depth=10, min_energy=0.001, offset_distance=0.1, energy_color_type=0),
-    default_color="white"
+    default_color="white",
+    pool=pool,
 )
 
 # ---------------------- ОБРАБОТЧИКИ КЛАВИШ ----------------------
