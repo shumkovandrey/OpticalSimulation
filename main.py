@@ -3,7 +3,8 @@ import random
 import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Any
+from dataclasses import dataclass
 
 from numba import njit
 from fast_math import *
@@ -121,36 +122,6 @@ def get_tangents(normal):
     t2 = np.cross(normal, t1)
     t2 = t2.astype(float) / np.linalg.norm(t2)
     return t1, t2
-
-
-# def fresnel_amplitudes(n1, n2, cos_i):
-#     """
-#     Возвращает комплексные амплитудные коэффициенты для s и p поляризаций:
-#     (r_s, r_p, t_s, t_p).
-#     cos_i – положительный косинус угла падения.
-#     """
-#     eta = n1 / n2
-#     sin2_i = max(0.0, 1.0 - cos_i*cos_i)
-#     sin2_t = (eta**2) * sin2_i
-#     if sin2_t > 1.0:   # полное внутреннее отражение
-#         # r_s = 1, r_p = 1 (фаза сдвигается, но для амплитуд модуль 1)
-#         # t_s = 0, t_p = 0
-#         return 1.0+0j, 1.0+0j, 0.0+0j, 0.0+0j
-#     cos_t = np.sqrt(1.0 - sin2_t)
-#
-#     # Амплитудные коэффициенты (действительные для диэлектриков без поглощения)
-#     r_s = (n1*cos_i - n2*cos_t) / (n1*cos_i + n2*cos_t)
-#     r_p = (n2*cos_i - n1*cos_t) / (n2*cos_i + n1*cos_t)
-#     t_s = 2.0 * n1 * cos_i / (n1*cos_i + n2*cos_t)
-#     t_p = 2.0 * n1 * cos_i / (n2*cos_i + n1*cos_t)
-#     # Фазы для проходящих волн? Обычно t положительные для прозрачных сред.
-#     return r_s, r_p, t_s, t_p
-#
-# def fresnel_coeffs(n1, n2, cos_i):
-#     r_s, r_p, _, _ = fresnel_amplitudes(n1, n2, cos_i)
-#     R = 0.5 * (abs(r_s)**2 + abs(r_p)**2)
-#     T = 1.0 - R
-#     return R, T
 
 
 def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray,
@@ -317,6 +288,45 @@ def _trace_recursive(ray, elements, depth, min_energy, segments,
         segments.append((hit_point, new_ray.origin, new_ray.energy, ray.color))
         _trace_recursive(new_ray, elements, depth-1, min_energy, segments,
                          total_limit, offset_distance, use_polarization_color=use_polarization_color)
+
+
+# ------------------------------------------------
+# Единый контейнер для отрезка луча (результат трассировки)
+# ------------------------------------------------
+@dataclass(slots=True)
+class Segment:
+    """Один отрезок трассированного луча."""
+    start: np.ndarray          # 3-вектор начала
+    end: np.ndarray            # 3-вектор конца
+    energy: float              # энергия (0..1)
+    color: tuple               # RGB-цвет в диапазоне 0..1
+    energy_color_type: int     # режим привязки прозрачности к энергии (0/1/2)
+
+    # Для удобства распаковки в старом стиле (опционально)
+    def __iter__(self):
+        return iter((self.start, self.end, self.energy, self.color))
+
+
+# ------------------------------------------------
+# Результат поиска пересечения луча с элементами сцены
+# ------------------------------------------------
+@dataclass(slots=True)
+class HitInfo:
+    """Информация о пересечении луча с объектом."""
+    obj: Any                   # элемент сцены, с которым произошло пересечение
+    t: float                   # расстояние от начала луча до точки удара
+    point: np.ndarray          # точка удара (3D)
+    normal: np.ndarray         # нормаль в точке удара
+    allow_reflection: bool     # разрешено ли отражение на этой поверхности
+    allow_refraction: bool     # разрешено ли преломление на этой поверхности
+    absorbed: bool             # поглощается ли луч (полное поглощение)
+    n_inside: float            # показатель преломления материала внутри объекта (1.0 если нет)
+    is_thin_lens: bool = False # специальный флаг для тонкой линзы
+
+    def __post_init__(self):
+        # Гарантируем, что векторы имеют тип float64
+        self.point = np.asarray(self.point, dtype=np.float64)
+        self.normal = np.asarray(self.normal, dtype=np.float64)
 
 
 # ---------------------
@@ -1344,102 +1354,6 @@ class AsphericSurface:
         return in_ref or in_refr or in_abs
 
 
-class RectangularScreen(PlaneSurface):
-    def __init__(self, center, rotation_degrees, width, height, absorption_range=(0,10000)):
-        center = np.asarray(center, dtype=float)
-        rotation_degrees = np.asarray(rotation_degrees, dtype=float)    # ← обязательно float
-        half_u, half_v = width/2, height/2
-        super().__init__(
-            point=center, rotation_degrees=rotation_degrees, n_inside=1.0,
-            edge_radius=0.0,
-            half_sizes=(half_u, half_v),
-            absorption_range=absorption_range
-        )
-        self.width, self.height = width, height
-
-    def get_mesh(self) -> pv.PolyData:
-        t1, t2 = self.face_tangents
-        hu, hv = self.half_sizes
-        c = self.lens_origin
-        p0 = c - hu * t1 - hv * t2
-        p1 = c + hu * t1 - hv * t2
-        p2 = c + hu * t1 + hv * t2
-        p3 = c - hu * t1 + hv * t2
-        vertices = np.array([p0, p1, p2, p3])
-        faces = np.array([[3, 0, 1, 2], [3, 0, 2, 3]])
-        return pv.PolyData(vertices, faces)
-
-
-class BoxPrism:
-    """Прямоугольная призма из материала с показателем преломления n."""
-    def __init__(self, origin: np.ndarray, size_x: float, size_y: float, size_z: float, n: float = 1.5):
-        self.origin = np.array(origin, dtype=float)
-        self.size = np.array([size_x, size_y, size_z], dtype=float)
-        self.n = n
-        self.surfaces = []
-        self.rotation_matrix = np.eye(3)
-
-        # Полуразмеры и направления рёбер (в локальной системе до поворота)
-        half = self.size / 2
-        # Набор грань: нормаль, смещение центра, пара локальных осей (вдоль сторон), полуразмеры
-        face_configs = [
-            ([1, 0, 0], [half[0], 0, 0], ([0, 1, 0], [0, 0, 1]), (half[1], half[2])),
-            ([-1, 0, 0], [-half[0], 0, 0], ([0, 1, 0], [0, 0, 1]), (half[1], half[2])),
-            ([0, 1, 0], [0, half[1], 0], ([1, 0, 0], [0, 0, 1]), (half[0], half[2])),
-            ([0, -1, 0], [0, -half[1], 0], ([1, 0, 0], [0, 0, 1]), (half[0], half[2])),
-            ([0, 0, 1], [0, 0, half[2]], ([1, 0, 0], [0, 1, 0]), (half[0], half[1])),
-            ([0, 0, -1], [0, 0, -half[2]], ([1, 0, 0], [0, 1, 0]), (half[0], half[1]))
-        ]
-
-        for norm_vec, center_offset, (ax1, ax2), (half_u, half_v) in face_configs:
-            norm_vec = np.array(norm_vec, dtype=float)
-            center = self.origin + np.array(center_offset)
-            tangents = (np.array(ax1, dtype=float), np.array(ax2, dtype=float))
-            surf = PlaneSurface(
-                point=center,
-                normal=norm_vec,
-                n_inside=n,
-                lens_origin=center,
-                lens_axis=norm_vec,
-                edge_radius=0.0,  # не используется при наличии half_sizes
-                half_sizes=(half_u, half_v),
-                face_tangents=tangents,
-                reflection_range = (0, np.inf), refraction_range = (0, np.inf)
-            )
-            self.surfaces.append(surf)
-
-    def get_surfaces(self) -> List[PlaneSurface]:
-        return self.surfaces
-
-    def get_mesh(self) -> pv.PolyData:
-        # Создаём куб с центром в начале координат
-        mesh = pv.Cube(
-            center=(0.0, 0.0, 0.0),
-            x_length=self.size[0],
-            y_length=self.size[1],
-            z_length=self.size[2]
-        )
-        # Матрица полного преобразования: поворот + смещение
-        transform = np.eye(4)
-        transform[:3, :3] = self.rotation_matrix
-        transform[:3, 3] = self.origin
-        return mesh.transform(transform, inplace=False)
-
-    def rotate(self, angles_deg: Tuple[float, float, float]):
-        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
-        self.rotation_matrix = rot @ self.rotation_matrix
-        for surf in self.surfaces:
-            local_pos = surf.point - self.origin
-            surf.point = self.origin + rot @ local_pos
-            surf.normal = rot @ surf.normal
-            surf.lens_axis = surf.normal
-            surf.lens_origin = surf.point
-            # Поворачиваем локальные оси грани, если они есть
-            if surf.face_tangents is not None:
-                t1, t2 = surf.face_tangents
-                surf.face_tangents = (rot @ t1, rot @ t2)
-
-
 class ThinLens:
     """Тонкая линза (параксиальное приближение)."""
     def __init__(self, center, focal_length, edge_radius=3.0,
@@ -1709,65 +1623,69 @@ class UniversalLens:
                                      shape=None, show_points=False)
 
 
-class Aperture(PlaneSurface):
-    """Диафрагма: непрозрачная плоскость с круглым отверстием."""
-
-    class Aperture(PlaneSurface):
-        def __init__(self, point, normal, aperture_radius, outer_radius=3.0,
-                     absorption_range=(0, 10000), n_inside=1.0):
-            super().__init__(
-                point=point, normal=normal, n_inside=n_inside,
-                lens_origin=point, lens_axis=normal,
-                edge_radius=0.0,
-                absorption_range=absorption_range
-            )
-            self.aperture_radius = aperture_radius
-            self.outer_radius = outer_radius
-
-        def get_mesh(self) -> pv.PolyData:
-            disc = pv.Disc(center=(0, 0, 0), normal=(0, 0, 1),
-                           inner=self.aperture_radius, outer=self.outer_radius, c_res=100)
-            # Поворот к нормали
-            v_from = np.array([0., 0., 1.])
-            v_to = self.normal
-            if np.allclose(v_from, v_to):
-                rot = np.eye(3)
-            elif np.allclose(v_from, -v_to):
-                rot = -np.eye(3)
-            else:
-                v = np.cross(v_from, v_to)
-                c = np.dot(v_from, v_to)
-                K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-                rot = np.eye(3) + K + (K @ K) * (1 / (1 + c))
-            transform = np.eye(4)
-            transform[:3, :3] = rot
-            transform[:3, 3] = self.lens_origin
-            return disc.transform(transform, inplace=False)
-
-    def intersect(self, ray: Ray) -> Optional[float]:
-        dot_dn = np.dot(ray.direction, self.normal)
-        if abs(dot_dn) < 1e-6:
-            return None
-        t = np.dot(self.point - ray.origin, self.normal) / dot_dn
-        if t <= 1e-6:
-            return None
-
-        hit_point = ray.origin + ray.direction * t
-        vec = hit_point - self.lens_origin
-        dist_to_axis = np.linalg.norm(vec - np.dot(vec, self.lens_axis) * self.lens_axis)
-
-        # Слишком далеко – диафрагма не пересечена
-        if dist_to_axis > self.outer_radius + 1e-6:
-            return None
-
-        # Попадание в отверстие или в непрозрачную часть?
-        self._hit_opaque = (dist_to_axis > self.aperture_radius + 1e-6)
-        return t
-
-
 # --------------------------------
 # Трассировка лучей и визуализация
 # --------------------------------
+
+def find_best_hit(ray: 'Ray', elements: List) -> Optional[HitInfo]:
+    """
+    Находит ближайшее пересечение луча с элементами сцены с учётом
+    спектральной активности и возвращает HitInfo или None.
+    """
+    best_t = float('inf')
+    best_hit = None
+
+    for obj in elements:
+        # Проверка активности по длине волны
+        if hasattr(obj, 'is_active') and not obj.is_active(ray.wavelength):
+            continue
+
+        t = obj.intersect(ray)
+        if t is not None and t < best_t:
+            best_t = t
+            hit_point = ray.origin + ray.direction * t
+            normal = obj.get_normal(hit_point) if hasattr(obj, 'get_normal') else np.array([0., 0., 0.])
+
+            # Определяем разрешённые действия на основе диапазонов
+            allow_reflection = False
+            allow_refraction = False
+            absorbed = False
+            n_inside = 1.0
+            is_thin_lens = isinstance(obj, ThinLens)
+
+            if hasattr(obj, 'absorption_range') and obj.absorption_range is not None:
+                if ray.wavelength is None or (obj.absorption_range[0] <= ray.wavelength <= obj.absorption_range[1]):
+                    absorbed = True
+
+            if hasattr(obj, 'reflection_range') and obj.reflection_range is not None:
+                if ray.wavelength is None or (obj.reflection_range[0] <= ray.wavelength <= obj.reflection_range[1]):
+                    allow_reflection = True
+
+            if hasattr(obj, 'refraction_range') and obj.refraction_range is not None:
+                if ray.wavelength is None or (obj.refraction_range[0] <= ray.wavelength <= obj.refraction_range[1]):
+                    allow_refraction = True
+
+            if hasattr(obj, 'n'):
+                n_inside = obj.n
+
+            # Если объект полностью прозрачен (нет взаимодействия), пропускаем его
+            if not is_thin_lens and not allow_reflection and not allow_refraction and not absorbed:
+                continue
+
+            best_hit = HitInfo(
+                obj=obj,
+                t=t,
+                point=hit_point,
+                normal=normal,
+                allow_reflection=allow_reflection,
+                allow_refraction=allow_refraction,
+                absorbed=absorbed,
+                n_inside=n_inside,
+                is_thin_lens=is_thin_lens
+            )
+
+    return best_hit
+
 
 def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 20) -> np.ndarray:
     EPS = 1e-4  # малое смещение

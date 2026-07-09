@@ -60,7 +60,7 @@ def create_scene():
     )
     lens1 = UniversalLens(
         origin=[0, 10, 0], rotation_degrees=(0, 0, 0),
-        R1=10.0, R2=-20.0, thickness=0.5, edge_radius=3.5, n=1.5,
+        R1=10.0, R2=10.0, thickness=3, edge_radius=3.5, n=1.5,
         refraction_range=(0, 10000), reflection_range=(0, 10000)
     )
     lens2 = UniversalLens(
@@ -82,14 +82,15 @@ def create_scene():
         n_inside=1.5
     )
 
-    mesh_path = "../Models/Prism.stl"
+    mesh_path = "../Models/Untitled.stl"
     if os.path.exists(mesh_path):
         tri_mesh = trimesh.load(mesh_path)
         tri_mesh.apply_scale(2.0)
         mesh_obj = MeshSurface(
             tri_mesh, n_inside=1.5,
-            refraction_range=(0, 10000), reflection_range=(0, 10000),
-            translation=[0, 70, 0], rotation_degrees=(0, 0, 0)
+            # refraction_range=(0, 10000),
+            reflection_range=(0, 10000),
+            translation=[0, 70, 0], rotation_degrees=(0, 90, 0)
         )
     else:
         mesh_obj = None
@@ -131,7 +132,7 @@ def create_scene():
                 direction=[1, 0, 0],
                 color=color,
                 wavelength=550 if color != "red" else 650,
-                energy_color_type=1
+                energy_color_type=2
             )
             ray_list.append(ray)
         rays_dict[name] = ray_list
@@ -273,7 +274,7 @@ tracer = RayTracer(
     max_depth=10,
     min_energy=0.001,
     offset_distance=0.1,
-    energy_color_type=1,
+    energy_color_type=0,
     default_color="white"
 )
 
@@ -466,7 +467,6 @@ def reset_scene():
 # ---------------------- ГЛАВНЫЙ ЦИКЛ ----------------------
 last_time = time.time()
 plotter.reset_camera()
-plotter.show_grid(color="white")
 plotter.show(interactive_update=True)
 
 print("""
@@ -478,15 +478,15 @@ RY - изменение направления лучей
 ------------------------------------------
 
 1-7 - включить/выключить объекты и его лучи
-(!) вверх/вниз - увеличить/уменьшить расстояние между лучами
-(!) вправо/влево - увеличить/уменьшить кол-во лучей
+вверх/вниз - увеличить/уменьшить расстояние между лучами
+вправо/влево - увеличить/уменьшить кол-во лучей
 X - сброс сцены
 
 ------------------------------------------
 
 Пробел - заморозить/разморозить сцену
 M - режим взаимодействия лучей со своим или со всеми объектами
-(!) N - режим взаимодействия лучей: simple/tree
+N - режим взаимодействия лучей: simple/tree
 """)
 
 while plotter.render:
