@@ -5,6 +5,7 @@ import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 from typing import List, Optional, Tuple, Any
 from dataclasses import dataclass
+from abc import ABC, abstractmethod
 
 from numba import njit
 from fast_math import *
@@ -217,79 +218,6 @@ def trace_ray_tree(ray: Ray, elements: List, max_depth: int,
     return segments
 
 
-def _trace_recursive(ray, elements, depth, min_energy, segments,
-                     total_limit=5000, offset_distance=0.01, use_polarization_color=False):
-    if len(segments) >= total_limit or depth <= 0 or ray.energy < min_energy:
-        return
-
-    best_t = float('inf')
-    hit_obj = None
-    for obj in elements:
-        if hasattr(obj, 'is_active') and not obj.is_active(ray.wavelength):
-            continue
-        t = obj.intersect(ray)
-        if t is not None and t < best_t:
-            best_t = t
-            hit_obj = obj
-
-    if hit_obj is None:
-        p2 = ray.origin + ray.direction * RAY_INFINITY_DISTANCE
-        segments.append((ray.origin, p2, ray.energy, ray.color))
-        return
-
-    hit_point = ray.origin + ray.direction * best_t
-    segments.append((ray.origin, hit_point, ray.energy, ray.color))
-
-    if isinstance(hit_obj, ThinLens):
-        new_dir = hit_obj.thin_lens_deflection(ray.direction, hit_point)
-        new_ray = Ray(hit_point + offset_distance * new_dir, new_dir,
-                      energy=ray.energy, current_n=ray.current_n,
-                      color=ray.color, wavelength=ray.wavelength,
-                      energy_color_type=ray.energy_color_type)
-        segments.append((hit_point, new_ray.origin, new_ray.energy, ray.color))
-        _trace_recursive(new_ray, elements, depth - 1, min_energy, segments,
-                         total_limit, offset_distance, use_polarization_color=use_polarization_color)
-        return
-
-    # Поглощение
-    if hasattr(hit_obj, 'absorption_range') and hit_obj.absorption_range is not None:
-        if ray.wavelength is None or (hit_obj.absorption_range[0] <= ray.wavelength <= hit_obj.absorption_range[1]):
-            return
-
-    # Определяем разрешённые действия
-    allow_reflection = False
-    allow_refraction = False
-    if hasattr(hit_obj, 'reflection_range') and hit_obj.reflection_range is not None:
-        if ray.wavelength is None or (hit_obj.reflection_range[0] <= ray.wavelength <= hit_obj.reflection_range[1]):
-            allow_reflection = True
-    if hasattr(hit_obj, 'refraction_range') and hit_obj.refraction_range is not None:
-        if ray.wavelength is None or (hit_obj.refraction_range[0] <= ray.wavelength <= hit_obj.refraction_range[1]):
-            allow_refraction = True
-
-    # Ничего не разрешено – проходим сквозь
-    if not allow_reflection and not allow_refraction:
-        new_ray = Ray(hit_point + offset_distance * ray.direction, ray.direction,
-                      energy=ray.energy, current_n=ray.current_n,
-                      color=ray.color, wavelength=ray.wavelength,
-                      energy_color_type=ray.energy_color_type)
-        segments.append((hit_point, new_ray.origin, new_ray.energy, ray.color))   # соединительный отрезок
-        _trace_recursive(new_ray, elements, depth-1, min_energy, segments,
-                         total_limit, offset_distance, use_polarization_color=use_polarization_color)
-        return
-
-    n_next = hit_obj.n if abs(ray.current_n - 1.0) < 1e-6 else 1.0
-    new_rays = split_ray(ray, hit_obj.get_normal(hit_point), n_next, hit_point,
-                         allow_reflection=allow_reflection,
-                         allow_refraction=allow_refraction,
-                         offset_distance=offset_distance,
-                         use_polarization_color=use_polarization_color)
-    for new_ray in new_rays:
-        # Соединительный отрезок от точки удара до старта нового луча
-        segments.append((hit_point, new_ray.origin, new_ray.energy, ray.color))
-        _trace_recursive(new_ray, elements, depth-1, min_energy, segments,
-                         total_limit, offset_distance, use_polarization_color=use_polarization_color)
-
-
 # ------------------------------------------------
 # Единый контейнер для отрезка луча (результат трассировки)
 # ------------------------------------------------
@@ -300,7 +228,7 @@ class Segment:
     end: np.ndarray            # 3-вектор конца
     energy: float              # энергия (0..1)
     color: tuple               # RGB-цвет в диапазоне 0..1
-    energy_color_type: int     # режим привязки прозрачности к энергии (0/1/2)
+    # energy_color_type: int     # режим привязки прозрачности к энергии (0/1/2)
 
     # Для удобства распаковки в старом стиле (опционально)
     def __iter__(self):
@@ -327,6 +255,117 @@ class HitInfo:
         # Гарантируем, что векторы имеют тип float64
         self.point = np.asarray(self.point, dtype=np.float64)
         self.normal = np.asarray(self.normal, dtype=np.float64)
+
+
+# ------------------------------------------------------------
+# Абстрактный базовый класс для всех режимов трассировки
+# ------------------------------------------------------------
+class TraceMode(ABC):
+    """Общий интерфейс для любых алгоритмов трассировки."""
+    def __init__(self, energy_color_type: int = 1):
+        self.energy_color_type = energy_color_type
+
+    @abstractmethod
+    def trace(self, ray: 'Ray', elements: List) -> List[Segment]:
+        """
+        Трассирует один луч через список элементов сцены и возвращает
+        плоский список отрезков Segment, готовых к отрисовке.
+        """
+        ...
+
+
+# ------------------------------------------------------------
+# Режим "simple" – однолучевой последовательный проход
+# ------------------------------------------------------------
+class SimpleMode(TraceMode):
+    """
+    Последовательная трассировка без ветвления.
+    На каждом шаге выбирается ровно одно продолжение (преломление имеет
+    приоритет, если включён флаг prioritize_refraction).
+    """
+    def __init__(self,
+                 max_bounces: int = 10,
+                 offset_distance: float = 0.01,
+                 prioritize_refraction: bool = True,
+                 energy_color_type=1):
+        """
+        Параметры
+        ---------
+        max_bounces : int
+            Максимальное число взаимодействий луча с поверхностями.
+        offset_distance : float
+            Минимальное смещение точки старта нового луча, чтобы избежать
+            самопересечения с той же поверхностью.
+        prioritize_refraction : bool
+            Если True и доступно преломление, отражение подавляется (даже
+            если поверхность допускает и то и другое). Полезно для
+            моделирования линз без паразитных отражений.
+        """
+        super().__init__(energy_color_type)
+
+        self.max_bounces = max_bounces
+        self.offset_distance = offset_distance
+        self.prioritize_refraction = prioritize_refraction
+
+    def trace(self, ray: 'Ray', elements: List) -> List[Segment]:
+        return _trace_simple(
+            ray,
+            elements,
+            max_bounces=self.max_bounces,
+            offset_distance=self.offset_distance,
+            prioritize_refraction=self.prioritize_refraction
+        )
+
+
+# ------------------------------------------------------------
+# Режим "tree" – рекурсивное дерево лучей с учётом энергии
+# ------------------------------------------------------------
+class TreeMode(TraceMode):
+    """
+    Рекурсивная трассировка с ветвлением на отражённый и преломлённый лучи.
+    Каждый порождённый луч обладает энергией, вычисленной по формулам Френеля.
+    Лучи с энергией ниже порога отбрасываются.
+    """
+    def __init__(self,
+                 max_depth: int = 6,
+                 min_energy: float = 0.01,
+                 offset_distance: float = 0.01,
+                 use_polarization_color: bool = False,
+                 total_limit: int = 5000,
+                 energy_color_type: int = 1):
+        """
+        Параметры
+        ---------
+        max_depth : int
+            Максимальная глубина рекурсии (количество ветвлений).
+        min_energy : float
+            Порог энергии, ниже которого лучи не обрабатываются.
+        offset_distance : float
+            Смещение для избежания самопересечений.
+        use_polarization_color : bool
+            Если True, цвет луча вычисляется по состоянию поляризации.
+        total_limit : int
+            Аварийное ограничение на общее количество отрезков во всех
+            рекурсивных ветвях (защита от бесконечного роста).
+        """
+        super().__init__(energy_color_type)
+
+        self.max_depth = max_depth
+        self.min_energy = min_energy
+        self.offset_distance = offset_distance
+        self.use_polarization_color = use_polarization_color
+        self.total_limit = total_limit
+
+    def trace(self, ray: 'Ray', elements: List) -> List[Segment]:
+        return _trace_recursive(
+            ray,
+            elements,
+            depth=self.max_depth,
+            min_energy=self.min_energy,
+            offset_distance=self.offset_distance,
+            use_polarization_color=self.use_polarization_color,
+            total_limit=self.total_limit
+        )
 
 
 # ---------------------
@@ -408,36 +447,23 @@ class RayPool:
 
 class RayCloud:
     """
-    Единый актор для множества отрезков.
-    Гибкая настройка прозрачности по энергии.
-
-    Параметры:
-        plotter: pv.Plotter
-        energy_color_type: int (0, 1, 2) – как энергия влияет на непрозрачность.
-                           0 – не используется (opacity=1).
-                           1 – opacity = energy.
-                           2 – opacity = max(min_alpha, energy ** gamma).
-        default_color: цвет по умолчанию (строка или RGB-кортеж).
-        line_width: толщина линий.
-        min_alpha: минимальная непрозрачность для режима 2 (по умолчанию 0.05).
-        gamma: показатель степени для режима 2 (по умолчанию 0.3).
+    Единый актор для отрисовки множества отрезков с индивидуальным цветом
+    и прозрачностью, зависящей от энергии.
     """
+
     def __init__(self, plotter: pv.Plotter,
-                 energy_color_type: int = 1,
-                 default_color = "yellow",
+                 default_color="yellow",
                  line_width: float = 2.0,
                  min_alpha: float = 0.05,
                  gamma: float = 0.3):
         self.plotter = plotter
-        self.energy_color_type = energy_color_type
         self.default_color = default_color
         self.line_width = line_width
         self.min_alpha = min_alpha
         self.gamma = gamma
 
-        # Временная точка, чтобы PyVista не ругался на пустой меш
-        temp_points = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
-        temp_mesh = pv.PolyData(temp_points)
+        # Пустая заготовка, чтобы PyVista не ругался
+        temp_mesh = pv.PolyData(np.zeros((1, 3)))
         temp_mesh.point_data["colors"] = np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32)
         self.actor = plotter.add_mesh(
             temp_mesh,
@@ -447,62 +473,50 @@ class RayCloud:
             render_lines_as_tubes=False,
             name="RayCloud"
         )
-        # Сразу очищаем геометрию – точка не будет видна
-        self.actor.mapper.dataset.copy_from(pv.PolyData())
+        self.actor.mapper.dataset.copy_from(pv.PolyData())  # очищаем
 
+    # ---------- вспомогательные методы ----------
     @staticmethod
-    def _to_rgb(color) -> np.ndarray:
-        """Приводит цвет (строка или RGB-кортеж) к массиву RGB из трёх float."""
+    def _to_rgb(color):
         from matplotlib.colors import to_rgb
         return np.array(to_rgb(color), dtype=np.float32)
 
-    def _energy_to_alpha(self, energy: float) -> float:
-        """Вычисляет непрозрачность по энергии в зависимости от energy_color_type."""
-        if self.energy_color_type == 0:
+    def _energy_to_alpha(self, energy: float, etype: int) -> float:
+        if etype == 0:
             return 1.0
-        elif self.energy_color_type == 1:
+        elif etype == 1:
             return np.clip(energy, 0.0, 1.0)
-        elif self.energy_color_type == 2:
+        elif etype == 2:
             return max(self.min_alpha, energy ** self.gamma)
         else:
             return 1.0
 
     def _build_rgba(self, color, alpha: float) -> np.ndarray:
-        """Создаёт массив RGBA из цвета и альфа-канала."""
         rgb = self._to_rgb(color)
         return np.array([*rgb, alpha], dtype=np.float32)
 
-    # ---------- Методы обновления ----------
-
-    def update_from_trajectories(self, trajectories, colors=None):
-        if not trajectories:
+    # ---------- основной метод обновления ----------
+    def update(self, segments: List[Segment], energy_color_type: int = 1):
+        """Принимает список Segment и обновляет геометрию."""
+        if not segments:
             self.actor.mapper.dataset.copy_from(pv.PolyData())
             return
 
-        n_rays = len(trajectories)
-        if colors is None:
-            colors = [self.default_color] * n_rays
-        elif len(colors) != n_rays:
-            raise ValueError("colors length must match number of trajectories")
-
-        points = []
-        lines = []
-        offset = 0
+        points, lines, offset = [], [], 0
         rgba_list = []
 
-        for traj, color in zip(trajectories, colors):
-            n = len(traj)
-            if n < 2:
+        for seg in segments:
+            p1, p2 = seg.start, seg.end
+            if np.any(np.isnan(p1)) or np.any(np.isnan(p2)):
                 continue
-            # Проверка формы точек
-            if any(p.shape != (3,) for p in traj):
-                print("⚠️ Пропущена траектория с некорректными точками")
-                continue
-            points.extend(traj)
-            lines.append(np.hstack([n, np.arange(offset, offset + n)]))
-            rgba = self._build_rgba(color, 1.0)
-            rgba_list.extend([rgba] * n)
-            offset += n
+            points.append(p1)
+            points.append(p2)
+            lines.append([2, offset, offset + 1])
+
+            alpha = self._energy_to_alpha(seg.energy, energy_color_type)
+            rgba = self._build_rgba(seg.color, alpha)
+            rgba_list.extend([rgba, rgba])
+            offset += 2
 
         if not points:
             self.actor.mapper.dataset.copy_from(pv.PolyData())
@@ -517,157 +531,113 @@ class RayCloud:
         self.actor.mapper.dataset.copy_from(new_mesh)
         self.actor.mapper.SetColorModeToDirectScalars()
 
-    def update_from_segments(self, segments: list,
-                             base_colors=None,
-                             energy_types=None):
-        if not segments:
-            self.actor.mapper.dataset.copy_from(pv.PolyData())
-            return
-
-        if energy_types is not None and len(energy_types) != len(segments):
-            raise ValueError("energy_types length must match segments")
-
-        points = []
-        lines = []
-        offset = 0
-        rgba_list = []
-
-        # Проверка и фильтрация битых сегментов
-        valid_segments = []
-        valid_colors = []
-        valid_types = []
-        for i, seg in enumerate(segments):
-            p1, p2, energy = seg[0], seg[1], seg[2]
-            if p1.shape != (3,) or p2.shape != (3,):
-                continue
-            if np.any(np.isnan(p1)) or np.any(np.isnan(p2)):
-                continue
-            valid_segments.append(seg)
-            if base_colors:
-                valid_colors.append(base_colors[i])
-            if energy_types:
-                valid_types.append(energy_types[i])
-
-        if not valid_segments:
-            self.actor.mapper.dataset.copy_from(pv.PolyData())
-            return
-
-        for i, seg in enumerate(valid_segments):
-            if len(seg) == 4:
-                p1, p2, energy, color = seg
-            else:  # обратная совместимость
-                p1, p2, energy = seg
-                color = None
-            points.append(p1)
-            points.append(p2)
-            lines.append([2, offset, offset + 1])
-
-            # Определяем цвет
-            color = color if color is not None else (valid_colors[i] if valid_colors else self.default_color)
-
-            # Определяем тип затухания (индивидуальный или глобальный)
-            etype = valid_types[i] if valid_types else self.energy_color_type
-
-            # Вычисляем непрозрачность по нужному закону
-            if etype == 0:
-                alpha = 1.0
-            elif etype == 1:
-                alpha = np.clip(energy, 0.0, 1.0)
-            elif etype == 2:
-                alpha = max(self.min_alpha, energy ** self.gamma)
-            else:
-                alpha = 1.0
-
-            rgba = self._build_rgba(color, alpha)
-            rgba_list.extend([rgba, rgba])
-            offset += 2
-
-        points = np.array(points, dtype=np.float32)
-        lines = np.hstack(lines).astype(int)
-        new_mesh = pv.PolyData(points, lines=lines)
-        new_mesh.point_data["colors"] = np.array(rgba_list, dtype=np.float32)
-        new_mesh.active_scalars_name = "colors"
-
-        self.actor.mapper.dataset.copy_from(new_mesh)
-        self.actor.mapper.SetColorModeToDirectScalars()
-
 
 class RayTracer:
-    def __init__(self, plotter, mode='tree', max_depth=6, min_energy=0.01,
-                 offset_distance=0.5, use_polarization_color=False, pool=None, **cloud_kwargs):
+    """
+    Управляет лучами, элементами сцены и запускает трассировку через
+    переданный объект TraceMode. Результат всегда – список Segment.
+    """
+
+    def __init__(self,
+                 plotter: pv.Plotter,
+                 mode = 'simple',          # строка или экземпляр TraceMode
+                 pool: Optional[RayPool] = None,
+                 **cloud_kwargs):
+        """
+        Параметры
+        ---------
+        plotter : pv.Plotter
+        mode : str | TraceMode
+            Режим трассировки. 'simple', 'tree' или готовый объект.
+        pool : RayPool или None
+            Пул для переиспользования лучей (будет задействован позже).
+        **cloud_kwargs
+            Параметры для внутреннего RayCloud (цвета, прозрачность и т.д.).
+        """
         self.plotter = plotter
-        self.mode = mode
-        self.max_depth = max_depth
-        self.min_energy = min_energy
-        self.offset_distance = offset_distance
         self.rays = []
         self.elements = []
         self.emitters = []
-        self.use_polarization_color = use_polarization_color
         self.pool = pool
-        # Один‑единственный RayCloud на всё время жизни трейсера
+
+        # Нормализуем режим
+        self.set_mode(mode)
+
+        # Единое облако отрезков
         self.cloud = RayCloud(plotter, **cloud_kwargs)
 
-    def add_ray(self, ray):
+    # -----------------------------------------------------------------
+    # Удобное управление режимом
+    # -----------------------------------------------------------------
+    def set_mode(self, mode):
+        """Задать режим трассировки строкой или объектом TraceMode."""
+        if isinstance(mode, TraceMode):
+            self._mode = mode
+        elif mode == 'simple':
+            self._mode = SimpleMode()
+        elif mode == 'tree':
+            self._mode = TreeMode()
+        else:
+            raise ValueError("mode must be 'simple', 'tree' or a TraceMode instance")
+
+    @property
+    def mode(self):
+        """Текущий режим (объект TraceMode)."""
+        return self._mode
+
+    @mode.setter
+    def mode(self, value):
+        self.set_mode(value)
+
+    # -----------------------------------------------------------------
+    # Добавление объектов
+    # -----------------------------------------------------------------
+    def add_ray(self, ray: 'Ray'):
         self.rays.append(ray)
 
     def add_elements(self, *elements):
-        for element in elements:
-            self.elements.append(element)
+        for el in elements:
+            self.elements.append(el)
 
-    def add_emitter(self, emitter: BeamEmitter):
+    def add_emitter(self, emitter: 'BeamEmitter'):
         if not hasattr(self, 'emitters'):
             self.emitters = []
         self.emitters.append(emitter)
 
-    def set_mode(self, mode):
-        if mode not in ('simple', 'tree'):
-            raise ValueError("mode must be 'simple' or 'tree'")
-        self.mode = mode
+    # -----------------------------------------------------------------
+    # Основной цикл трассировки
+    # -----------------------------------------------------------------
+    def trace_all(self) -> List[Segment]:
+        """
+        Прогоняет все зарегистрированные лучи (включая лучи от эмиттеров)
+        через текущий режим трассировки.
+        Возвращает плоский список Segment, готовый к визуализации.
+        """
+        # Сначала собираем лучи от эмиттеров (если есть)
+        for emitter in self.emitters:
+            for ray in emitter.emit():
+                self.rays.append(ray)
 
-    def trace_all(self):
-        if hasattr(self, 'emitters'):
-            for emitter in self.emitters:
-                for ray in emitter.emit():
-                    self.rays.append(ray)
+        all_segments = []
+        for ray in self.rays:
+            segments = self._mode.trace(ray, self.elements)
+            all_segments.extend(segments)
 
-        if self.mode == 'simple':
-            trajectories, colors = [], []
-            for ray in self.rays:
-                traj = trace_ray(ray, self.elements, mode='simple',
-                                 max_depth=self.max_depth,
-                                 offset_distance=self.offset_distance, use_polarization_color=self.use_polarization_color)
-                trajectories.append(traj)
-                colors.append(ray.color)
-            return trajectories, colors, None
-        else:  # tree
-            all_segments, all_colors, all_types = [], [], []
-            for ray in self.rays:
-                segs = trace_ray(ray, self.elements, mode='tree',
-                                 max_depth=self.max_depth,
-                                 min_energy=self.min_energy,
-                                 offset_distance=self.offset_distance, use_polarization_color=self.use_polarization_color)
-                all_segments.extend(segs)
-                all_colors.extend([ray.color] * len(segs))
-                all_types.extend([ray.energy_color_type] * len(segs))
-            return all_segments, all_colors, all_types
+        return all_segments
 
     def render(self):
-        """Обновляет существующий RayCloud и очищает список лучей."""
-        result, colors, types = self.trace_all()
-        if self.mode == 'simple':
-            self.cloud.update_from_trajectories(result, colors=colors)
-        else:
-            self.cloud.update_from_segments(result, base_colors=colors, energy_types=types)
+        segments = self.trace_all()
+        energy_type = self._mode.energy_color_type
+        self.cloud.update(segments, energy_color_type=energy_type)
+
         if self.pool:
             for ray in self.rays:
                 self.pool.release(ray)
         self.rays.clear()
-        self.elements.clear()
         return self.cloud
 
     def remove(self):
-        """Удаляет облако с графика (если нужно полностью убрать лучи)."""
+        """Удалить облако отрезков со сцены."""
         self.plotter.remove_actor(self.cloud.actor)
 
 
@@ -1726,86 +1696,170 @@ def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 20) -> np.
     return np.array(path)
 
 
-def _trace_simple(ray: Ray, elements: List, max_bounces: int,
-                  offset_distance: float, prioritize_refraction: bool = False) -> np.ndarray:
-    path = [ray.origin]
+def _trace_simple(ray: 'Ray',
+                  elements: List,
+                  max_bounces: int = 10,
+                  offset_distance: float = 0.01,
+                  prioritize_refraction: bool = True) -> List[Segment]:
+    """
+    Однолучевой последовательный обход без ветвления.
+    Возвращает список отрезков Segment.
+    """
+    segments = []
     current_ray = ray
     current_n = ray.current_n
 
     for _ in range(max_bounces):
-        best_t = float('inf')
-        hit_obj = None
-        for obj in elements:
-            if hasattr(obj, 'is_active') and not obj.is_active(current_ray.wavelength):
-                continue
-            t = obj.intersect(current_ray)
-            if t is not None and t < best_t:
-                best_t = t
-                hit_obj = obj
-
-        if hit_obj is None:
-            path.append(current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE)
+        hit = find_best_hit(current_ray, elements)
+        if hit is None:
+            end_point = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
+            segments.append(Segment(current_ray.origin, end_point,
+                                    current_ray.energy, current_ray.color))
             break
 
-        hit_point = current_ray.origin + current_ray.direction * best_t
-        path.append(hit_point)
+        # Отрезок до точки удара
+        segments.append(Segment(current_ray.origin, hit.point,
+                                current_ray.energy, current_ray.color))
 
-        # Поглощение
-        if hasattr(hit_obj, 'absorption_range') and hit_obj.absorption_range is not None:
-            if current_ray.wavelength is None or (hit_obj.absorption_range[0] <= current_ray.wavelength <= hit_obj.absorption_range[1]):
-                break
+        if hit.absorbed:
+            break
 
-        # Разрешённые действия
-        allow_reflection = False
-        allow_refraction = False
-        if hasattr(hit_obj, 'reflection_range') and hit_obj.reflection_range is not None:
-            if current_ray.wavelength is None or (hit_obj.reflection_range[0] <= current_ray.wavelength <= hit_obj.reflection_range[1]):
-                allow_reflection = True
-        if hasattr(hit_obj, 'refraction_range') and hit_obj.refraction_range is not None:
-            if current_ray.wavelength is None or (hit_obj.refraction_range[0] <= current_ray.wavelength <= hit_obj.refraction_range[1]):
-                allow_refraction = True
-
-        # Приоритет преломления в simple-режиме
-        if prioritize_refraction and allow_refraction:
-            allow_reflection = False
-
-        # Ничего не разрешено – проходим сквозь
-        if not allow_reflection and not allow_refraction:
-            current_ray = Ray(hit_point + offset_distance * current_ray.direction,
-                              current_ray.direction,
-                              energy=current_ray.energy, current_n=current_n,
+        # Тонкая линза
+        if hit.is_thin_lens:
+            new_dir = hit.obj.thin_lens_deflection(current_ray.direction, hit.point)
+            start = hit.point + offset_distance * new_dir
+            current_ray = Ray(start, new_dir,
+                              energy=current_ray.energy,
+                              current_n=current_n,
                               color=current_ray.color,
                               wavelength=current_ray.wavelength,
                               energy_color_type=current_ray.energy_color_type)
             continue
 
-        # Нормаль для отражения/преломления
-        normal = hit_obj.get_normal(hit_point)
-        dot = np.dot(normal, current_ray.direction)
-        actual_normal = normal if dot < 0 else -normal
+        allow_refl = hit.allow_reflection
+        allow_refr = hit.allow_refraction
 
-        if allow_refraction:
-            n_next = hit_obj.n if abs(current_n - 1.0) < 1e-6 else 1.0
-            refracted_dir = refract(current_ray.direction, normal, current_n, n_next)
-            if refracted_dir is not None:
+        if prioritize_refraction and allow_refr:
+            allow_refl = False
+
+        # Полная прозрачность – проходим сквозь
+        if not allow_refl and not allow_refr:
+            start = hit.point + offset_distance * current_ray.direction
+            current_ray = Ray(start, current_ray.direction,
+                              energy=current_ray.energy,
+                              current_n=current_n,
+                              color=current_ray.color,
+                              wavelength=current_ray.wavelength,
+                              energy_color_type=current_ray.energy_color_type)
+            continue
+
+        # Преломление (если разрешено)
+        if allow_refr:
+            n_next = hit.n_inside if abs(current_n - 1.0) < 1e-6 else 1.0
+            refracted = refract(current_ray.direction, hit.normal, current_n, n_next)
+            if refracted is not None:
                 current_n = n_next
-                new_dir = refracted_dir
-            else:  # полное внутреннее отражение
-                allow_reflection = True
-                allow_refraction = False
+                new_dir = refracted
+                allow_refl = False
+            else:
+                # Полное внутреннее отражение
+                allow_refl = True
 
-        if allow_reflection:
-            new_dir = (current_ray.direction - 2 * np.dot(current_ray.direction, actual_normal) * actual_normal)
+        # Отражение (если разрешено)
+        if allow_refl:
+            normal = hit.normal
+            if np.dot(normal, current_ray.direction) > 0:
+                normal = -normal
+            new_dir = current_ray.direction - 2 * np.dot(current_ray.direction, normal) * normal
             new_dir /= np.linalg.norm(new_dir)
 
-        current_ray = Ray(hit_point + offset_distance * new_dir, new_dir,
-                          energy=current_ray.energy, current_n=current_n,
+        start = hit.point + offset_distance * new_dir
+        current_ray = Ray(start, new_dir,
+                          energy=current_ray.energy,
+                          current_n=current_n,
                           color=current_ray.color,
                           wavelength=current_ray.wavelength,
                           energy_color_type=current_ray.energy_color_type)
 
-    return np.array(path)
+    return segments
 
+def _trace_recursive(ray: 'Ray',
+                     elements: List,
+                     depth: int,
+                     min_energy: float = 0.01,
+                     offset_distance: float = 0.01,
+                     use_polarization_color: bool = False,
+                     total_limit: int = 5000) -> List[Segment]:
+    """
+    Рекурсивная трассировка с ветвлением (дерево лучей).
+    Возвращает плоский список отрезков Segment.
+    """
+    segments = []
+
+    def recurse(current_ray: 'Ray', d: int):
+        nonlocal segments
+
+        if len(segments) >= total_limit or d <= 0 or current_ray.energy < min_energy:
+            return
+
+        hit = find_best_hit(current_ray, elements)
+        if hit is None:
+            end = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
+            segments.append(Segment(current_ray.origin, end,
+                                    current_ray.energy, current_ray.color))
+            return
+
+        # Отрезок до точки удара
+        segments.append(Segment(current_ray.origin, hit.point,
+                                current_ray.energy, current_ray.color))
+
+        if hit.absorbed:
+            return
+
+        # Тонкая линза
+        if hit.is_thin_lens:
+            new_dir = hit.obj.thin_lens_deflection(current_ray.direction, hit.point)
+            start = hit.point + offset_distance * new_dir
+            new_ray = Ray(start, new_dir,
+                          energy=current_ray.energy,
+                          current_n=current_ray.current_n,
+                          color=current_ray.color,
+                          wavelength=current_ray.wavelength,
+                          energy_color_type=current_ray.energy_color_type)
+            segments.append(Segment(hit.point, start, current_ray.energy, current_ray.color))
+            recurse(new_ray, d - 1)
+            return
+
+        # Определяем n_next в зависимости от того, где мы находимся
+        n1 = current_ray.current_n
+        n_next = hit.n_inside if abs(n1 - 1.0) < 1e-6 else 1.0
+
+        # Если нет ни отражения, ни преломления – проходим сквозь
+        if not hit.allow_reflection and not hit.allow_refraction:
+            start = hit.point + offset_distance * current_ray.direction
+            new_ray = Ray(start, current_ray.direction,
+                          energy=current_ray.energy,
+                          current_n=current_ray.current_n,
+                          color=current_ray.color,
+                          wavelength=current_ray.wavelength,
+                          energy_color_type=current_ray.energy_color_type)
+            segments.append(Segment(hit.point, start, current_ray.energy, current_ray.color))
+            recurse(new_ray, d - 1)
+            return
+
+        # Порождаем отражённый и/или преломлённый лучи через split_ray
+        new_rays = split_ray(current_ray, hit.normal, n_next, hit.point,
+                             allow_reflection=hit.allow_reflection,
+                             allow_refraction=hit.allow_refraction,
+                             offset_distance=offset_distance,
+                             use_polarization_color=use_polarization_color)
+        for nr in new_rays:
+            # Соединительный отрезок от точки удара до начала нового луча
+            segments.append(Segment(hit.point, nr.origin, nr.energy, nr.color))
+            recurse(nr, d - 1)
+
+    recurse(ray, depth)
+    return segments
 
 def trace_ray(ray: Ray, elements: List, mode: str = 'tree',
               max_depth: int = 10, min_energy: float = 0.01,

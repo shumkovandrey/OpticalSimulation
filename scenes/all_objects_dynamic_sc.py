@@ -164,7 +164,7 @@ def regenerate_rays():
             ray_list.append(ray)
         rays_dict[name] = ray_list
     # Очищаем облако, чтобы новые лучи корректно отобразились
-    tracer.cloud.update_from_segments([])
+    tracer.cloud.update([])
 
 
 # ---------------------- ПЕРВОНАЧАЛЬНОЕ СОЗДАНИЕ ----------------------
@@ -268,13 +268,10 @@ for obj, name, _ in objects:
     actor = plotter.add_mesh(obj.get_mesh(), color="white", opacity=0.8, name=name)
     actors[name] = actor
 
+
 tracer = RayTracer(
     plotter,
-    mode='tree',
-    max_depth=10,
-    min_energy=0.001,
-    offset_distance=0.1,
-    energy_color_type=0,
+    mode=TreeMode(max_depth=10, min_energy=0.001, offset_distance=0.1, energy_color_type=0),
     default_color="white"
 )
 
@@ -333,14 +330,11 @@ def on_key_press(interactor, event):
 
         global_interaction = not global_interaction
     elif key == 'n':
-        # Переключаем режим
-        if tracer.mode == 'simple':
-            tracer.mode = 'tree'
+        if isinstance(tracer.mode, SimpleMode):
+            tracer.mode = TreeMode(max_depth=10, min_energy=0.001, offset_distance=0.1, energy_color_type=0)
         else:
-            tracer.mode = 'simple'
-        # Очищаем облако, чтобы новые лучи отрисовались по новым правилам
-        tracer.cloud.update_from_segments([])
-        print(f"Режим трассировки: {tracer.mode}")
+            tracer.mode = SimpleMode(max_bounces=10, offset_distance=0.1, energy_color_type=0)
+        tracer.cloud.update([], energy_color_type=tracer.mode.energy_color_type)  # очистка
     elif key == 'x':
         global need_reset
         need_reset = True
@@ -389,7 +383,7 @@ plotter.iren.interactor.AddObserver('KeyReleaseEvent', on_key_release)
 def reset_scene():
     global ray_count, ray_spacing, objects, rays_dict, actors, object_visible, need_reset
     # 1. Очищаем облако лучей (старые линии исчезнут)
-    tracer.cloud.update_from_segments([])
+    tracer.cloud.update([])
 
     # 2. Восстанавливаем объекты из начальных состояний
     for (name, state) in initial_obj_states:
@@ -566,7 +560,6 @@ while plotter.render:
 
     # --- Трассировка ---
     if global_interaction:
-        # Все видимые объекты и все лучи видимых
         tracer.elements.clear()
         tracer.rays.clear()
         for obj, name, _ in objects:
@@ -576,19 +569,10 @@ while plotter.render:
             if object_visible[name]:
                 tracer.rays.extend(ray_list)
 
-        result = tracer.trace_all()
-        if tracer.mode == 'simple':
-            trajectories, colors, _ = result
-            segs = trajectories_to_segments(trajectories, colors)
-            # В simple-режиме отключаем прозрачность по энергии (энергия всегда 1.0)
-            tracer.cloud.update_from_segments(segs, energy_types=[0] * len(segs))
-        else:  # tree
-            all_segments, all_colors, all_types = result
-            tracer.cloud.update_from_segments(all_segments, base_colors=all_colors,
-                                              energy_types=all_types)
+        segments = tracer.trace_all()
+        tracer.cloud.update(segments)
     else:
-        # Каждый видимый объект со своими лучами
-        all_segments, all_colors, all_types = [], [], []
+        all_segments = []
         for obj, name, _ in objects:
             if obj is None or not object_visible[name]:
                 continue
@@ -596,19 +580,8 @@ while plotter.render:
             tracer.elements.append(obj)
             tracer.rays.clear()
             tracer.rays.extend(rays_dict[name])
-            result = tracer.trace_all()
-            if tracer.mode == 'simple':
-                trajectories, colors, _ = result
-                segs = trajectories_to_segments(trajectories, colors)
-                all_segments.extend(segs)
-                all_types.extend([0] * len(segs))
-            else:
-                segs, cols, typs = result
-                all_segments.extend(segs)
-                all_colors.extend(cols)
-                all_types.extend(typs)
-        if all_segments:
-            tracer.cloud.update_from_segments(all_segments, base_colors=all_colors,
-                                              energy_types=all_types)
+            segments = tracer.trace_all()
+            all_segments.extend(segments)
+        tracer.cloud.update(all_segments)
 
     plotter.update()
