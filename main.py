@@ -229,6 +229,24 @@ def trace_ray_tree(ray: Ray, elements: List, max_depth: int,
     return segments
 
 
+# Вставить в глобальную область (после импортов, до определения классов)
+@njit
+def _sag_numba(r, R, k, coeffs):
+    """Стрелка прогиба асферической поверхности в зависимости от радиуса r."""
+    if abs(R) < 1e-12:  # плоский случай
+        sag = 0.0
+    else:
+        c = 1.0 / R
+        discr = 1.0 - (1.0 + k) * c**2 * r**2
+        if discr < 0.0:
+            return np.inf
+        sqrt_discr = np.sqrt(discr)
+        sag = (c * r**2) / (1.0 + sqrt_discr)
+    for i, A in enumerate(coeffs):
+        sag += A * r**(2 * (i + 1))
+    return sag
+
+
 # ------------------------------------------------
 # Единый контейнер для отрезка луча (результат трассировки)
 # ------------------------------------------------
@@ -1123,7 +1141,6 @@ class MeshSurface:
         self.mesh.apply_translation(vec)
         self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
 
-
 class AsphericSurface:
     def __init__(self, center, radius, conic_constant=0.0, aspheric_coeffs=None,
                  rotation_degrees=(0,0,0), n_inside=1.0,
@@ -1192,102 +1209,133 @@ class AsphericSurface:
             dsag_asp += A * power * r**(power - 1)
         return dsag0 + dsag_asp
 
+    def intersect(self, ray: Ray) -> Optional[float]:
+        # Переводим луч в локальные координаты
+        origin_loc = self._world_to_local(ray.origin)
+        dir_loc = self._rot_world_to_local @ ray.direction
+        # Нормализуем направление на всякий случай
+        dir_loc = dir_loc / np.linalg.norm(dir_loc)
+
+        sag_max = self.sag(self.edge_radius) if self.edge_radius > 0 else 0.0
+
+        # Проверка: если луч почти параллелен плоскости и не попадает в апертуру
+        # (быстрый отсев для производительности)
+        if abs(dir_loc[0]) < 1e-9:
+            # Луч перпендикулярен оси, может пересечь только край, но это редко
+            # Пропускаем, чтобы не застревать
+            pass
+
+        t = self._intersect_numba(
+            origin_loc.astype(np.float64),
+            dir_loc.astype(np.float64),
+            self.radius,
+            self.k,
+            np.array(self.aspheric_coeffs, dtype=np.float64),
+            self.edge_radius,
+            sag_max
+        )
+        if t < 0.0:
+            return None
+        return float(t)
+
     @staticmethod
     @njit
-    def _intersect_numba(origin, direction, radius, k, coeffs, edge_radius):
-        # Плоская поверхность
-        if abs(radius) > 1e8:
-            if abs(direction[0]) < 1e-12:
-                return -1.0
-            t = -origin[0] / direction[0]
-            if t <= 1e-6:
-                return -1.0
-            p = origin + t * direction
-            if p[1] ** 2 + p[2] ** 2 > edge_radius ** 2:
-                return -1.0
-            return t
+    def _intersect_numba(origin, direction, radius, k, coeffs, edge_radius, sag_max):
+        # 1. Пересечение с бесконечным цилиндром
+        oy, oz = origin[1], origin[2]
+        dy, dz = direction[1], direction[2]
+        a_cyl = dy * dy + dz * dz
+        b_cyl = 2.0 * (oy * dy + oz * dz)
+        c_cyl = oy * oy + oz * oz - edge_radius * edge_radius
 
-        # Опорная сфера
-        R = radius
-        a = direction[0] ** 2 + direction[1] ** 2 + direction[2] ** 2
-        b = 2.0 * (origin[0] * direction[0] + origin[1] * direction[1] + origin[2] * direction[2]) - 2 * R * direction[
-            0]
-        c = origin[0] ** 2 + origin[1] ** 2 + origin[2] ** 2 - 2 * R * origin[0]
-        disc = b * b - 4.0 * a * c
-        if disc < 0.0:
-            return -1.0
-        sqrt_disc = np.sqrt(disc)
-        t1 = (-b - sqrt_disc) / (2.0 * a)
-        t2 = (-b + sqrt_disc) / (2.0 * a)
-        t_guess = t1 if t1 > 1e-6 else (t2 if t2 > 1e-6 else -1.0)
-        if t_guess < 0.0:
-            return -1.0
-
-        # Ньютон
-        t = t_guess
-        for _ in range(50):
-            p = origin + t * direction
-            r = np.sqrt(p[1] ** 2 + p[2] ** 2)
-            c = 1.0 / R
-            discr = 1.0 - (1.0 + k) * c ** 2 * r ** 2
-            if discr < 0.0:
+        t_enter = -1.0
+        t_exit = -1.0
+        if a_cyl < 1e-12:
+            if c_cyl > 0.0:
                 return -1.0
-            sqrt_discr = np.sqrt(discr)
-            sag = (c * r ** 2) / (1.0 + sqrt_discr)
-            # Асферические члены
-            for i, A in enumerate(coeffs):
-                sag += A * r ** (2 * (i + 1))
-            F = p[0] - sag
-            if abs(F) < 1e-9:
-                break
-            # Производная sag
-            if r < 1e-12:
-                dsag = 0.0
-                drdt = 0.0
-            else:
-                dsag = (c * r) / sqrt_discr
-                for i, A in enumerate(coeffs):
-                    power = 2 * (i + 1)
-                    dsag += A * power * r ** (power - 1)
-                drdt = (p[1] * direction[1] + p[2] * direction[2]) / r
-            dFdt = direction[0] - dsag * drdt
-            if abs(dFdt) < 1e-15:
-                break
-            t -= F / dFdt
-            if t < 0.0:
-                return -1.0
+            t_enter = 0.0
+            t_exit = 1e6
         else:
-            # fallback – проверка начального приближения
-            p_init = origin + t_guess * direction
-            r_init = np.sqrt(p_init[1] ** 2 + p_init[2] ** 2)
-            discr_init = 1.0 - (1.0 + k) * (1.0 / R) ** 2 * r_init ** 2
-            if discr_init >= 0.0:
-                sag_init = (1.0 / R * r_init ** 2) / (1.0 + np.sqrt(discr_init))
-                if abs(p_init[0] - sag_init) < 1e-4:
-                    t = t_guess
+            disc_cyl = b_cyl * b_cyl - 4.0 * a_cyl * c_cyl
+            if disc_cyl < 0.0:
+                return -1.0
+            sqrt_disc_cyl = np.sqrt(disc_cyl)
+            t1 = (-b_cyl - sqrt_disc_cyl) / (2.0 * a_cyl)
+            t2 = (-b_cyl + sqrt_disc_cyl) / (2.0 * a_cyl)
+            t1, t2 = min(t1, t2), max(t1, t2)
+            if t2 <= 1e-6:
+                return -1.0
+            if t1 <= 1e-6:
+                t_enter = 0.0
+                t_exit = t2
+            else:
+                t_enter = t1
+                t_exit = t2
+
+        # Ограничение t_exit по продольной координате sag_max
+        if t_exit > 1e5:
+            if sag_max > 0.0:
+                if direction[0] > 0:
+                    t_exit = (sag_max - origin[0]) / direction[0]
+                elif direction[0] < 0:
+                    t_exit = (0.0 - origin[0]) / direction[0]
+                else:
+                    return -1.0
+            elif sag_max < 0.0:
+                if direction[0] < 0:
+                    t_exit = (sag_max - origin[0]) / direction[0]
+                elif direction[0] > 0:
+                    t_exit = (0.0 - origin[0]) / direction[0]
                 else:
                     return -1.0
             else:
                 return -1.0
 
-        p_final = origin + t * direction
-        if p_final[1] ** 2 + p_final[2] ** 2 > edge_radius ** 2:
-            return -1.0
-        return t
+        # Функция F(t) = x(t) - sag(r(t))
+        # Используем глобальную _sag_numba
+        F = lambda t: (origin[0] + t * direction[0] -
+                       _sag_numba(
+                           np.sqrt((origin[1] + t * direction[1]) ** 2 + (origin[2] + t * direction[2]) ** 2),
+                           radius, k, coeffs))
 
-    def intersect(self, ray: Ray) -> Optional[float]:
-        # Переводим луч в локальные координаты
-        origin_loc = self._world_to_local(ray.origin)
-        dir_loc = self._rot_world_to_local @ ray.direction
-        # Вызываем ускоренную функцию
-        t = self._intersect_numba(origin_loc.astype(np.float64),
-                                  dir_loc.astype(np.float64),
-                                  self.radius, self.k,
-                                  np.array(self.aspheric_coeffs, dtype=np.float64),
-                                  self.edge_radius)
-        if t < 0.0:
-            return None
-        return float(t)
+        F_enter = F(t_enter)
+        F_exit = F(t_exit)
+
+        t_root = -1.0
+        if abs(F_enter) < 1e-9:
+            t_root = t_enter
+        elif abs(F_exit) < 1e-9:
+            t_root = t_exit
+        elif F_enter * F_exit < 0.0:
+            lo, hi = t_enter, t_exit
+            flo, fhi = F_enter, F_exit
+            for _ in range(50):
+                mid = (lo + hi) * 0.5
+                fmid = F(mid)
+                if abs(fmid) < 1e-9 or (hi - lo) < 1e-12:
+                    t_root = mid
+                    break
+                if flo * fmid < 0.0:
+                    hi = mid
+                    fhi = fmid
+                else:
+                    lo = mid
+                    flo = fmid
+            else:
+                t_root = (lo + hi) * 0.5
+        else:
+            return -1.0
+
+        # Проверка апертуры и продольного диапазона
+        p_final = origin + t_root * direction
+        r_final = np.sqrt(p_final[1] ** 2 + p_final[2] ** 2)
+        if r_final > edge_radius + 1e-6:
+            return -1.0
+        if sag_max > 0.0 and not (0.0 <= p_final[0] <= sag_max + 1e-6):
+            return -1.0
+        if sag_max < 0.0 and not (sag_max - 1e-6 <= p_final[0] <= 0.0):
+            return -1.0
+        return t_root
 
     def get_normal(self, point: np.ndarray) -> np.ndarray:
         p_loc = self._world_to_local(point)

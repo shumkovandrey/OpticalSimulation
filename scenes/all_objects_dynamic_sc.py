@@ -22,9 +22,9 @@ global_interaction = True
 state = {'paused': False}
 
 # --- Настройки лучей (изменяемые стрелками) ---
-ray_count = 5
+ray_count = 1
 ray_spacing = 1.0
-ray_count_min, ray_count_max = 1, 100
+ray_count_min, ray_count_max = 1, 300
 spacing_min, spacing_max = 0.1, 5.0
 
 # Сохраняем базовые параметры для каждого объекта (для перегенерации)
@@ -60,12 +60,12 @@ def create_scene():
     )
     lens1 = UniversalLens(
         origin=[0, 10, 0], rotation_degrees=(0, 0, 0),
-        R1=10.0, R2=10.0, thickness=3, edge_radius=3.5, n=1.5,
+        R1=10.0, R2=10.0, thickness=1, edge_radius=3.5, n=1.5,
         refraction_range=(0, 10000), reflection_range=(0, 10000)
     )
     lens2 = UniversalLens(
         origin=[0, 25, 0], rotation_degrees=(0, 0, 0),
-        R1=15.0, R2=-30.0, thickness=0.8, edge_radius=4.0, n=1.6,
+        R1=4.0, R2=4.0, thickness=8, edge_radius=4.0, n=1.6,
         refraction_range=(0, 10000), reflection_range=(0, 10000)
     )
     parabolic_mirror = AsphericSurface(
@@ -126,7 +126,7 @@ def create_scene():
             y0, dy = 0.0, 2.0
 
         ray_list = []
-        for y_shift in np.linspace(-dy, dy, 4):
+        for y_shift in np.linspace(-dy, dy, 1):
             ray = Ray(
                 origin=[-15, y0 + y_shift, 0],
                 direction=[1, 0, 0],
@@ -257,7 +257,7 @@ for name, ray_list in rays_dict.items():
 
 
 # Видимость объектов (по умолчанию все видны)
-object_visible = {name: True for _, name, _ in objects}
+object_visible = {name: False for _, name, _ in objects}
 
 # ---------------------- ВИЗУАЛИЗАЦИЯ ----------------------
 # Строим акторы
@@ -332,13 +332,17 @@ def on_key_press(interactor, event):
         global_interaction = not global_interaction
     elif key == 'n':
         if isinstance(tracer.mode, SimpleMode):
-            tracer.mode = TreeMode(max_depth=10, min_energy=0.001, offset_distance=0.1, energy_color_type=0)
+            tracer.mode = TreeMode(max_depth=10, min_energy=0.001, offset_distance=0.001, energy_color_type=0)
         else:
-            tracer.mode = SimpleMode(max_bounces=10, offset_distance=0.1, energy_color_type=0)
+            tracer.mode = SimpleMode(max_bounces=10, offset_distance=0.001, energy_color_type=0)
         tracer.cloud.update([], energy_color_type=tracer.mode.energy_color_type)  # очистка
     elif key == 'x':
         global need_reset
         need_reset = True
+    elif key == 'z':
+        print("center зеркала:", objects[4][0].center, ", lens_axis зеркала:", objects[4][0].lens_axis)
+        print("origin луча:", rays_dict[objects[4][1]][0].origin, ", direction луча:", rays_dict[objects[4][1]][0].direction)
+        print("t:", objects[4][0].intersect(rays_dict[objects[4][1]][0]))
     elif key.isdigit() and 1 <= int(key) <= len(objects):
         # Защита от автоповтора – переключаем только при первом нажатии
         if not digit_pressed[key]:
@@ -500,7 +504,7 @@ while plotter.render:
         dt = 0.1
 
     move_speed = 5.0
-    rot_speed = 30.0
+    rot_speed = 15.0
 
     # Перемещение объектов (WASD)
     delta_obj = np.array([0.0, 0.0, 0.0])
