@@ -1049,6 +1049,68 @@ class SphereSurface:
         return in_ref or in_refr or in_abs
 
 
+class CylinderSurface:
+    """Боковая цилиндрическая поверхность (ободок линзы)."""
+
+    def __init__(self, center, axis_dir, radius, half_length,
+                 n_inside=1.0,
+                 reflection_range=None, refraction_range=None,
+                 absorption_range=None):
+        self.center = np.array(center, dtype=float)
+        self.axis_dir = np.array(axis_dir, dtype=float)
+        self.axis_dir /= np.linalg.norm(self.axis_dir)
+        self.radius = radius
+        self.half_length = half_length
+        self.n = n_inside
+        self.reflection_range = reflection_range
+        self.refraction_range = refraction_range
+        self.absorption_range = absorption_range
+
+    def intersect(self, ray: Ray) -> Optional[float]:
+        t = cylinder_intersect(ray.origin, ray.direction,
+                               self.center, self.axis_dir,
+                               self.radius, self.half_length)
+        if t < 0.0:
+            return None
+        return t
+
+    def get_normal(self, point):
+        # Нормаль направлена радиально наружу от оси
+        vec = point - self.center
+        proj = np.dot(vec, self.axis_dir)
+        closest_on_axis = self.center + proj * self.axis_dir
+        radial = point - closest_on_axis
+        norm = np.linalg.norm(radial)
+        if norm < 1e-12:
+            return self.axis_dir  # редкий случай, точка на оси
+        return radial / norm
+
+    def get_mesh(self) -> pv.PolyData:
+        # Боковая поверхность цилиндра без торцевых крышек
+        cylinder = pv.Cylinder(center=self.center, direction=self.axis_dir,
+                               radius=self.radius, height=2 * self.half_length,
+                               capping=False, resolution=64)
+        return cylinder
+
+    def rotate(self, angles_deg):
+        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        self.center = rot @ self.center
+        self.axis_dir = rot @ self.axis_dir
+
+    def translate(self, vec):
+        self.center += np.asarray(vec)
+
+    def is_active(self, wavelength):
+        if wavelength is None:
+            return True
+        if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
+            return False
+        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        return in_ref or in_refr or in_abs
+
+
 class MeshSurface:
     """
     Произвольная треугольная поверхность, загружаемая из файла или создаваемая из меша.
@@ -1140,6 +1202,7 @@ class MeshSurface:
     def translate(self, vec):
         self.mesh.apply_translation(vec)
         self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
+
 
 class AsphericSurface:
     def __init__(self, center, radius, conic_constant=0.0, aspheric_coeffs=None,
@@ -1241,67 +1304,56 @@ class AsphericSurface:
     @staticmethod
     @njit
     def _intersect_numba(origin, direction, radius, k, coeffs, edge_radius, sag_max):
-        # 1. Пересечение с бесконечным цилиндром
         oy, oz = origin[1], origin[2]
         dy, dz = direction[1], direction[2]
         a_cyl = dy * dy + dz * dz
+
+        # 1. Луч строго параллелен локальной оси X (dy=0, dz=0)
+        if a_cyl < 1e-12:
+            r0 = np.sqrt(oy * oy + oz * oz)
+            if r0 > edge_radius + 1e-6:
+                return -1.0  # луч не попадает в апертуру
+            if abs(direction[0]) < 1e-12:
+                return -1.0  # луч перпендикулярен оси - пересечения нет
+            # Явное решение: t = (sag(r0) - x0) / dx
+            sag0 = _sag_numba(r0, radius, k, coeffs)
+            t = (sag0 - origin[0]) / direction[0]
+            if t <= 1e-6:
+                return -1.0
+            return t
+
+        # 2. Общий случай: находим интервал пересечения с апертурой
         b_cyl = 2.0 * (oy * dy + oz * dz)
         c_cyl = oy * oy + oz * oz - edge_radius * edge_radius
+        disc_cyl = b_cyl * b_cyl - 4.0 * a_cyl * c_cyl
+        if disc_cyl < 0.0:
+            return -1.0
 
-        t_enter = -1.0
-        t_exit = -1.0
-        if a_cyl < 1e-12:
-            if c_cyl > 0.0:
-                return -1.0
-            t_enter = 0.0
-            t_exit = 1e6
-        else:
-            disc_cyl = b_cyl * b_cyl - 4.0 * a_cyl * c_cyl
-            if disc_cyl < 0.0:
-                return -1.0
-            sqrt_disc_cyl = np.sqrt(disc_cyl)
-            t1 = (-b_cyl - sqrt_disc_cyl) / (2.0 * a_cyl)
-            t2 = (-b_cyl + sqrt_disc_cyl) / (2.0 * a_cyl)
-            t1, t2 = min(t1, t2), max(t1, t2)
-            if t2 <= 1e-6:
-                return -1.0
-            if t1 <= 1e-6:
-                t_enter = 0.0
-                t_exit = t2
-            else:
-                t_enter = t1
-                t_exit = t2
+        sqrt_disc_cyl = np.sqrt(disc_cyl)
+        t1 = (-b_cyl - sqrt_disc_cyl) / (2.0 * a_cyl)
+        t2 = (-b_cyl + sqrt_disc_cyl) / (2.0 * a_cyl)
+        t1, t2 = min(t1, t2), max(t1, t2)
 
-        # Ограничение t_exit по продольной координате sag_max
-        if t_exit > 1e5:
-            if sag_max > 0.0:
-                if direction[0] > 0:
-                    t_exit = (sag_max - origin[0]) / direction[0]
-                elif direction[0] < 0:
-                    t_exit = (0.0 - origin[0]) / direction[0]
-                else:
-                    return -1.0
-            elif sag_max < 0.0:
-                if direction[0] < 0:
-                    t_exit = (sag_max - origin[0]) / direction[0]
-                elif direction[0] > 0:
-                    t_exit = (0.0 - origin[0]) / direction[0]
-                else:
-                    return -1.0
-            else:
-                return -1.0
+        if t2 <= 1e-6:
+            return -1.0
 
-        # Функция F(t) = x(t) - sag(r(t))
-        # Используем глобальную _sag_numba
-        F = lambda t: (origin[0] + t * direction[0] -
-                       _sag_numba(
-                           np.sqrt((origin[1] + t * direction[1]) ** 2 + (origin[2] + t * direction[2]) ** 2),
-                           radius, k, coeffs))
+        t_enter = max(0.0, t1)
+        t_exit = t2
+        if t_enter > t_exit:
+            return -1.0
 
-        F_enter = F(t_enter)
-        F_exit = F(t_exit)
+        # Определяем значения функции F(t) на границах
+        x_enter = origin[0] + t_enter * direction[0]
+        x_exit = origin[0] + t_exit * direction[0]
+        r_enter = np.sqrt((origin[1] + t_enter * dy) ** 2 + (origin[2] + t_enter * dz) ** 2)
+        r_exit = np.sqrt((origin[1] + t_exit * dy) ** 2 + (origin[2] + t_exit * dz) ** 2)
+
+        F_enter = x_enter - _sag_numba(r_enter, radius, k, coeffs)
+        F_exit = x_exit - _sag_numba(r_exit, radius, k, coeffs)
 
         t_root = -1.0
+
+        # Поиск корня методом бисекции
         if abs(F_enter) < 1e-9:
             t_root = t_enter
         elif abs(F_exit) < 1e-9:
@@ -1309,9 +1361,11 @@ class AsphericSurface:
         elif F_enter * F_exit < 0.0:
             lo, hi = t_enter, t_exit
             flo, fhi = F_enter, F_exit
-            for _ in range(50):
+            for _ in range(60):
                 mid = (lo + hi) * 0.5
-                fmid = F(mid)
+                x_mid = origin[0] + mid * direction[0]
+                r_mid = np.sqrt((origin[1] + mid * dy) ** 2 + (origin[2] + mid * dz) ** 2)
+                fmid = x_mid - _sag_numba(r_mid, radius, k, coeffs)
                 if abs(fmid) < 1e-9 or (hi - lo) < 1e-12:
                     t_root = mid
                     break
@@ -1321,20 +1375,59 @@ class AsphericSurface:
                 else:
                     lo = mid
                     flo = fmid
-            else:
+            if t_root < 0.0:
                 t_root = (lo + hi) * 0.5
         else:
+            # 3. Защита от ошибок округления на краю апертуры (edge_radius)
+            # Расширяем диапазон на 0.01 и пробуем снова
+            t_lo_try = max(0.0, t_enter - 0.01)
+            t_hi_try = t_exit + 0.01
+
+            x_lo = origin[0] + t_lo_try * direction[0]
+            r_lo = np.sqrt((origin[1] + t_lo_try * dy) ** 2 + (origin[2] + t_lo_try * dz) ** 2)
+            F_lo = x_lo - _sag_numba(r_lo, radius, k, coeffs)
+
+            x_hi = origin[0] + t_hi_try * direction[0]
+            r_hi = np.sqrt((origin[1] + t_hi_try * dy) ** 2 + (origin[2] + t_hi_try * dz) ** 2)
+            F_hi = x_hi - _sag_numba(r_hi, radius, k, coeffs)
+
+            if F_lo * F_hi < 0.0:
+                lo, hi = t_lo_try, t_hi_try
+                flo, fhi = F_lo, F_hi
+                for _ in range(60):
+                    mid = (lo + hi) * 0.5
+                    x_mid = origin[0] + mid * direction[0]
+                    r_mid = np.sqrt((origin[1] + mid * dy) ** 2 + (origin[2] + mid * dz) ** 2)
+                    fmid = x_mid - _sag_numba(r_mid, radius, k, coeffs)
+                    if abs(fmid) < 1e-9 or (hi - lo) < 1e-12:
+                        t_root = mid
+                        break
+                    if flo * fmid < 0.0:
+                        hi = mid
+                        fhi = fmid
+                    else:
+                        lo = mid
+                        flo = fmid
+                if t_root < 0.0:
+                    t_root = (lo + hi) * 0.5
+            else:
+                return -1.0
+
+        if t_root < 0.0:
             return -1.0
 
-        # Проверка апертуры и продольного диапазона
+        # 4. Финальная проверка
         p_final = origin + t_root * direction
         r_final = np.sqrt(p_final[1] ** 2 + p_final[2] ** 2)
         if r_final > edge_radius + 1e-6:
             return -1.0
-        if sag_max > 0.0 and not (0.0 <= p_final[0] <= sag_max + 1e-6):
+
+        # Защита от пересечения с обратной стороной (допускаем погрешность 1e-6)
+        sag_min = min(0.0, sag_max)
+        sag_max_val = max(0.0, sag_max)
+        if p_final[0] < sag_min - 1e-6 or p_final[0] > sag_max_val + 1e-6:
             return -1.0
-        if sag_max < 0.0 and not (sag_max - 1e-6 <= p_final[0] <= 0.0):
-            return -1.0
+
         return t_root
 
     def get_normal(self, point: np.ndarray) -> np.ndarray:
@@ -1524,6 +1617,18 @@ class UniversalLens:
                 lens_axis=self.axis_dir  # ось направлена назад (против хода лучей)
             )
 
+        # НОВОЕ: боковая цилиндрическая поверхность
+        self.cylinder = CylinderSurface(
+            center=self.origin,
+            axis_dir=self.axis_dir,
+            radius=self.edge_radius,
+            half_length=half,
+            n_inside=self.n,
+            reflection_range=self.reflection_range,
+            refraction_range=self.refraction_range,
+            absorption_range=self.absorption_range
+        )
+
     def _calc_optical_params(self):
         # (оставьте ваш существующий расчёт f_dist)
         r1_val = self.R1 if self.R1 else 1e10
@@ -1533,17 +1638,25 @@ class UniversalLens:
         self.f_dist = 1 / inv_f if abs(inv_f) > 1e-10 else float('inf')
 
     def intersect(self, ray: Ray) -> Optional[float]:
-        """Возвращает ближайшее пересечение с любой из двух поверхностей."""
-        t1 = self.front.intersect(ray)
-        t2 = self.back.intersect(ray)
+        t_front = self.front.intersect(ray)
+        t_back = self.back.intersect(ray)
+        t_cyl = self.cylinder.intersect(ray)
+
         self._last_hit_surface = None
         best_t = None
-        if t1 is not None:
-            best_t = t1
+
+        if t_front is not None:
+            best_t = t_front
             self._last_hit_surface = self.front
-        if t2 is not None and (best_t is None or t2 < best_t):
-            best_t = t2
+
+        if t_back is not None and (best_t is None or t_back < best_t):
+            best_t = t_back
             self._last_hit_surface = self.back
+
+        if t_cyl is not None and (best_t is None or t_cyl < best_t):
+            best_t = t_cyl
+            self._last_hit_surface = self.cylinder
+
         return best_t
 
     def get_normal(self, point: np.ndarray) -> np.ndarray:
@@ -1554,8 +1667,9 @@ class UniversalLens:
         return self.front.get_normal(point)
 
     def is_active(self, wavelength) -> bool:
-        """Линза активна, если хотя бы одна поверхность активна."""
-        return self.front.is_active(wavelength) or self.back.is_active(wavelength)
+        return (self.front.is_active(wavelength) or
+                self.back.is_active(wavelength) or
+                self.cylinder.is_active(wavelength))
 
     def rotate(self, angles_deg):
         rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
@@ -1569,7 +1683,7 @@ class UniversalLens:
         self._create_surfaces()
 
     def get_surfaces(self) -> List:
-        return [self.front, self.back]
+        return [self.front, self.back, self.cylinder]
 
     def get_mesh(self) -> pv.PolyData:
         """Генерирует полигональную модель линзы."""

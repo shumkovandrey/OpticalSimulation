@@ -60,7 +60,7 @@ def create_scene():
     )
     lens1 = UniversalLens(
         origin=[0, 10, 0], rotation_degrees=(0, 0, 0),
-        R1=10.0, R2=10.0, thickness=1, edge_radius=3.5, n=1.5,
+        R1=10.0, R2=10.0, thickness=3, edge_radius=3.5, n=1.5,
         refraction_range=(0, 10000), reflection_range=(0, 10000)
     )
     lens2 = UniversalLens(

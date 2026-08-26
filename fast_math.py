@@ -119,3 +119,43 @@ def sphere_intersect(ray_origin, ray_dir, center, radius, lens_origin, lens_axis
             if best_t < 0.0 or t < best_t:
                 best_t = t
     return best_t
+
+
+@njit
+def cylinder_intersect(ray_origin, ray_dir, center, axis, radius, half_length):
+    """
+    Пересечение луча с боковой поверхностью цилиндра.
+    Цилиндр задан центром основания на оси, направлением оси, радиусом и полудлиной.
+    Возвращает наименьшее положительное t или -1.
+    """
+    oc = ray_origin - center
+    # Проекция направления на плоскость, перпендикулярную оси
+    a_dir = ray_dir - np.dot(ray_dir, axis) * axis
+    a_oc = oc - np.dot(oc, axis) * axis
+
+    A = np.dot(a_dir, a_dir)
+    if A < 1e-12:
+        # Луч параллелен оси цилиндра — пересечения с боковой поверхностью нет
+        return -1.0
+
+    B = 2.0 * np.dot(a_dir, a_oc)
+    C = np.dot(a_oc, a_oc) - radius * radius
+    disc = B * B - 4.0 * A * C
+    if disc < 0.0:
+        return -1.0
+
+    sqrt_disc = np.sqrt(disc)
+    t1 = (-B - sqrt_disc) / (2.0 * A)
+    t2 = (-B + sqrt_disc) / (2.0 * A)
+
+    best_t = -1.0
+    for t in (t1, t2):
+        if t <= 1e-6:
+            continue
+        p = ray_origin + t * ray_dir
+        # Проверка, что точка лежит в пределах полудлины вдоль оси
+        proj = np.dot(p - center, axis)
+        if abs(proj) <= half_length + 1e-6:
+            if best_t < 0.0 or t < best_t:
+                best_t = t
+    return best_t
