@@ -28,8 +28,7 @@ hyperbolic_actor = plotter.add_mesh(hyperbolic_lens.get_mesh(), color="lightblue
 # elliptical_actor = plotter.add_mesh(elliptical_mirror.get_mesh(), color="gold", pbr=True, metallic=0.7)
 
 # Трассировщик
-tracer = RayTracer(plotter, mode='tree', max_depth=5, min_energy=0.01,
-                   offset_distance=0.3, energy_color_type=2, default_color="yellow")
+tracer = RayTracer(plotter, mode='tree')
 
 # Анимация
 state = {'paused': False}

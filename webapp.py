@@ -1,8 +1,3 @@
-"""
-Оптический симулятор с GUI на Trame.
-Интеграция основной программы (RayTracer, UniversalLens, BeamEmitter) с веб-интерфейсом.
-"""
-
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
 
@@ -11,43 +6,35 @@ import pyvista as pv
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as vuetify
-from trame.widgets import vtk as trame_vtk
+from pyvista.trame.ui import plotter_ui   # серверный рендеринг
 from scipy.spatial.transform import Rotation as R
 
-# Импорт из основной программы (файлы должны быть в той же директории)
 from main import (
-    RayTracer, RayPool, RayCloud, UniversalLens, BeamEmitter,
-    PlaneSurface, SphereSurface, RAY_INFINITY_DISTANCE
+    RayTracer, RayPool, UniversalLens, BeamEmitter, RAY_INFINITY_DISTANCE, Ray
 )
-
-# =============================================================================
-# КОНТРОЛЛЕР ПРИЛОЖЕНИЯ
-# =============================================================================
 
 class OpticsAppController:
     def __init__(self, server):
         self.server = server
         self.state = server.state
         self.ctrl = server.controller
+        self.manual_rays = []
 
-        # Инициализация 3D-плоттера
         self.plotter = pv.Plotter(off_screen=True)
         self.plotter.set_background("#1a1a2e")
         self.plotter.add_axes(color="white")
         self.plotter.enable_parallel_projection()
         self.plotter.view_isometric()
 
-        # Пул лучей для производительности
-        self.pool = RayPool(initial_size=200)
-
-        # Хранилище объектов сцены
+        self.pool = RayPool(initial_size=0)
         self.scene_objects = []
         self.object_counter = 0
+        self.initializing = True
+        self._updating = False
 
-        # RayTracer будет пересоздаваться при обновлении сцены
         self.ray_tracer = None
 
-        # Реактивное состояние Trame
+        # Состояние
         self.state.selected_object_id = None
         self.state.selected_object_type = None
         self.state.pick_coords = None
@@ -71,94 +58,99 @@ class OpticsAppController:
         self.state.param_max_offset = 0.5
         self.state.param_wavelength = 550.0
 
-        # Регистрация обработчиков
+        # Обработчики
         self.state.change("selected_object_id")(self.on_object_selected)
         self.state.change("pick_coords")(self.on_pick_coords)
         self.state.change("trace_mode")(self.on_trace_mode_changed)
 
-        # Создание начальной сцены (без вызова update_scene, он будет вызван после связывания view)
         self.create_initial_objects()
+        self.initializing = False
 
-    # -------------------------------------------------------------------------
-    # СОЗДАНИЕ И УПРАВЛЕНИЕ ОБЪЕКТАМИ
-    # -------------------------------------------------------------------------
+
+
+    # ---------------------------------------------------------------
+    # Создание / удаление
+    # ---------------------------------------------------------------
     def create_initial_objects(self):
-        """Создаёт две линзы и источник лучей."""
-        self.add_object(
-            obj_type="lens",
-            name="Линза 1",
-            params={
-                "origin": (-2.0, 0.0, 0.0),
-                "rotation": (0, 0, 0),
-                "R1": 5.0,
-                "R2": -5.0,
-                "thickness": 0.5,
-                "edge_radius": 1.0,
-                "n": 1.5,
-                "reflection_range": None,
-                "refraction_range": (0, np.inf),
-                "absorption_range": None
-            }
-        )
-        self.add_object(
-            obj_type="lens",
-            name="Линза 2",
-            params={
-                "origin": (2.0, 0.0, 0.0),
-                "rotation": (0, 15, 0),
-                "R1": 5.0,
-                "R2": -5.0,
-                "thickness": 0.5,
-                "edge_radius": 1.0,
-                "n": 1.5,
-                "reflection_range": None,
-                "refraction_range": (0, np.inf),
-                "absorption_range": None
-            }
-        )
-        self.add_object(
-            obj_type="emitter",
-            name="Источник",
-            params={
-                "origin": (-5.0, 0.0, 0.0),
-                "rotation": (0, 0, 0),
-                "num_rays": 5,
-                "min_offset": -0.5,
-                "max_offset": 0.5,
-                "wavelength": 550.0,
-                "color": "yellow",
-                "energy": 1.0,
-                "current_n": 1.0
-            }
-        )
-        # Выбираем первый объект
+        self.add_object("lens", "Линза 1", {
+            "origin": (-2.0, 0.0, 0.0),
+            "rotation": (0, 0, 0),
+            "R1": 2, "R2": 3, "thickness": 0.5,
+            "edge_radius": 1.0, "n": 1.5,
+            "reflection_range": None,
+            "refraction_range": (0, np.inf),
+            "absorption_range": None
+        })
+        self.add_object("lens", "Линза 2", {
+            "origin": (2.0, 0.0, 0.0),
+            "rotation": (0, 0, 0),
+            "R1": -3.0, "R2": 2.0, "thickness": 0.5,
+            "edge_radius": 1.0, "n": 1.5,
+            "reflection_range": None,
+            "refraction_range": (0, np.inf),
+            "absorption_range": None
+        })
+        # self.add_object("emitter", "Источник", {
+        #     "origin": (-5.0, 0.0, 0.0),
+        #     "rotation": (0, 0, 0),
+        #     "num_rays": 5, "min_offset": -0.5, "max_offset": 0.5,
+        #     "wavelength": 550.0, "color": "yellow",
+        #     "energy": 1.0, "current_n": 1.0
+        # })
+        for y in np.linspace(-0.5, 0.5, 5):
+            ray = Ray(origin=(-5.0, y, 0.0), direction=(1, 0, 0),
+                      energy=1.0, color="yellow", wavelength=550)
+            self.manual_rays.append(ray)
         if self.scene_objects:
             self.state.selected_object_id = self.scene_objects[0]["id"]
 
     def add_object(self, obj_type, name, params):
-        """Добавляет объект в сцену."""
         self.object_counter += 1
         obj_id = f"obj_{self.object_counter}"
-        obj_entry = {
+        instance = self._create_instance(obj_type, params)
+        self.scene_objects.append({
             "id": obj_id,
             "type": obj_type,
             "name": name,
             "params": params,
-            "instance": None
-        }
-        instance = self._create_instance(obj_type, params)
-        obj_entry["instance"] = instance
-        self.scene_objects.append(obj_entry)
-        return obj_entry
+            "instance": instance
+        })
+        if not self.initializing:
+            self.state.selected_object_id = obj_id
+            self.update_scene()
+        return obj_id
+
+    def add_lens_click(self):
+        self.add_object("lens", f"Линза {len(self.scene_objects)+1}", {
+            "origin": (0, 0, 0),
+            "rotation": (0, 0, 0),
+            "R1": 5.0, "R2": 5.0, "thickness": 0.5,
+            "edge_radius": 1.0, "n": 1.5,
+            "reflection_range": None,
+            "refraction_range": (0, np.inf),
+            "absorption_range": None
+        })
+
+    def add_emitter_click(self):
+        self.add_object("emitter", f"Источник {len(self.scene_objects)+1}", {
+            "origin": (0, 0, 0),
+            "rotation": (0, 0, 0),
+            "num_rays": 5, "min_offset": -0.5, "max_offset": 0.5,
+            "wavelength": 550.0, "color": "yellow",
+            "energy": 1.0, "current_n": 1.0
+        })
+
+    def remove_object(self, obj_id):
+        self.scene_objects = [o for o in self.scene_objects if o["id"] != obj_id]
+        if self.state.selected_object_id == obj_id:
+            self.state.selected_object_id = self.scene_objects[0]["id"] if self.scene_objects else None
+        self.update_scene()
 
     def _create_instance(self, obj_type, params):
-        """Создаёт экземпляр класса из основной программы на основе параметров."""
         if obj_type == "lens":
-            rot = params.get("rotation", (0, 0, 0))
-            origin = params.get("origin", (0, 0, 0))
             return UniversalLens(
-                origin=origin,
-                rotation_degrees=rot,
+                origin=params.get("origin", (0,0,0)),
+                rotation_degrees=params.get("rotation", (0,0,0)),
                 R1=params.get("R1"),
                 R2=params.get("R2"),
                 thickness=params.get("thickness", 0.5),
@@ -169,12 +161,10 @@ class OpticsAppController:
                 absorption_range=params.get("absorption_range")
             )
         elif obj_type == "emitter":
-            rot = params.get("rotation", (0, 0, 0))
-            origin = params.get("origin", (0, 0, 0))
-            direction = np.array([1.0, 0.0, 0.0])
-            direction = R.from_euler('xyz', rot, degrees=True).apply(direction)
+            rot = params.get("rotation", (0,0,0))
+            direction = R.from_euler('xyz', rot, degrees=True).apply([1,0,0])
             return BeamEmitter(
-                origin=origin,
+                origin=params.get("origin", (0,0,0)),
                 direction=direction,
                 num_rays=params.get("num_rays", 5),
                 min_offset=params.get("min_offset", -0.5),
@@ -186,250 +176,234 @@ class OpticsAppController:
                 pool=self.pool
             )
         else:
-            raise ValueError(f"Неизвестный тип объекта: {obj_type}")
+            raise ValueError(f"Неизвестный тип: {obj_type}")
 
-    def remove_object(self, obj_id):
-        """Удаляет объект из сцены."""
-        self.scene_objects = [obj for obj in self.scene_objects if obj["id"] != obj_id]
-        if self.state.selected_object_id == obj_id:
-            self.state.selected_object_id = self.scene_objects[0]["id"] if self.scene_objects else None
-        self.update_scene()
-
-    # -------------------------------------------------------------------------
-    # ОБНОВЛЕНИЕ СЦЕНЫ
-    # -------------------------------------------------------------------------
+    # ---------------------------------------------------------------
+    # Обновление сцены (серверный рендеринг)
+    # ---------------------------------------------------------------
     def update_scene(self):
-        """Полная перестройка сцены: очищает plotter, пересоздаёт RayTracer, добавляет объекты и лучи."""
-        # Очистка старой сцены
-        self.plotter.clear()
-        self.plotter.add_axes(color="white")
-        self.plotter.set_background("#1a1a2e")
-        self.plotter.enable_parallel_projection()
-        self.plotter.view_isometric()
+        if self._updating:
+            return
+        self._updating = True
+        try:
+            # 1. Полная очистка
+            self.plotter.clear()
+            self.plotter.add_axes(color="white")
+            self.plotter.set_background("#1a1a2e")
+            self.plotter.enable_parallel_projection()
+            self.plotter.view_isometric()
 
-        # Создаём новый RayTracer
-        self.ray_tracer = RayTracer(
-            self.plotter,
-            mode=self.state.trace_mode,
-            pool=self.pool,
-            line_width=2.0,
-            min_alpha=0.05,
-            gamma=0.3
-        )
-        self.ray_tracer.mode.energy_color_type = self.state.energy_color_type
+            # 2. Добавляем меши объектов (линзы, стрелки источников)
+            for obj_entry in self.scene_objects:
+                instance = obj_entry["instance"]
+                if isinstance(instance, UniversalLens):
+                    self.plotter.add_mesh(
+                        instance.get_mesh(),
+                        color="cyan", opacity=0.5, smooth_shading=True,
+                        pickable=True, name=obj_entry["id"]
+                    )
+                elif isinstance(instance, BeamEmitter):
+                    # Только стрелку, без генерации лучей
+                    self.plotter.add_mesh(
+                        instance.get_mesh(),
+                        color="green", pickable=True, name=obj_entry["id"]
+                    )
+                else:
+                    self.plotter.add_mesh(
+                        instance.get_mesh(),
+                        color="gray", opacity=0.7, pickable=True,
+                        name=obj_entry["id"]
+                    )
 
-        # Добавляем все объекты в RayTracer и отображаем их меши
-        for obj_entry in self.scene_objects:
-            instance = obj_entry["instance"]
-            if isinstance(instance, UniversalLens):
-                # Линзы добавляются как набор поверхностей
-                for surf in instance.get_surfaces():
-                    self.ray_tracer.add_elements(surf)
-                # Визуализация линзы
-                mesh = instance.get_mesh()
-                actor = self.plotter.add_mesh(
-                    mesh,
-                    color="cyan",
-                    opacity=0.5,
-                    smooth_shading=True,
-                    pickable=True,
-                    name=obj_entry["id"]
+            # 3. Создаём RayTracer (облако НЕ ИСПОЛЬЗУЕМ)
+            self.ray_tracer = RayTracer(
+                self.plotter,
+                mode="simple",  # SimpleMode для предсказуемости
+                pool=self.pool,
+                line_width=2.0,
+                min_alpha=0.05,
+                gamma=0.3
+            )
+            self.ray_tracer.mode.energy_color_type = 1  # энергия = непрозрачность
+
+            # 4. Добавляем поверхности линз для трассировки
+            for obj_entry in self.scene_objects:
+                instance = obj_entry["instance"]
+                if isinstance(instance, UniversalLens):
+                    for surf in instance.get_surfaces():
+                        self.ray_tracer.add_elements(surf)
+
+            # 5. Добавляем лучи напрямую (без эмиттера!)
+            # Здесь предполагается, что self.manual_rays заполнен в create_initial_objects
+            for ray in self.manual_rays:
+                self.ray_tracer.add_ray(ray)
+
+            # 6. Трассируем
+            segments = self.ray_tracer.trace_all()
+
+            # 7. Рисуем сегменты правильно и быстро без ручной сборки lines
+            if segments:
+                # Собираем массив пар точек (N, 2, 3)
+                segment_pairs = np.array([[seg.start, seg.end] for seg in segments], dtype=np.float32)
+
+                # Изменяем форму в плоский массив точек (2*N, 3)
+                all_points = segment_pairs.reshape(-1, 3)
+
+                # Создаем массив ячеек VTK: для каждого отрезка [2, индекс_старта, индекс_конца]
+                n_segments = len(segments)
+                connectivity = np.empty((n_segments, 3), dtype=np.int64)
+                connectivity[:, 0] = 2
+                connectivity[:, 1] = np.arange(0, 2 * n_segments, 2)
+                connectivity[:, 2] = np.arange(1, 2 * n_segments, 2)
+
+                # Уплощаем массив ячеек, как требует PyVista
+                lines_vtk = connectivity.ravel()
+
+                # Строим чистый меш
+                ray_mesh = pv.PolyData(all_points, lines=lines_vtk)
+
+                # Добавляем на сцену с уникальным именем (исключает дублирование акторов)
+                self.plotter.add_mesh(
+                    ray_mesh,
+                    color="yellow",
+                    line_width=2,
+                    render_lines_as_tubes=False,
+                    name="traced_rays_geometry"  # Имя предотвращает утечки памяти
                 )
-                obj_entry["actor"] = actor
-            elif isinstance(instance, BeamEmitter):
-                # Источник добавляется в эмиттеры RayTracer
-                self.ray_tracer.add_emitter(instance)
-                # Визуализация источника (стрелка)
-                arrow = instance.get_mesh()
-                actor = self.plotter.add_mesh(
-                    arrow,
-                    color="green",
-                    pickable=True,
-                    name=obj_entry["id"]
-                )
-                obj_entry["actor"] = actor
-            else:
-                mesh = instance.get_mesh()
-                actor = self.plotter.add_mesh(
-                    mesh,
-                    color="gray",
-                    opacity=0.7,
-                    pickable=True,
-                    name=obj_entry["id"]
-                )
-                obj_entry["actor"] = actor
 
-        # Запускаем трассировку лучей
-        segments = self.ray_tracer.trace_all()
-        self.ray_tracer.cloud.update(
-            segments,
-            energy_color_type=self.ray_tracer.mode.energy_color_type
-        )
+            # 8. Принудительный рендер
+            self.plotter.render()
 
-        # Обновляем вьюпорт (теперь view_update уже связан)
-        if hasattr(self.ctrl, 'view_update'):
-            self.ctrl.view_update()
+            # 9. Отправка кадра
+            if hasattr(self.ctrl, 'view_update'):
+                self.ctrl.view_update()
 
-    # -------------------------------------------------------------------------
-    # ОБРАБОТЧИКИ СОБЫТИЙ
-    # -------------------------------------------------------------------------
-    def on_object_selected(self, obj_id, **kwargs):
-        if obj_id is None:
+        finally:
+            self._updating = False
+
+    # ---------------------------------------------------------------
+    # Обработчики
+    # ---------------------------------------------------------------
+    def on_object_selected(self, *args, **kwargs):
+        obj_id = args[0] if args else None
+        if not obj_id:
             return
         obj_entry = self._find_object(obj_id)
         if obj_entry:
             self._load_params_to_state(obj_entry)
 
     def _find_object(self, obj_id):
-        for obj in self.scene_objects:
-            if obj["id"] == obj_id:
-                return obj
+        for o in self.scene_objects:
+            if o["id"] == obj_id:
+                return o
         return None
 
     def _load_params_to_state(self, obj_entry):
-        params = obj_entry["params"]
+        p = obj_entry["params"]
         self.state.selected_object_type = obj_entry["type"]
-        origin = params.get("origin", (0, 0, 0))
-        self.state.param_pos_x = float(origin[0])
-        self.state.param_pos_y = float(origin[1])
-        self.state.param_pos_z = float(origin[2])
-        rot = params.get("rotation", (0, 0, 0))
-        self.state.param_rot_x = float(rot[0])
-        self.state.param_rot_y = float(rot[1])
-        self.state.param_rot_z = float(rot[2])
-
+        self.state.param_pos_x = float(p["origin"][0])
+        self.state.param_pos_y = float(p["origin"][1])
+        self.state.param_pos_z = float(p["origin"][2])
+        self.state.param_rot_x = float(p["rotation"][0])
+        self.state.param_rot_y = float(p["rotation"][1])
+        self.state.param_rot_z = float(p["rotation"][2])
         if obj_entry["type"] == "lens":
-            self.state.param_n = float(params.get("n", 1.5))
-            self.state.param_R1 = float(params.get("R1", 5.0))
-            self.state.param_R2 = float(params.get("R2", -5.0))
-            self.state.param_thickness = float(params.get("thickness", 0.5))
-            self.state.param_edge_radius = float(params.get("edge_radius", 1.0))
+            self.state.param_n = float(p.get("n", 1.5))
+            self.state.param_R1 = float(p.get("R1", 5.0))
+            self.state.param_R2 = float(p.get("R2", -5.0))
+            self.state.param_thickness = float(p.get("thickness", 0.5))
+            self.state.param_edge_radius = float(p.get("edge_radius", 1.0))
         elif obj_entry["type"] == "emitter":
-            self.state.param_num_rays = int(params.get("num_rays", 5))
-            self.state.param_min_offset = float(params.get("min_offset", -0.5))
-            self.state.param_max_offset = float(params.get("max_offset", 0.5))
-            self.state.param_wavelength = float(params.get("wavelength", 550.0))
+            self.state.param_num_rays = int(p.get("num_rays", 5))
+            self.state.param_min_offset = float(p.get("min_offset", -0.5))
+            self.state.param_max_offset = float(p.get("max_offset", 0.5))
+            self.state.param_wavelength = float(p.get("wavelength", 550.0))
 
-    def on_pick_coords(self, coords, **kwargs):
-        if coords is None:
-            return
-        try:
-            x, y = coords
-            picked = self.plotter.pick(mouse_x=x, mouse_y=y)
-            if picked is not None and hasattr(picked, "name"):
-                obj_id = picked.name
-                obj_entry = self._find_object(obj_id)
-                if obj_entry:
-                    self.state.selected_object_id = obj_id
-                    self._load_params_to_state(obj_entry)
-        except Exception as e:
-            print(f"Ошибка picking: {e}")
+    def on_pick_coords(self, *args, **kwargs):
+        # Заглушка, при необходимости можно реализовать picking через события PyVista
+        pass
 
-    def on_trace_mode_changed(self, mode, **kwargs):
-        self.update_scene()
+    def on_trace_mode_changed(self, *args, **kwargs):
+        mode = args[0] if args else "tree"
+        if mode != self.state.trace_mode:
+            self.state.trace_mode = mode
+            self.update_scene()
 
-    def update_selected_object(self):
+    def update_selected_object(self, *args, **kwargs):
         obj_entry = self._find_object(self.state.selected_object_id)
-        if obj_entry is None:
+        if not obj_entry:
             return
-        params = obj_entry["params"]
-        params["origin"] = (self.state.param_pos_x, self.state.param_pos_y, self.state.param_pos_z)
-        params["rotation"] = (self.state.param_rot_x, self.state.param_rot_y, self.state.param_rot_z)
-
+        p = obj_entry["params"]
+        p["origin"] = (
+            float(self.state.param_pos_x),
+            float(self.state.param_pos_y),
+            float(self.state.param_pos_z)
+        )
+        p["rotation"] = (
+            float(self.state.param_rot_x),
+            float(self.state.param_rot_y),
+            float(self.state.param_rot_z)
+        )
         if obj_entry["type"] == "lens":
-            params["n"] = self.state.param_n
-            params["R1"] = self.state.param_R1
-            params["R2"] = self.state.param_R2
-            params["thickness"] = self.state.param_thickness
-            params["edge_radius"] = self.state.param_edge_radius
+            p["n"] = float(self.state.param_n)
+            p["R1"] = float(self.state.param_R1)
+            p["R2"] = float(self.state.param_R2)
+            p["thickness"] = float(self.state.param_thickness)
+            p["edge_radius"] = float(self.state.param_edge_radius)
         elif obj_entry["type"] == "emitter":
-            params["num_rays"] = self.state.param_num_rays
-            params["min_offset"] = self.state.param_min_offset
-            params["max_offset"] = self.state.param_max_offset
-            params["wavelength"] = self.state.param_wavelength
-
-        obj_entry["instance"] = self._create_instance(obj_entry["type"], params)
+            p["num_rays"] = int(self.state.param_num_rays)
+            p["min_offset"] = float(self.state.param_min_offset)
+            p["max_offset"] = float(self.state.param_max_offset)
+            p["wavelength"] = float(self.state.param_wavelength)
+        obj_entry["instance"] = self._create_instance(obj_entry["type"], p)
         self.update_scene()
 
     def on_param_change(self, *args, **kwargs):
         self.update_selected_object()
 
-# =============================================================================
-# НАСТРОЙКА TRAME И GUI
-# =============================================================================
-
+# ----------------------------------------------------------------
+# Запуск
+# ----------------------------------------------------------------
 server = get_server()
 server.client_type = "vue3"
 app = OpticsAppController(server)
 
-# Привязываем обработчики к изменению параметров
-for param_name in [
+# Привязка параметров
+for param in [
     "param_pos_x", "param_pos_y", "param_pos_z",
     "param_rot_x", "param_rot_y", "param_rot_z",
     "param_n", "param_R1", "param_R2", "param_thickness",
     "param_edge_radius", "param_num_rays", "param_min_offset",
     "param_max_offset", "param_wavelength"
 ]:
-    server.state.change(param_name)(app.on_param_change)
+    server.state.change(param)(app.on_param_change)
 
+# UI
 with SinglePageLayout(server) as layout:
-    layout.title.set_text("Оптический симулятор")
+    layout.title.set_text("Оптический симулятор (серверный рендеринг)")
 
     with layout.content:
-        with vuetify.VContainer(fluid=True, classes="pa-0 fill-height", style="height: 100vh; overflow: hidden;"):
-            with vuetify.VRow(no_gutters=True, classes="fill-height", style="height: 100%;"):
-                # Левая панель управления
-                with vuetify.VCol(cols=3, classes="pa-4 bg-grey-darken-4",
-                                  style="border-right: 1px solid #444; overflow-y: auto; color: white;"):
+        with vuetify.VContainer(fluid=True, classes="pa-0", style="height: 100vh; overflow: hidden;"):
+            with vuetify.VRow(no_gutters=True, style="height: 100%;"):
+                # Левая панель
+                with vuetify.VCol(
+                    cols=3,
+                    classes="pa-4 bg-grey-darken-4",
+                    style="height: 100%; overflow-y: auto; border-right: 1px solid #444; color: white;"
+                ):
                     vuetify.VCardTitle("Объекты сцены", classes="text-h6 px-0")
 
                     with vuetify.VRow(classes="py-2", no_gutters=True):
-                        vuetify.VBtn(
-                            "Добавить линзу",
-                            color="cyan",
-                            block=True,
-                            click=lambda: app.add_object(
-                                "lens",
-                                f"Линза {len(app.scene_objects)+1}",
-                                {
-                                    "origin": (0, 0, 0),
-                                    "rotation": (0, 0, 0),
-                                    "R1": 5.0,
-                                    "R2": -5.0,
-                                    "thickness": 0.5,
-                                    "edge_radius": 1.0,
-                                    "n": 1.5,
-                                    "reflection_range": None,
-                                    "refraction_range": (0, np.inf),
-                                    "absorption_range": None
-                                }
-                            )
-                        )
-                        vuetify.VBtn(
-                            "Добавить источник",
-                            color="green",
-                            block=True,
-                            class_="mt-2",
-                            click=lambda: app.add_object(
-                                "emitter",
-                                f"Источник {len(app.scene_objects)+1}",
-                                {
-                                    "origin": (0, 0, 0),
-                                    "rotation": (0, 0, 0),
-                                    "num_rays": 5,
-                                    "min_offset": -0.5,
-                                    "max_offset": 0.5,
-                                    "wavelength": 550.0,
-                                    "color": "yellow",
-                                    "energy": 1.0,
-                                    "current_n": 1.0
-                                }
-                            )
-                        )
+                        vuetify.VBtn("Добавить линзу", color="cyan", block=True,
+                                     click=app.add_lens_click)
+                        vuetify.VBtn("Добавить источник", color="green", block=True,
+                                     class_="mt-2", click=app.add_emitter_click)
 
                     vuetify.VDivider(class_="my-4")
 
                     # Список объектов
+                    vuetify.VCard(flat=True, color="transparent", max_height="200",
+                                  style="overflow-y: auto;")
                     with vuetify.VList(dense=True, nav=True):
                         for obj in app.scene_objects:
                             with vuetify.VListItem(
@@ -441,11 +415,8 @@ with SinglePageLayout(server) as layout:
                                 vuetify.VIcon("mdi-cube-outline", small=True, class_="mr-2")
                                 vuetify.VListItemTitle(obj["name"])
                                 vuetify.VBtn(
-                                    icon="mdi-delete",
-                                    x_small=True,
-                                    variant="text",
-                                    color="red",
-                                    click=f"remove_object('{obj['id']}')"
+                                    icon="mdi-delete", x_small=True, variant="text",
+                                    color="red", click=(app.remove_object, obj["id"])
                                 )
 
                     vuetify.VDivider(class_="my-4")
@@ -455,132 +426,103 @@ with SinglePageLayout(server) as layout:
                         classes="text-subtitle-1 px-0 text-cyan-lighten-2"
                     )
 
-                    vuetify.VListSubheader("Позиция (X, Y, Z)", class_="px-0")
-                    with vuetify.VRow(no_gutters=True):
-                        with vuetify.VCol(cols=12):
-                            vuetify.VSlider(
-                                v_model=("param_pos_x",),
-                                min=-10, max=10, step=0.1,
-                                label="X", color="cyan", dense=True
-                            )
-                            vuetify.VSlider(
-                                v_model=("param_pos_y",),
-                                min=-5, max=5, step=0.1,
-                                label="Y", color="cyan", dense=True
-                            )
-                            vuetify.VSlider(
-                                v_model=("param_pos_z",),
-                                min=-5, max=5, step=0.1,
-                                label="Z", color="cyan", dense=True
-                            )
+                    # Позиция
+                    vuetify.VListSubheader("Позиция", class_="px-0")
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=6):
+                            vuetify.VTextField(v_model=("param_pos_x",), label="X",
+                                               type="number", dense=True, class_="mb-2")
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(v_model=("param_pos_x",), min=-10, max=10,
+                                            step=0.1, dense=True, hide_details=True)
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=6):
+                            vuetify.VTextField(v_model=("param_pos_y",), label="Y",
+                                               type="number", dense=True, class_="mb-2")
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(v_model=("param_pos_y",), min=-5, max=5,
+                                            step=0.1, dense=True, hide_details=True)
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=6):
+                            vuetify.VTextField(v_model=("param_pos_z",), label="Z",
+                                               type="number", dense=True, class_="mb-2")
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(v_model=("param_pos_z",), min=-5, max=5,
+                                            step=0.1, dense=True, hide_details=True)
+
+                    # Поворот
                     vuetify.VListSubheader("Поворот (град)", class_="px-0")
-                    with vuetify.VRow(no_gutters=True):
-                        with vuetify.VCol(cols=12):
-                            vuetify.VSlider(
-                                v_model=("param_rot_x",),
-                                min=-180, max=180, step=1,
-                                label="X", color="amber", dense=True
-                            )
-                            vuetify.VSlider(
-                                v_model=("param_rot_y",),
-                                min=-180, max=180, step=1,
-                                label="Y", color="amber", dense=True
-                            )
-                            vuetify.VSlider(
-                                v_model=("param_rot_z",),
-                                min=-180, max=180, step=1,
-                                label="Z", color="amber", dense=True
-                            )
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=6):
+                            vuetify.VTextField(v_model=("param_rot_x",), label="X",
+                                               type="number", dense=True, class_="mb-2")
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(v_model=("param_rot_x",), min=-180, max=180,
+                                            step=1, dense=True, hide_details=True)
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=6):
+                            vuetify.VTextField(v_model=("param_rot_y",), label="Y",
+                                               type="number", dense=True, class_="mb-2")
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(v_model=("param_rot_y",), min=-180, max=180,
+                                            step=1, dense=True, hide_details=True)
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=6):
+                            vuetify.VTextField(v_model=("param_rot_z",), label="Z",
+                                               type="number", dense=True, class_="mb-2")
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(v_model=("param_rot_z",), min=-180, max=180,
+                                            step=1, dense=True, hide_details=True)
 
                     vuetify.VDivider(class_="my-4")
-                    with vuetify.VContainer(v_if=("selected_object_type === 'lens'",), class_="pa-0"):
-                        vuetify.VListSubheader("Параметры линзы", class_="px-0")
-                        vuetify.VSlider(
-                            v_model=("param_n",),
-                            min=1.0, max=2.5, step=0.01,
-                            label="Показатель преломления", color="purple", dense=True
-                        )
-                        vuetify.VSlider(
-                            v_model=("param_R1",),
-                            min=-20, max=20, step=0.5,
-                            label="R1 (передняя)", color="purple", dense=True
-                        )
-                        vuetify.VSlider(
-                            v_model=("param_R2",),
-                            min=-20, max=20, step=0.5,
-                            label="R2 (задняя)", color="purple", dense=True
-                        )
-                        vuetify.VSlider(
-                            v_model=("param_thickness",),
-                            min=0.1, max=5.0, step=0.1,
-                            label="Толщина", color="purple", dense=True
-                        )
-                        vuetify.VSlider(
-                            v_model=("param_edge_radius",),
-                            min=0.1, max=5.0, step=0.1,
-                            label="Радиус апертуры", color="purple", dense=True
-                        )
 
-                    with vuetify.VContainer(v_if=("selected_object_type === 'emitter'",), class_="pa-0"):
+                    # Параметры линзы
+                    with vuetify.VContainer(v_if=("selected_object_type === 'lens'",),
+                                            class_="pa-0"):
+                        vuetify.VListSubheader("Параметры линзы", class_="px-0")
+                        vuetify.VSlider(v_model=("param_n",), min=1.0, max=2.5,
+                                        step=0.01, label="Показатель преломления",
+                                        dense=True)
+                        vuetify.VSlider(v_model=("param_R1",), min=-20, max=20,
+                                        step=0.5, label="R1 (передняя)", dense=True)
+                        vuetify.VSlider(v_model=("param_R2",), min=-20, max=20,
+                                        step=0.5, label="R2 (задняя)", dense=True)
+                        vuetify.VSlider(v_model=("param_thickness",), min=0.1, max=5.0,
+                                        step=0.1, label="Толщина", dense=True)
+                        vuetify.VSlider(v_model=("param_edge_radius",), min=0.1, max=5.0,
+                                        step=0.1, label="Радиус апертуры", dense=True)
+
+                    # Параметры источника
+                    with vuetify.VContainer(v_if=("selected_object_type === 'emitter'",),
+                                            class_="pa-0"):
                         vuetify.VListSubheader("Параметры источника", class_="px-0")
-                        vuetify.VSlider(
-                            v_model=("param_num_rays",),
-                            min=1, max=20, step=1,
-                            label="Количество лучей", color="green", dense=True
-                        )
-                        vuetify.VSlider(
-                            v_model=("param_min_offset",),
-                            min=-3.0, max=0.0, step=0.1,
-                            label="Мин. смещение", color="green", dense=True
-                        )
-                        vuetify.VSlider(
-                            v_model=("param_max_offset",),
-                            min=0.0, max=3.0, step=0.1,
-                            label="Макс. смещение", color="green", dense=True
-                        )
-                        vuetify.VSlider(
-                            v_model=("param_wavelength",),
-                            min=380, max=780, step=10,
-                            label="Длина волны (нм)", color="green", dense=True
-                        )
+                        vuetify.VSlider(v_model=("param_num_rays",), min=1, max=20,
+                                        step=1, label="Количество лучей", dense=True)
+                        vuetify.VSlider(v_model=("param_min_offset",), min=-3.0, max=0.0,
+                                        step=0.1, label="Мин. смещение", dense=True)
+                        vuetify.VSlider(v_model=("param_max_offset",), min=0.0, max=3.0,
+                                        step=0.1, label="Макс. смещение", dense=True)
+                        vuetify.VSlider(v_model=("param_wavelength",), min=380, max=780,
+                                        step=10, label="Длина волны (нм)", dense=True)
 
                     vuetify.VDivider(class_="my-4")
                     vuetify.VSelect(
                         v_model=("trace_mode",),
-                        items=["simple", "tree"],
+                        items=[
+                            {"title": "Simple", "value": "simple"},
+                            {"title": "Tree", "value": "tree"}
+                        ],
                         label="Режим трассировки",
                         dense=True,
                         class_="mt-2"
                     )
 
-                # Правая колонка: 3D-вид
-                with vuetify.VCol(cols=9, class_="fill-height", style="height: 100%; position: relative;"):
-                    with vuetify.VContainer(
-                        fluid=True,
-                        classes="pa-0 fill-height",
-                        style="height: 100%; position: relative;",
-                        __properties=["onClick"],
-                        onClick="""() => {
-                            const canvas = document.querySelector('.vtk-container canvas');
-                            if (canvas) {
-                                const rect = canvas.getBoundingClientRect();
-                                const x = event.clientX - rect.left;
-                                const y = rect.bottom - event.clientY;
-                                trame.state.pick_coords = [x, y];
-                            }
-                        }"""
-                    ):
-                        html_view = trame_vtk.VtkLocalView(app.plotter.render_window)
-                        # Связываем методы обновления
-                        app.ctrl.view_update = html_view.update
-                        app.ctrl.view_reset_camera = html_view.reset_camera
+                # Правая колонка: серверный рендеринг
+                with vuetify.VCol(cols=9, style="height: 100%;"):
+                    ui_view = plotter_ui(app.plotter, mode="server", add_menu=False)
+                    app.ctrl.view_update = ui_view.update
 
-# Функция удаления объекта (для вызова из шаблона)
-@server.controller.trigger("remove_object")
-def remove_object(obj_id):
-    app.remove_object(obj_id)
-
-# Теперь, когда view_update связан, обновляем сцену
+# Первичное обновление
 app.update_scene()
 app.plotter.view_isometric()
 

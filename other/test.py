@@ -1,70 +1,45 @@
-import pyvista as pv
 import numpy as np
+import pyvista as pv
+from main import RayTracer, RayPool, UniversalLens, Ray, SimpleMode
 
+# Создаём плоттер
+plotter = pv.Plotter()
+plotter.set_background("#1a1a2e")
+plotter.add_axes(color="white")
+plotter.enable_parallel_projection()
+plotter.view_isometric()
 
-class InteractiveObject:
-    def __init__(self, plotter, mesh):
-        self.plotter = plotter
-        self.actor = plotter.add_mesh(mesh, color='orange')
-        self.is_moving = False
-        self.axis = np.array([1, 1, 1])  # По умолчанию по всем осям
+# 1. Сначала добавляем линзы
+lens1 = UniversalLens(origin=(-2,0,0), R1=5, R2=-5, thickness=0.5,
+                      edge_radius=1, n=1.5, refraction_range=(0, np.inf))
+lens2 = UniversalLens(origin=(2,0,0), R1=-3, R2=2, thickness=0.5,
+                      edge_radius=1, n=1.5, rotation_degrees=(0,15,0),
+                      refraction_range=(0, np.inf))
 
-        # Регистрация событий
-        self.plotter.iren.add_observer("MouseMoveEvent", self.on_mouse_move)
-        self.plotter.add_key_event("g", self.start_grab)
-        self.plotter.add_key_event("x", lambda: self.set_axis([1, 0, 0]))
-        self.plotter.add_key_event("y", lambda: self.set_axis([0, 1, 0]))
-        self.plotter.add_key_event("z", lambda: self.set_axis([0, 0, 1]))
-        # Левый клик для подтверждения
-        self.plotter.iren.add_observer("LeftButtonPressEvent", self.stop_grab)
+plotter.add_mesh(lens1.get_mesh(), color="cyan", opacity=0.5, smooth_shading=True)
+plotter.add_mesh(lens2.get_mesh(), color="cyan", opacity=0.5, smooth_shading=True)
 
-    def set_axis(self, axis):
-        self.axis = np.array(axis)
-        print(f"Ось: {axis}")
+# 2. Затем создаём RayTracer (облако лучей добавится поверх)
+pool = RayPool(initial_size=0)
+rt = RayTracer(plotter, mode=SimpleMode(max_bounces=10, energy_color_type=1),
+               pool=pool, line_width=2.0, min_alpha=0.05, gamma=1.0)
 
-    def start_grab(self):
-        self.is_moving = True
-        # Запоминаем, где был объект в момент начала
-        self.start_matrix = np.copy(self.actor.user_matrix)
-        # Запоминаем точку в 3D, где находится центр объекта
-        self.start_obj_pos = np.array(self.actor.center)
-        # Точка на экране в момент нажатия G
-        self.start_mouse_pos = self.plotter.iren.get_event_position()
-        print("Захват объекта...")
+# 3. Добавляем поверхности для трассировки
+for lens in (lens1, lens2):
+    for surf in lens.get_surfaces():
+        rt.add_elements(surf)
 
-    def on_mouse_move(self, vtk_obj, event):
-        if not self.is_moving:
-            return
+# 4. Добавляем параллельные лучи
+for y in np.linspace(-0.5, 0.5, 5):
+    ray = Ray(origin=(-5.0, y, 0.0), direction=(1,0,0),
+              energy=1.0, color="yellow", wavelength=550)
+    rt.add_ray(ray)
 
-        # 1. Получаем текущую позицию мыши
-        curr_mouse_pos = self.plotter.iren.get_event_position()
+# 5. Трассируем и обновляем облако
+segments = rt.trace_all()
+print(f"Сегментов: {len(segments)}")
+rt.cloud.update(segments, energy_color_type=1)
 
-        # 2. Вычисляем смещение в мировых координатах
-        # Мы используем pick_mouse_position для получения 3D точки под курсором
-        # Или более надежный метод для перемещения — плоскость:
-        new_pos = self.plotter.get_pick_position()
-
-        if new_pos is not None:
-            # Вычисляем вектор смещения от начальной точки
-            diff = (np.array(new_pos)[:3] - self.start_obj_pos) * self.axis
-
-            # 3. Создаем матрицу трансформации
-            mat = np.eye(4)
-            mat[:3, 3] = diff
-
-            # Применяем к актору (обновление в реальном времени)
-            self.actor.user_matrix = mat @ self.start_matrix
-
-            # 4. Перерисовываем сцену немедленно
-            self.plotter.render()
-
-    def stop_grab(self, vtk_obj, event):
-        if self.is_moving:
-            self.is_moving = False
-            print("Позиция зафиксирована")
-
-
-pl = pv.Plotter()
-obj = InteractiveObject(pl, pv.Sphere())
-pl.add_axes()
-pl.show()
+# 6. Рендерим и показываем
+plotter.render()
+plotter.show()

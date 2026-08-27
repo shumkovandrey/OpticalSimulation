@@ -416,7 +416,12 @@ class Ray:
                  polarization=None):          # ← теперь трёхмерный комплексный вектор
         self.origin = np.array(origin, dtype=float)
         self.direction = np.array(direction, dtype=float)
-        self.direction /= np.linalg.norm(self.direction)
+
+        if np.linalg.norm(self.direction) < 1e-12:
+            self.direction = np.array([1.0, 0.0, 0.0])  # или оставить нулевым, но тогда не использовать в трассировке
+        else:
+            self.direction /= np.linalg.norm(self.direction)
+
         self.energy = energy
         self.current_n = current_n
         self.color = color
@@ -1900,7 +1905,7 @@ def _trace_simple(ray: 'Ray',
             break
 
         # Отрезок от начала до точки удара
-        segments.append(Segment(current_ray.origin, hit.point,
+        segments.append(Segment(current_ray.origin.copy(), hit.point.copy(),
                                 current_ray.energy, current_ray.color))
 
         # Поглощение
@@ -2043,7 +2048,7 @@ def _trace_recursive(ray: 'Ray',
                                     current_ray.energy, current_ray.color))
             return
 
-        segments.append(Segment(current_ray.origin, hit.point,
+        segments.append(Segment(current_ray.origin.copy(), hit.point.copy(),
                                 current_ray.energy, current_ray.color))
 
         if hit.absorbed:

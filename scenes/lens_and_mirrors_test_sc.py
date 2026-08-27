@@ -57,8 +57,7 @@ plotter.add_mesh(lens_meniscus.get_mesh(), color="magenta", opacity=0.5, name="m
 plotter.add_mesh(sphere_mirror.get_mesh(), color="white", name="mirror")
 
 # Трассировщик
-tracer = RayTracer(plotter, mode='tree', max_depth=5, min_energy=0.00001,
-                   offset_distance=0.01, energy_color_type=0, default_color="yellow")
+tracer = RayTracer(plotter, mode='tree')
 
 # Добавляем элементы в трейсер
 tracer.elements.clear()
