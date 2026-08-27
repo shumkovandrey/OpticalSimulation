@@ -13,6 +13,10 @@ from fast_math import *
 import trimesh
 
 
+import os
+# os.environ['NUMBA_DISABLE_JIT'] = '1'
+
+
 pv.global_theme.allow_empty_mesh = True
 # Глобальная константа – длина отрезка, которым луч уходит в бесконечность
 RAY_INFINITY_DISTANCE = 100
@@ -969,15 +973,14 @@ class SphereSurface:
         self.lens_origin += np.asarray(vec)
 
     def intersect(self, ray: Ray) -> Optional[float]:
-        t = sphere_intersect(ray.origin, ray.direction, self.center, self.radius,
-                             self.lens_origin, self.lens_axis, self.edge_radius, self.thickness)
-        if t < 0.0:
-            return None
-        return t
+        # t = sphere_intersect(ray.origin, ray.direction, self.center, self.radius,
+        #                      self.lens_origin, self.lens_axis, self.edge_radius, self.thickness)
+        # if t < 0.0:
+        #     return None
+        # return t
+        return self._slow_intersect(ray)
 
     def _slow_intersect(self, ray: Ray) -> Optional[float]:
-        """Пересечение луча со сферой с учётом границ линзы."""
-
         oc = ray.origin - self.center
         a = np.dot(ray.direction, ray.direction)
         b = 2.0 * np.dot(oc, ray.direction)
@@ -996,17 +999,23 @@ class SphereSurface:
                 continue
             hit_p = ray.origin + ray.direction * t
 
-            # Проверка на апертуру (радиус от оптической оси)
+            # 1. Проверяем расстояние от ТОЧКИ УДАРА до ОПТИЧЕСКОЙ ОСИ (Апертура)
             vec_to_hit = hit_p - self.lens_origin
             projection = np.dot(vec_to_hit, self.lens_axis)
             dist_to_axis = np.linalg.norm(vec_to_hit - projection * self.lens_axis)
 
-            in_radius = dist_to_axis <= self.edge_radius + 1e-6
-            # Грубая проверка по глубине (должна быть уточнена при интегрировании с рёбрами линзы)
-            in_thickness = abs(projection) <= self.thickness / 2 + 5.0  # TODO: заменить точным ограничением
+            # Принудительно приводим к float на случай, если из Trame просочилась строка
+            r_max = float(self.edge_radius)
 
-            if in_radius and in_thickness:
-                valid_ts.append(t)
+            if dist_to_axis <= r_max + 1e-5:
+                # 2. Проверяем по глубине: точка должна лежать на нужной "чаше" сферы,
+                # а не на ее противоположной зеркальной половине.
+                # Для передней поверхности projection должен быть отрицательным/нулевым, для задней - положительным
+                # Безопасная проверка: расстояние вдоль оси от вершины не должно превышать стрелку прогиба (sagitta)
+                sagitta = abs(self.radius) - np.sqrt(max(0.0, abs(self.radius) ** 2 - r_max ** 2))
+
+                if abs(projection) <= (sagitta + 1e-4):
+                    valid_ts.append(t)
 
         return min(valid_ts) if valid_ts else None
 
@@ -1039,6 +1048,13 @@ class SphereSurface:
         matrix[:3, :3] = rot_matrix
         matrix[:3, 3] = world_center
         return mesh.transform(matrix, inplace=False)
+
+    def apply_transform(self, mat):
+        R_mat = mat[:3, :3]
+        t_mat = mat[:3, 3]
+        self.lens_origin = R_mat @ self.lens_origin + t_mat
+        self.lens_axis = R_mat @ self.lens_axis
+        self.center = self.lens_origin - self.radius * self.lens_axis
 
     def is_active(self, wavelength):
         """Возвращает True, если поверхность должна взаимодействовать с данной длиной волны."""
@@ -1571,68 +1587,61 @@ class UniversalLens:
 
     def _create_surfaces(self):
         half = self.thickness / 2
-        p1 = self.origin - self.axis_dir * half  # вершина передней поверхности
-        p2 = self.origin + self.axis_dir * half  # вершина задней поверхности
 
-        # Передняя поверхность
+        # Строим матрицу трансформации линзы 4x4 (Поворот + Смещение)
+        mat = np.eye(4)
+        mat[:3, :3] = self.rotation
+        mat[:3, 3] = self.origin
+
+        # 1. Передняя поверхность (в локальных координатах вершина в [-half, 0, 0])
         if self.R1 is None:
             self.front = PlaneSurface(
-                point=p1, normal=-self.axis_dir,
-                n_inside=self.n,
-                lens_origin=self.origin, lens_axis=-self.axis_dir,
-                edge_radius=self.edge_radius,
+                point=[-half, 0, 0], normal=[-1.0, 0.0, 0.0],
+                n_inside=self.n, edge_radius=self.edge_radius,
                 reflection_range=self.reflection_range,
                 refraction_range=self.refraction_range,
                 absorption_range=self.absorption_range
             )
         else:
             self.front = SphereSurface(
-                radius=self.R1,
-                n_inside=self.n,
-                edge_radius=self.edge_radius,
-                thickness=self.thickness,
-                reflection_range=self.reflection_range,
-                refraction_range=self.refraction_range,
-                absorption_range=self.absorption_range,
-                lens_origin=p1,
-                lens_axis=-self.axis_dir  # ось направлена вперёд (по ходу лучей)
+                radius=self.R1, n_inside=self.n, edge_radius=self.edge_radius,
+                thickness=self.thickness, reflection_range=self.reflection_range,
+                refraction_range=self.refraction_range, absorption_range=self.absorption_range,
+                lens_origin=[-half, 0, 0], lens_axis=[-1.0, 0.0, 0.0]
             )
 
-        # Задняя поверхность
+        # 2. Задняя поверхность (в локальных координатах вершина в [half, 0, 0])
         if self.R2 is None:
             self.back = PlaneSurface(
-                point=p2, normal=self.axis_dir,
-                n_inside=self.n,
-                lens_origin=self.origin, lens_axis=self.axis_dir,
-                edge_radius=self.edge_radius,
+                point=[half, 0, 0], normal=[1.0, 0.0, 0.0],
+                n_inside=self.n, edge_radius=self.edge_radius,
                 reflection_range=self.reflection_range,
                 refraction_range=self.refraction_range,
                 absorption_range=self.absorption_range
             )
         else:
             self.back = SphereSurface(
-                radius=self.R2,
-                n_inside=self.n,
-                edge_radius=self.edge_radius,
-                thickness=self.thickness,
-                reflection_range=self.reflection_range,
-                refraction_range=self.refraction_range,
-                absorption_range=self.absorption_range,
-                lens_origin=p2,
-                lens_axis=self.axis_dir  # ось направлена назад (против хода лучей)
+                radius=self.R2, n_inside=self.n, edge_radius=self.edge_radius,
+                thickness=self.thickness, reflection_range=self.reflection_range,
+                refraction_range=self.refraction_range, absorption_range=self.absorption_range,
+                lens_origin=[half, 0, 0], lens_axis=[1.0, 0.0, 0.0]
             )
 
-        # НОВОЕ: боковая цилиндрическая поверхность
+        # 3. Боковой цилиндр
         self.cylinder = CylinderSurface(
-            center=self.origin,
-            axis_dir=self.axis_dir,
-            radius=self.edge_radius,
-            half_length=half,
-            n_inside=self.n,
-            reflection_range=self.reflection_range,
-            refraction_range=self.refraction_range,
-            absorption_range=self.absorption_range
+            center=[0, 0, 0], axis_dir=[1.0, 0.0, 0.0], radius=self.edge_radius,
+            half_length=half, n_inside=self.n, reflection_range=self.reflection_range,
+            refraction_range=self.refraction_range, absorption_range=self.absorption_range
         )
+
+        # Применяем мировую матрицу трансформации ко ВСЕМ поверхностям разом
+        # Для этого добавьте метод apply_transform в класс SphereSurface и CylinderSurface по аналогии с PlaneSurface
+        self.front.apply_transform(mat)
+        self.back.apply_transform(mat)
+
+        # Для цилиндра (простой перенос центра и поворот оси):
+        self.cylinder.center = mat[:3, :3] @ self.cylinder.center + mat[:3, 3]
+        self.cylinder.axis_dir = mat[:3, :3] @ self.cylinder.axis_dir
 
     def _calc_optical_params(self):
         # (оставьте ваш существующий расчёт f_dist)
@@ -1900,7 +1909,7 @@ def _trace_simple(ray: 'Ray',
         # Нет пересечения – луч уходит в бесконечность
         if hit is None:
             end_point = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
-            segments.append(Segment(current_ray.origin, end_point,
+            segments.append(Segment(current_ray.origin.copy(), end_point.copy(),
                                     current_ray.energy, current_ray.color))
             break
 
@@ -2044,7 +2053,7 @@ def _trace_recursive(ray: 'Ray',
         hit = find_best_hit(current_ray, elements)
         if hit is None:
             end = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
-            segments.append(Segment(current_ray.origin, end,
+            segments.append(Segment(current_ray.origin.copy(), end.copy(),
                                     current_ray.energy, current_ray.color))
             return
 
@@ -2071,7 +2080,7 @@ def _trace_recursive(ray: 'Ray',
                               color=current_ray.color,
                               wavelength=current_ray.wavelength,
                               energy_color_type=current_ray.energy_color_type)
-            segments.append(Segment(hit.point, start, current_ray.energy, current_ray.color))
+            segments.append(Segment(hit.point.copy(), start.copy(), current_ray.energy, current_ray.color))
             recurse(new_ray, d - 1, from_pool=pool is not None)
             if pool:  # новый луч больше не нужен
                 pool.release(new_ray)
@@ -2096,7 +2105,7 @@ def _trace_recursive(ray: 'Ray',
                               color=current_ray.color,
                               wavelength=current_ray.wavelength,
                               energy_color_type=current_ray.energy_color_type)
-            segments.append(Segment(hit.point, start, current_ray.energy, current_ray.color))
+            segments.append(Segment(hit.point.copy(), start.copy(), current_ray.energy, current_ray.color))
             recurse(new_ray, d - 1, from_pool=pool is not None)
             if pool:
                 pool.release(new_ray)
@@ -2110,7 +2119,7 @@ def _trace_recursive(ray: 'Ray',
                              use_polarization_color=use_polarization_color,
                              pool=pool)
         for nr in new_rays:
-            segments.append(Segment(hit.point, nr.origin, nr.energy, nr.color))
+            segments.append(Segment(hit.point.copy(), nr.origin.copy(), nr.energy, nr.color))
             recurse(nr, d - 1, from_pool=pool is not None)
             if pool:
                 pool.release(nr)  # после обработки каждого порождённого луча

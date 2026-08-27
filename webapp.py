@@ -50,7 +50,7 @@ class OpticsAppController:
         self.state.param_rot_z = 0.0
         self.state.param_n = 1.5
         self.state.param_R1 = 5.0
-        self.state.param_R2 = -5.0
+        self.state.param_R2 = 2
         self.state.param_thickness = 0.5
         self.state.param_edge_radius = 1.0
         self.state.param_num_rays = 5
@@ -75,7 +75,7 @@ class OpticsAppController:
         self.add_object("lens", "Линза 1", {
             "origin": (-2.0, 0.0, 0.0),
             "rotation": (0, 0, 0),
-            "R1": 2, "R2": 3, "thickness": 0.5,
+            "R1": 5.0, "R2": -5.0, "thickness": 0.5,
             "edge_radius": 1.0, "n": 1.5,
             "reflection_range": None,
             "refraction_range": (0, np.inf),
@@ -83,20 +83,15 @@ class OpticsAppController:
         })
         self.add_object("lens", "Линза 2", {
             "origin": (2.0, 0.0, 0.0),
-            "rotation": (0, 0, 0),
-            "R1": -3.0, "R2": 2.0, "thickness": 0.5,
+            "rotation": (0, 15, 0),
+            "R1": 5.0,
+            "R2": 2.0,  # !!! ИЗМЕНИТЕ С -5.0 НА 2.0 (как в чистом скрипте) !!!
+            "thickness": 0.5,
             "edge_radius": 1.0, "n": 1.5,
             "reflection_range": None,
             "refraction_range": (0, np.inf),
             "absorption_range": None
         })
-        # self.add_object("emitter", "Источник", {
-        #     "origin": (-5.0, 0.0, 0.0),
-        #     "rotation": (0, 0, 0),
-        #     "num_rays": 5, "min_offset": -0.5, "max_offset": 0.5,
-        #     "wavelength": 550.0, "color": "yellow",
-        #     "energy": 1.0, "current_n": 1.0
-        # })
         for y in np.linspace(-0.5, 0.5, 5):
             ray = Ray(origin=(-5.0, y, 0.0), direction=(1, 0, 0),
                       energy=1.0, color="yellow", wavelength=550)
@@ -226,6 +221,11 @@ class OpticsAppController:
             )
             self.ray_tracer.mode.energy_color_type = 1  # энергия = непрозрачность
 
+            self.ray_tracer.elements.clear()  # Полностью стираем старые поверхности
+            self.ray_tracer.rays.clear()  # Очищаем буфер лучей
+            if hasattr(self.ray_tracer, 'emitters'):
+                self.ray_tracer.emitters.clear()
+
             # 4. Добавляем поверхности линз для трассировки
             for obj_entry in self.scene_objects:
                 instance = obj_entry["instance"]
@@ -272,6 +272,10 @@ class OpticsAppController:
                 )
 
             # 8. Принудительный рендер
+            # for actor in self.plotter.actors.values():
+            #     if hasattr(actor, 'mapper') and actor.mapper.dataset:
+            #         actor.mapper.dataset.Modified()
+
             self.plotter.render()
 
             # 9. Отправка кадра
@@ -334,6 +338,8 @@ class OpticsAppController:
         if not obj_entry:
             return
         p = obj_entry["params"]
+
+        # Гарантируем float для координат и вращения
         p["origin"] = (
             float(self.state.param_pos_x),
             float(self.state.param_pos_y),
@@ -346,15 +352,16 @@ class OpticsAppController:
         )
         if obj_entry["type"] == "lens":
             p["n"] = float(self.state.param_n)
-            p["R1"] = float(self.state.param_R1)
-            p["R2"] = float(self.state.param_R2)
+            p["R1"] = float(self.state.param_R1) if self.state.param_R1 is not None else None
+            p["R2"] = float(self.state.param_R2) if self.state.param_R2 is not None else None
             p["thickness"] = float(self.state.param_thickness)
-            p["edge_radius"] = float(self.state.param_edge_radius)
+            p["edge_radius"] = float(self.state.param_edge_radius)  # <-- СТРОГО FLOAT
         elif obj_entry["type"] == "emitter":
             p["num_rays"] = int(self.state.param_num_rays)
             p["min_offset"] = float(self.state.param_min_offset)
             p["max_offset"] = float(self.state.param_max_offset)
             p["wavelength"] = float(self.state.param_wavelength)
+
         obj_entry["instance"] = self._create_instance(obj_entry["type"], p)
         self.update_scene()
 

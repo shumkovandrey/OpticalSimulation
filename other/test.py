@@ -12,7 +12,7 @@ plotter.view_isometric()
 # 1. Сначала добавляем линзы
 lens1 = UniversalLens(origin=(-2,0,0), R1=5, R2=-5, thickness=0.5,
                       edge_radius=1, n=1.5, refraction_range=(0, np.inf))
-lens2 = UniversalLens(origin=(2,0,0), R1=-3, R2=2, thickness=0.5,
+lens2 = UniversalLens(origin=(2,0,0), R1=5, R2=2, thickness=0.5,
                       edge_radius=1, n=1.5, rotation_degrees=(0,15,0),
                       refraction_range=(0, np.inf))
 
