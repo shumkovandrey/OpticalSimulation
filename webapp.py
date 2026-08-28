@@ -6,12 +6,18 @@ import pyvista as pv
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as vuetify
-from pyvista.trame.ui import plotter_ui   # серверный рендеринг
+from trame.widgets import vtk as trame_vtk            # <-- клиентский рендеринг
 from scipy.spatial.transform import Rotation as R
 
 from main import (
     RayTracer, RayPool, UniversalLens, BeamEmitter, RAY_INFINITY_DISTANCE, Ray
 )
+
+from pyvista.trame.ui import plotter_ui
+
+# RENDER_MODE = "client"
+RENDER_MODE = "server"
+
 
 class OpticsAppController:
     def __init__(self, server):
@@ -25,6 +31,8 @@ class OpticsAppController:
         self.plotter.add_axes(color="white")
         self.plotter.enable_parallel_projection()
         self.plotter.view_isometric()
+        self.plotter.enable_terrain_style(mouse_wheel_zooms=True)
+        self.plotter.iren.add_observer('RenderEvent', lambda *args: print('RenderEvent called'))
 
         self.pool = RayPool(initial_size=0)
         self.scene_objects = []
@@ -33,12 +41,13 @@ class OpticsAppController:
         self._updating = False
 
         self.ray_tracer = None
+        self.ray_actor = None
 
         # Состояние
         self.state.selected_object_id = None
         self.state.selected_object_type = None
         self.state.pick_coords = None
-        self.state.trace_mode = "tree"
+        self.state.trace_mode = "simple"
         self.state.energy_color_type = 2
 
         # Параметры выбранного объекта
@@ -75,20 +84,20 @@ class OpticsAppController:
         self.add_object("lens", "Линза 1", {
             "origin": (-2.0, 0.0, 0.0),
             "rotation": (0, 0, 0),
-            "R1": 5.0, "R2": -5.0, "thickness": 0.5,
+            "R1": -5.0, "R2": -5.0, "thickness": 0.5,
             "edge_radius": 1.0, "n": 1.5,
-            "reflection_range": None,
+            "reflection_range": (0, np.inf),
             "refraction_range": (0, np.inf),
             "absorption_range": None
         })
         self.add_object("lens", "Линза 2", {
             "origin": (2.0, 0.0, 0.0),
             "rotation": (0, 15, 0),
-            "R1": 5.0,
-            "R2": 2.0,  # !!! ИЗМЕНИТЕ С -5.0 НА 2.0 (как в чистом скрипте) !!!
+            "R1": -5.0,
+            "R2": -5.0,  # !!! ИЗМЕНИТЕ С -5.0 НА 2.0 (как в чистом скрипте) !!!
             "thickness": 0.5,
             "edge_radius": 1.0, "n": 1.5,
-            "reflection_range": None,
+            "reflection_range": (0, np.inf),
             "refraction_range": (0, np.inf),
             "absorption_range": None
         })
@@ -174,7 +183,7 @@ class OpticsAppController:
             raise ValueError(f"Неизвестный тип: {obj_type}")
 
     # ---------------------------------------------------------------
-    # Обновление сцены (серверный рендеринг)
+    # Обновление сцены (клиентский рендеринг)
     # ---------------------------------------------------------------
     def update_scene(self):
         if self._updating:
@@ -186,7 +195,7 @@ class OpticsAppController:
             self.plotter.add_axes(color="white")
             self.plotter.set_background("#1a1a2e")
             self.plotter.enable_parallel_projection()
-            self.plotter.view_isometric()
+            # self.plotter.view_isometric()
 
             # 2. Добавляем меши объектов (линзы, стрелки источников)
             for obj_entry in self.scene_objects:
@@ -216,10 +225,10 @@ class OpticsAppController:
                 mode="simple",  # SimpleMode для предсказуемости
                 pool=self.pool,
                 line_width=2.0,
-                min_alpha=0.05,
+                min_alpha=0.0005,
                 gamma=0.3
             )
-            self.ray_tracer.mode.energy_color_type = 1  # энергия = непрозрачность
+            self.ray_tracer.mode.energy_color_type = 0  # энергия = непрозрачность
 
             self.ray_tracer.elements.clear()  # Полностью стираем старые поверхности
             self.ray_tracer.rays.clear()  # Очищаем буфер лучей
@@ -272,13 +281,17 @@ class OpticsAppController:
                 )
 
             # 8. Принудительный рендер
-            # for actor in self.plotter.actors.values():
-            #     if hasattr(actor, 'mapper') and actor.mapper.dataset:
-            #         actor.mapper.dataset.Modified()
-
             self.plotter.render()
 
-            # 9. Отправка кадра
+            print(f"[update_scene] Объектов: {len(self.scene_objects)}")
+            for obj in self.scene_objects:
+                inst = obj["instance"]
+                pos = getattr(inst, 'origin', getattr(inst, 'point', getattr(inst, 'center', 'unknown')))
+                print(f"  {obj['id']}: тип={obj['type']}, позиция={pos}")
+            print(f"[update_scene] Сегментов: {len(segments)}")
+            print(f"[update_scene] Ray actor points: {self.ray_actor.mapper.dataset.n_points if self.ray_actor else 0}")
+
+            # 9. Отправка кадраview_reset_camera
             if hasattr(self.ctrl, 'view_update'):
                 self.ctrl.view_update()
 
@@ -387,7 +400,7 @@ for param in [
 
 # UI
 with SinglePageLayout(server) as layout:
-    layout.title.set_text("Оптический симулятор (серверный рендеринг)")
+    layout.title.set_text("Оптический симулятор (клиентский рендеринг)")
 
     with layout.content:
         with vuetify.VContainer(fluid=True, classes="pa-0", style="height: 100vh; overflow: hidden;"):
@@ -524,14 +537,20 @@ with SinglePageLayout(server) as layout:
                         class_="mt-2"
                     )
 
-                # Правая колонка: серверный рендеринг
+                # Правая колонка: клиентский рендеринг
                 with vuetify.VCol(cols=9, style="height: 100%;"):
-                    ui_view = plotter_ui(app.plotter, mode="server", add_menu=False)
-                    app.ctrl.view_update = ui_view.update
+                    if RENDER_MODE == "client":
+                        html_view = trame_vtk.VtkLocalView(app.plotter.render_window)
+                        app.ctrl.view_update = html_view.update
+                        app.ctrl.view_reset_camera = html_view.reset_camera
+                    else:  # server
+                        ui_view = plotter_ui(app.plotter, mode="client", add_menu=False, image_scale=2)
+                        app.ctrl.view_update = ui_view.update
+                        app.ctrl.view_reset_camera = None  # не используется в серверном режиме
 
 # Первичное обновление
 app.update_scene()
-app.plotter.view_isometric()
+# app.plotter.view_isometric()
 
 if __name__ == "__main__":
     server.start(host="127.0.0.1", port=8085)

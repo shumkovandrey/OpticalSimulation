@@ -365,7 +365,7 @@ class TreeMode(TraceMode):
     def __init__(self,
                  max_depth: int = 6,
                  min_energy: float = 0.01,
-                 offset_distance: float = 0.01,
+                 offset_distance: float = 0.001,
                  use_polarization_color: bool = False,
                  total_limit: int = 5000,
                  energy_color_type: int = 1,
