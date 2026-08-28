@@ -1,23 +1,22 @@
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
 
+import asyncio
 import numpy as np
 import pyvista as pv
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as vuetify
-from trame.widgets import vtk as trame_vtk            # <-- клиентский рендеринг
+from trame.widgets import vtk as trame_vtk
 from scipy.spatial.transform import Rotation as R
-
-from main import (
-    RayTracer, RayPool, UniversalLens, BeamEmitter, RAY_INFINITY_DISTANCE, Ray
-)
-
 from pyvista.trame.ui import plotter_ui
 
-# RENDER_MODE = "client"
-RENDER_MODE = "server"
+from main import (
+    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode
+)
 
+# Режим отрисовки: "client" или "server"
+RENDER_MODE = "client"   # или "server"
 
 class OpticsAppController:
     def __init__(self, server):
@@ -26,6 +25,7 @@ class OpticsAppController:
         self.ctrl = server.controller
         self.manual_rays = []
 
+        # Основной плоттер для отображения
         self.plotter = pv.Plotter(off_screen=True)
         self.plotter.set_background("#1a1a2e")
         self.plotter.add_axes(color="white")
@@ -34,14 +34,32 @@ class OpticsAppController:
         self.plotter.enable_terrain_style(mouse_wheel_zooms=True)
         self.plotter.iren.add_observer('RenderEvent', lambda *args: print('RenderEvent called'))
 
+        # Вспомогательный плоттер для RayTracer (не отображается)
+        self.temp_plotter = pv.Plotter(off_screen=True)
+
         self.pool = RayPool(initial_size=0)
         self.scene_objects = []
         self.object_counter = 0
         self.initializing = True
         self._updating = False
 
-        self.ray_tracer = None
+        # Кэш актёров
+        self.object_actors = {}
         self.ray_actor = None
+
+        self._debounce_delay = 0.01  # задержка в секундах
+        self._debounce_timer = None
+
+        # Создаём RayTracer один раз
+        self.ray_tracer = RayTracer(
+            self.temp_plotter,
+            mode="simple",
+            pool=self.pool,
+            line_width=2.0,
+            min_alpha=0.0005,
+            gamma=0.3
+        )
+        self.ray_tracer.mode.energy_color_type = 0
 
         # Состояние
         self.state.selected_object_id = None
@@ -59,7 +77,7 @@ class OpticsAppController:
         self.state.param_rot_z = 0.0
         self.state.param_n = 1.5
         self.state.param_R1 = 5.0
-        self.state.param_R2 = 2
+        self.state.param_R2 = 2.0
         self.state.param_thickness = 0.5
         self.state.param_edge_radius = 1.0
         self.state.param_num_rays = 5
@@ -75,29 +93,23 @@ class OpticsAppController:
         self.create_initial_objects()
         self.initializing = False
 
-
-
-    # ---------------------------------------------------------------
-    # Создание / удаление
-    # ---------------------------------------------------------------
     def create_initial_objects(self):
         self.add_object("lens", "Линза 1", {
             "origin": (-2.0, 0.0, 0.0),
             "rotation": (0, 0, 0),
-            "R1": -5.0, "R2": -5.0, "thickness": 0.5,
+            "R1": 5.0, "R2": -5.0, "thickness": 0.5,
             "edge_radius": 1.0, "n": 1.5,
-            "reflection_range": (0, np.inf),
+            "reflection_range": None,
             "refraction_range": (0, np.inf),
             "absorption_range": None
         })
         self.add_object("lens", "Линза 2", {
             "origin": (2.0, 0.0, 0.0),
             "rotation": (0, 15, 0),
-            "R1": -5.0,
-            "R2": -5.0,  # !!! ИЗМЕНИТЕ С -5.0 НА 2.0 (как в чистом скрипте) !!!
+            "R1": 5.0, "R2": 2.0,   # чтобы было заметно преломление
             "thickness": 0.5,
             "edge_radius": 1.0, "n": 1.5,
-            "reflection_range": (0, np.inf),
+            "reflection_range": None,
             "refraction_range": (0, np.inf),
             "absorption_range": None
         })
@@ -182,22 +194,18 @@ class OpticsAppController:
         else:
             raise ValueError(f"Неизвестный тип: {obj_type}")
 
-    # ---------------------------------------------------------------
-    # Обновление сцены (клиентский рендеринг)
-    # ---------------------------------------------------------------
     def update_scene(self):
         if self._updating:
             return
         self._updating = True
         try:
-            # 1. Полная очистка
+            # 1. Полная очистка основного плоттера
             self.plotter.clear()
             self.plotter.add_axes(color="white")
             self.plotter.set_background("#1a1a2e")
             self.plotter.enable_parallel_projection()
-            # self.plotter.view_isometric()
 
-            # 2. Добавляем меши объектов (линзы, стрелки источников)
+            # 2. Добавляем меши всех объектов
             for obj_entry in self.scene_objects:
                 instance = obj_entry["instance"]
                 if isinstance(instance, UniversalLens):
@@ -207,7 +215,6 @@ class OpticsAppController:
                         pickable=True, name=obj_entry["id"]
                     )
                 elif isinstance(instance, BeamEmitter):
-                    # Только стрелку, без генерации лучей
                     self.plotter.add_mesh(
                         instance.get_mesh(),
                         color="green", pickable=True, name=obj_entry["id"]
@@ -219,88 +226,54 @@ class OpticsAppController:
                         name=obj_entry["id"]
                     )
 
-            # 3. Создаём RayTracer (облако НЕ ИСПОЛЬЗУЕМ)
-            self.ray_tracer = RayTracer(
-                self.plotter,
-                mode="simple",  # SimpleMode для предсказуемости
-                pool=self.pool,
-                line_width=2.0,
-                min_alpha=0.0005,
-                gamma=0.3
-            )
-            self.ray_tracer.mode.energy_color_type = 0  # энергия = непрозрачность
-
-            self.ray_tracer.elements.clear()  # Полностью стираем старые поверхности
-            self.ray_tracer.rays.clear()  # Очищаем буфер лучей
+            # 3. Очищаем RayTracer и добавляем поверхности и лучи
+            self.ray_tracer.elements.clear()
+            self.ray_tracer.rays.clear()
             if hasattr(self.ray_tracer, 'emitters'):
                 self.ray_tracer.emitters.clear()
 
-            # 4. Добавляем поверхности линз для трассировки
             for obj_entry in self.scene_objects:
                 instance = obj_entry["instance"]
                 if isinstance(instance, UniversalLens):
                     for surf in instance.get_surfaces():
                         self.ray_tracer.add_elements(surf)
 
-            # 5. Добавляем лучи напрямую (без эмиттера!)
-            # Здесь предполагается, что self.manual_rays заполнен в create_initial_objects
             for ray in self.manual_rays:
                 self.ray_tracer.add_ray(ray)
 
-            # 6. Трассируем
+            # 4. Трассировка
             segments = self.ray_tracer.trace_all()
 
-            # 7. Рисуем сегменты правильно и быстро без ручной сборки lines
+            # 5. Создаём геометрию лучей
             if segments:
-                # Собираем массив пар точек (N, 2, 3)
                 segment_pairs = np.array([[seg.start, seg.end] for seg in segments], dtype=np.float32)
-
-                # Изменяем форму в плоский массив точек (2*N, 3)
                 all_points = segment_pairs.reshape(-1, 3)
-
-                # Создаем массив ячеек VTK: для каждого отрезка [2, индекс_старта, индекс_конца]
                 n_segments = len(segments)
                 connectivity = np.empty((n_segments, 3), dtype=np.int64)
                 connectivity[:, 0] = 2
                 connectivity[:, 1] = np.arange(0, 2 * n_segments, 2)
                 connectivity[:, 2] = np.arange(1, 2 * n_segments, 2)
-
-                # Уплощаем массив ячеек, как требует PyVista
                 lines_vtk = connectivity.ravel()
-
-                # Строим чистый меш
                 ray_mesh = pv.PolyData(all_points, lines=lines_vtk)
+            else:
+                ray_mesh = pv.PolyData()
 
-                # Добавляем на сцену с уникальным именем (исключает дублирование акторов)
-                self.plotter.add_mesh(
-                    ray_mesh,
-                    color="yellow",
-                    line_width=2,
-                    render_lines_as_tubes=False,
-                    name="traced_rays_geometry"  # Имя предотвращает утечки памяти
-                )
+            self.plotter.add_mesh(
+                ray_mesh,
+                color="yellow",
+                line_width=2,
+                render_lines_as_tubes=False,
+                name="traced_rays_geometry"
+            )
 
-            # 8. Принудительный рендер
+            # 6. Рендер и отправка
             self.plotter.render()
-
-            print(f"[update_scene] Объектов: {len(self.scene_objects)}")
-            for obj in self.scene_objects:
-                inst = obj["instance"]
-                pos = getattr(inst, 'origin', getattr(inst, 'point', getattr(inst, 'center', 'unknown')))
-                print(f"  {obj['id']}: тип={obj['type']}, позиция={pos}")
-            print(f"[update_scene] Сегментов: {len(segments)}")
-            print(f"[update_scene] Ray actor points: {self.ray_actor.mapper.dataset.n_points if self.ray_actor else 0}")
-
-            # 9. Отправка кадраview_reset_camera
             if hasattr(self.ctrl, 'view_update'):
                 self.ctrl.view_update()
 
         finally:
             self._updating = False
 
-    # ---------------------------------------------------------------
-    # Обработчики
-    # ---------------------------------------------------------------
     def on_object_selected(self, *args, **kwargs):
         obj_id = args[0] if args else None
         if not obj_id:
@@ -337,13 +310,13 @@ class OpticsAppController:
             self.state.param_wavelength = float(p.get("wavelength", 550.0))
 
     def on_pick_coords(self, *args, **kwargs):
-        # Заглушка, при необходимости можно реализовать picking через события PyVista
         pass
 
     def on_trace_mode_changed(self, *args, **kwargs):
         mode = args[0] if args else "tree"
         if mode != self.state.trace_mode:
             self.state.trace_mode = mode
+            self.ray_tracer.set_mode(mode)
             self.update_scene()
 
     def update_selected_object(self, *args, **kwargs):
@@ -351,8 +324,6 @@ class OpticsAppController:
         if not obj_entry:
             return
         p = obj_entry["params"]
-
-        # Гарантируем float для координат и вращения
         p["origin"] = (
             float(self.state.param_pos_x),
             float(self.state.param_pos_y),
@@ -365,10 +336,10 @@ class OpticsAppController:
         )
         if obj_entry["type"] == "lens":
             p["n"] = float(self.state.param_n)
-            p["R1"] = float(self.state.param_R1) if self.state.param_R1 is not None else None
-            p["R2"] = float(self.state.param_R2) if self.state.param_R2 is not None else None
+            p["R1"] = float(self.state.param_R1)
+            p["R2"] = float(self.state.param_R2)
             p["thickness"] = float(self.state.param_thickness)
-            p["edge_radius"] = float(self.state.param_edge_radius)  # <-- СТРОГО FLOAT
+            p["edge_radius"] = float(self.state.param_edge_radius)
         elif obj_entry["type"] == "emitter":
             p["num_rays"] = int(self.state.param_num_rays)
             p["min_offset"] = float(self.state.param_min_offset)
@@ -379,7 +350,12 @@ class OpticsAppController:
         self.update_scene()
 
     def on_param_change(self, *args, **kwargs):
-        self.update_selected_object()
+        # Отменяем предыдущий запланированный вызов
+        if self._debounce_timer is not None:
+            self._debounce_timer.cancel()
+        # Планируем новый вызов через заданную задержку
+        loop = asyncio.get_event_loop()
+        self._debounce_timer = loop.call_later(self._debounce_delay, self.update_selected_object)
 
 # ----------------------------------------------------------------
 # Запуск
@@ -388,7 +364,6 @@ server = get_server()
 server.client_type = "vue3"
 app = OpticsAppController(server)
 
-# Привязка параметров
 for param in [
     "param_pos_x", "param_pos_y", "param_pos_z",
     "param_rot_x", "param_rot_y", "param_rot_z",
@@ -398,14 +373,12 @@ for param in [
 ]:
     server.state.change(param)(app.on_param_change)
 
-# UI
 with SinglePageLayout(server) as layout:
-    layout.title.set_text("Оптический симулятор (клиентский рендеринг)")
+    layout.title.set_text("Оптический симулятор")
 
     with layout.content:
         with vuetify.VContainer(fluid=True, classes="pa-0", style="height: 100vh; overflow: hidden;"):
             with vuetify.VRow(no_gutters=True, style="height: 100%;"):
-                # Левая панель
                 with vuetify.VCol(
                     cols=3,
                     classes="pa-4 bg-grey-darken-4",
@@ -421,7 +394,6 @@ with SinglePageLayout(server) as layout:
 
                     vuetify.VDivider(class_="my-4")
 
-                    # Список объектов
                     vuetify.VCard(flat=True, color="transparent", max_height="200",
                                   style="overflow-y: auto;")
                     with vuetify.VList(dense=True, nav=True):
@@ -446,7 +418,6 @@ with SinglePageLayout(server) as layout:
                         classes="text-subtitle-1 px-0 text-cyan-lighten-2"
                     )
 
-                    # Позиция
                     vuetify.VListSubheader("Позиция", class_="px-0")
                     with vuetify.VRow(no_gutters=True, align="center"):
                         with vuetify.VCol(cols=6):
@@ -470,7 +441,6 @@ with SinglePageLayout(server) as layout:
                             vuetify.VSlider(v_model=("param_pos_z",), min=-5, max=5,
                                             step=0.1, dense=True, hide_details=True)
 
-                    # Поворот
                     vuetify.VListSubheader("Поворот (град)", class_="px-0")
                     with vuetify.VRow(no_gutters=True, align="center"):
                         with vuetify.VCol(cols=6):
@@ -496,7 +466,6 @@ with SinglePageLayout(server) as layout:
 
                     vuetify.VDivider(class_="my-4")
 
-                    # Параметры линзы
                     with vuetify.VContainer(v_if=("selected_object_type === 'lens'",),
                                             class_="pa-0"):
                         vuetify.VListSubheader("Параметры линзы", class_="px-0")
@@ -512,7 +481,6 @@ with SinglePageLayout(server) as layout:
                         vuetify.VSlider(v_model=("param_edge_radius",), min=0.1, max=5.0,
                                         step=0.1, label="Радиус апертуры", dense=True)
 
-                    # Параметры источника
                     with vuetify.VContainer(v_if=("selected_object_type === 'emitter'",),
                                             class_="pa-0"):
                         vuetify.VListSubheader("Параметры источника", class_="px-0")
@@ -528,29 +496,22 @@ with SinglePageLayout(server) as layout:
                     vuetify.VDivider(class_="my-4")
                     vuetify.VSelect(
                         v_model=("trace_mode",),
-                        items=[
-                            {"title": "Simple", "value": "simple"},
-                            {"title": "Tree", "value": "tree"}
-                        ],
+                        items=["simple", "tree"],
                         label="Режим трассировки",
                         dense=True,
                         class_="mt-2"
                     )
 
-                # Правая колонка: клиентский рендеринг
                 with vuetify.VCol(cols=9, style="height: 100%;"):
                     if RENDER_MODE == "client":
-                        html_view = trame_vtk.VtkLocalView(app.plotter.render_window)
-                        app.ctrl.view_update = html_view.update
-                        app.ctrl.view_reset_camera = html_view.reset_camera
-                    else:  # server
-                        ui_view = plotter_ui(app.plotter, mode="client", add_menu=False, image_scale=2)
-                        app.ctrl.view_update = ui_view.update
-                        app.ctrl.view_reset_camera = None  # не используется в серверном режиме
+                        ui_view = plotter_ui(app.plotter, mode="client", add_menu=False, image_scale=1)
+                    else:
+                        ui_view = plotter_ui(app.plotter, mode="server", add_menu=False, image_scale=2)
+                    app.ctrl.view_update = ui_view.update
+                    app.ctrl.view_reset_camera = None
 
-# Первичное обновление
 app.update_scene()
-# app.plotter.view_isometric()
+# app.plotter.view_isometric()  # раскомментируйте, если нужно сбросить камеру при старте
 
 if __name__ == "__main__":
     server.start(host="127.0.0.1", port=8085)

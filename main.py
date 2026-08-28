@@ -318,7 +318,7 @@ class SimpleMode(TraceMode):
     приоритет, если включён флаг prioritize_refraction).
     """
     def __init__(self,
-                 max_bounces: int = 10,
+                 max_bounces: int = 30,
                  offset_distance: float = 0.01,
                  prioritize_refraction: bool = True,
                  energy_color_type=1,
@@ -363,7 +363,7 @@ class TreeMode(TraceMode):
     Лучи с энергией ниже порога отбрасываются.
     """
     def __init__(self,
-                 max_depth: int = 6,
+                 max_depth: int = 20,
                  min_energy: float = 0.01,
                  offset_distance: float = 0.001,
                  use_polarization_color: bool = False,
