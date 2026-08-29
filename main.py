@@ -1734,10 +1734,11 @@ class UniversalLens:
         local_mesh = front_mesh.merge(back_mesh).merge(rim_mesh)
 
         # Перенос в мировые координаты
-        matrix = np.eye(4)
-        matrix[:3, :3] = self.rotation
-        matrix[:3, 3] = self.origin
-        return local_mesh.transform(matrix, inplace=False)
+        # matrix = np.eye(4)
+        # matrix[:3, :3] = self.rotation
+        # matrix[:3, 3] = self.origin
+        # return local_mesh.transform(matrix, inplace=False)
+        return local_mesh
 
     def draw_axis(self, plot, length=100):
         # if not self.show_axis:
