@@ -16,7 +16,7 @@ from main import (
 )
 
 # Режим отрисовки: "client" или "server"
-RENDER_MODE = "client"   # или "server"
+RENDER_MODE = "server"   # или "server"
 
 
 class OpticsAppController:
@@ -105,7 +105,7 @@ class OpticsAppController:
             "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
         })
 
-        for y in np.linspace(-0.5, 0.5, 5):
+        for y in np.linspace(-1, 1, 5000):
             self.manual_rays.append(
                 Ray(origin=(-5.0, y, 0.0), direction=(1, 0, 0), energy=1.0, color="yellow", wavelength=550))
 
