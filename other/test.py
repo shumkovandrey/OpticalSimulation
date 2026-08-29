@@ -7,13 +7,13 @@ plotter = pv.Plotter()
 plotter.set_background("#1a1a2e")
 plotter.add_axes(color="white")
 plotter.enable_parallel_projection()
-# plotter.view_isometric()
+plotter.view_isometric()
 
 # 1. Сначала добавляем линзы
 lens1 = UniversalLens(origin=(-2,0,0), R1=5, R2=-5, thickness=0.5,
                       edge_radius=1, n=1.5, refraction_range=(0, np.inf))
 lens2 = UniversalLens(origin=(2,0,0), R1=5, R2=2, thickness=0.5,
-                      edge_radius=1, n=1.5, rotation_degrees=(0,0,100),
+                      edge_radius=1, n=1.5, rotation_degrees=(0,0,32),
                       refraction_range=(0, np.inf))
 
 plotter.add_mesh(lens1.get_mesh(), color="cyan", opacity=0.5, smooth_shading=True)
@@ -30,7 +30,7 @@ for lens in (lens1, lens2):
         rt.add_elements(surf)
 
 # 4. Добавляем параллельные лучи
-for y in np.linspace(-0.5, 0.5, 5):
+for y in np.linspace(-1, 1, 50):
     ray = Ray(origin=(-5.0, y, 0.0), direction=(1,0,0),
               energy=1.0, color="yellow", wavelength=550)
     rt.add_ray(ray)
@@ -39,7 +39,7 @@ for y in np.linspace(-0.5, 0.5, 5):
 segments = rt.trace_all()
 print(f"Сегментов: {len(segments)}")
 rt.cloud.update(segments, energy_color_type=1)
-
+plotter.reset_camera()
 # 6. Рендерим и показываем
 plotter.render()
 plotter.show()

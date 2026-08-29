@@ -41,7 +41,7 @@ class OpticsAppController:
 
         self.ray_tracer = RayTracer(
             self.temp_plotter,
-            mode="tree",
+            mode="simple",
             pool=self.pool,
             line_width=2.5,
             min_alpha=0.05,
@@ -54,7 +54,7 @@ class OpticsAppController:
 
         self.state.selected_object_id = None
         self.state.selected_object_type = None
-        self.state.trace_mode = "tree"
+        self.state.trace_mode = "simple"
         self.state.scene_objects_list = []
         self.state.trace_modes = [
             {"title": "Simple", "value": "simple"},
@@ -101,12 +101,12 @@ class OpticsAppController:
             "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
         })
         self.add_object("lens", "Линза 2", {
-            "origin": (2.0, 0.0, 0.0), "rotation": (0, 15, 0),
+            "origin": (2.0, 0.0, 0.0), "rotation": (0, 0, 0),
             "R1": 5.0, "R2": 2.0, "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
             "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
         })
 
-        for y in np.linspace(-1, 1, 5):
+        for y in np.linspace(-1, 1, 100):
             self.manual_rays.append(
                 Ray(origin=(-5.0, y, 0.0), direction=(1, 0, 0), energy=1.0, color="yellow", wavelength=550)
             )
@@ -267,7 +267,8 @@ class OpticsAppController:
                     scalars="colors",  # Читаем цвета вершин
                     rgba=True,  # Активируем чтение альфа-канала (прозрачности)
                     opacity="linear",  # Отключаем дефолтные маски, используем чистый альфа-канал
-                    line_width=2,
+                    line_width=4,
+                    render_lines_as_tubes=False,
                     name="traced_rays_geometry"  # Регистрируем под тем же именем
                 )
 
@@ -313,26 +314,20 @@ class OpticsAppController:
             self.state.param_wavelength = float(p.get("wavelength", 550.0))
 
     def update_selected_object(self, *args, **kwargs):
-        """Полностью обновленный метод: решает проблему кэширования геометрии на клиенте
-        без изменений в файле main.py.
+        """Финальное исправление: устраняет преломление 'в воздухе' при вращении по 2+ осям.
+        Синхронизирует внутренний порядок осей Эйлера с логикой main.py.
         """
         obj_id = self.state.selected_object_id
         obj_entry = self._find_object(obj_id)
         if not obj_entry: return
 
         p = obj_entry["params"]
-        instance = obj_entry["instance"]
 
-        # Вычисляем дельту перемещения и поворота для математического ядра main.py
+        # Получаем целевые абсолютные значения из UI
         new_origin = np.array(
             [float(self.state.param_pos_x), float(self.state.param_pos_y), float(self.state.param_pos_z)])
-        old_origin = np.array(p["origin"])
-        translation_vector = new_origin - old_origin
-
         new_rotation = np.array(
             [float(self.state.param_rot_x), float(self.state.param_rot_y), float(self.state.param_rot_z)])
-        old_rotation = np.array(p["rotation"])
-        rotation_vector = new_rotation - old_rotation
 
         # Проверяем, изменились ли конструктивные параметры формы (радиусы, толщина)
         shape_changed = False
@@ -365,24 +360,33 @@ class OpticsAppController:
             p["max_offset"] = float(self.state.param_max_offset)
             p["wavelength"] = float(self.state.param_wavelength)
 
-        # 1. Обновляем математическое ядро (main.py) для корректной трассировки лучей
-        if shape_changed:
-            # При изменении R1, R2, толщины полностью пересоздаем инстанс
-            obj_entry["instance"] = self._create_instance(obj_entry["type"], p)
-        else:
-            # При перемещении/повороте используем дельта-методы из main.py
-            if np.any(rotation_vector != 0):
-                instance.rotate(rotation_vector)
-            if np.any(translation_vector != 0):
-                instance.translate(translation_vector)
+        # РЕШЕНИЕ БАГА ПРЕЛОМЛЕНИЯ В ВОЗДУХЕ:
+        # Вместо постепенного накопления дельт мы ВСЕГДА генерируем чистый инстанс в нулевых координатах
+        # и с нулевым поворотом. После этого мы ОДНИМ вызовом .translate() и .rotate()
+        # приводим его к целевому виду. Это гарантирует, что и математические поверхности,
+        # и get_mesh() повернутся по абсолютно одинаковому математическому закону main.py.
 
-        # 2. Обновляем визуальную модель на сцене PyVista.
-        # Чтобы vtk.js на клиенте гарантированно перерисовал сдвиг/поворот меша,
-        # мы быстро пересоздаем только ЭТОГО конкретного актора.
+        # 1. Создаем базовый инстанс в нуле (с учетом возможных изменений R1, R2, толщины)
+        base_params = p.copy()
+        base_params["origin"] = (0.0, 0.0, 0.0)
+        base_params["rotation"] = (0.0, 0.0, 0.0)
+        instance = self._create_instance(obj_entry["type"], base_params)
+
+        # 2. Применяем абсолютный поворот встроенным методом из main.py
+        if np.any(new_rotation != 0):
+            instance.rotate(new_rotation)
+
+        # 3. Применяем абсолютное смещение встроенным методом из main.py
+        if np.any(new_origin != 0):
+            instance.translate(new_origin)
+
+        # Сохраняем собранный инстанс в память сцены
+        obj_entry["instance"] = instance
+
+        # 4. Обновляем визуальную 3D-модель объекта на сцене PyVista
         if obj_id in self.plotter.actors:
             self.plotter.remove_actor(obj_id)
 
-            # Строим меш заново (он уже содержит в себе новые origin/rotation благодаря main.py)
             if obj_entry["type"] == "lens":
                 self.plotter.add_mesh(
                     obj_entry["instance"].get_mesh(),
@@ -398,7 +402,7 @@ class OpticsAppController:
                     name=obj_id
                 )
 
-        # Пересчитываем лучи и обновляем сцену
+        # Пересчитываем трассировку лучей для новой сцены
         self.update_scene()
 
     def on_param_change(self, *args, **kwargs):

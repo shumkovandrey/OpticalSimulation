@@ -1588,6 +1588,23 @@ class UniversalLens:
     def _create_surfaces(self):
         half = self.thickness / 2
 
+        # --- НАЧАЛО ИСПРАВЛЕНИЯ БАГА ЦИЛИНДРА ---
+        # Вычисляем стрелки прогиба (sagitta) для передней и задней поверхностей на краю апертуры
+        r = float(self.edge_radius)
+
+        sag1 = 0.0
+        if self.R1 is not None and abs(self.R1) > r:
+            sag1 = abs(self.R1) - np.sqrt(abs(self.R1) ** 2 - r ** 2)
+
+        sag2 = 0.0
+        if self.R2 is not None and abs(self.R2) > r:
+            sag2 = abs(self.R2) - np.sqrt(abs(self.R2) ** 2 - r ** 2)
+
+        # Реальная толщина ободка линзы на её краях
+        edge_thickness = max(0.001, self.thickness - sag1 - sag2)
+        half_rim_length = edge_thickness / 2.0
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ БАГА ЦИЛИНДРА ---
+
         # Строим матрицу трансформации линзы 4x4 (Поворот + Смещение)
         mat = np.eye(4)
         mat[:3, :3] = self.rotation
@@ -1627,15 +1644,14 @@ class UniversalLens:
                 lens_origin=[half, 0, 0], lens_axis=[1.0, 0.0, 0.0]
             )
 
-        # 3. Боковой цилиндр
+        # 3. Боковой цилиндр (ИСПОЛЬЗУЕМ КОРРЕКТНУЮ ДЛИНУ ОБОДКА half_rim_length)
         self.cylinder = CylinderSurface(
             center=[0, 0, 0], axis_dir=[1.0, 0.0, 0.0], radius=self.edge_radius,
-            half_length=half, n_inside=self.n, reflection_range=self.reflection_range,
+            half_length=half_rim_length, n_inside=self.n, reflection_range=self.reflection_range,
             refraction_range=self.refraction_range, absorption_range=self.absorption_range
         )
 
         # Применяем мировую матрицу трансформации ко ВСЕМ поверхностям разом
-        # Для этого добавьте метод apply_transform в класс SphereSurface и CylinderSurface по аналогии с PlaneSurface
         self.front.apply_transform(mat)
         self.back.apply_transform(mat)
 
