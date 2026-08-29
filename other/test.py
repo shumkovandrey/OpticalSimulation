@@ -1,6 +1,6 @@
 import numpy as np
 import pyvista as pv
-from main import RayTracer, RayPool, UniversalLens, Ray, SimpleMode
+from main import RayTracer, RayPool, UniversalLens, Ray, SimpleMode, TreeMode
 
 # Создаём плоттер
 plotter = pv.Plotter()
@@ -21,7 +21,7 @@ plotter.add_mesh(lens2.get_mesh(), color="cyan", opacity=0.5, smooth_shading=Tru
 
 # 2. Затем создаём RayTracer (облако лучей добавится поверх)
 pool = RayPool(initial_size=0)
-rt = RayTracer(plotter, mode=SimpleMode(max_bounces=100, energy_color_type=1),
+rt = RayTracer(plotter, mode=TreeMode(energy_color_type=1),
                pool=pool, line_width=2.0, min_alpha=0.05, gamma=1.0)
 
 # 3. Добавляем поверхности для трассировки
