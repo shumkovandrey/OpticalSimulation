@@ -55,7 +55,7 @@ def create_scene():
         radius=-15.0,
         rotation_degrees=(0, 0, 0),
         edge_radius=4.0, thickness=10.0,
-        n_inside=1.0, reflection_range=(0, 10000),
+        n_inside=1.5, refraction_range=(0, 10000),
         lens_origin=[10, -5, 0]
     )
     lens1 = UniversalLens(
@@ -72,7 +72,7 @@ def create_scene():
         center=[0, 40, 0], rotation_degrees=(0, 0, 180),
         radius=5.0, conic_constant=-1.0,
         edge_radius=4.5, thickness=10.0,
-        reflection_range=(0, 10000), n_inside=1.0
+        reflection_range=(0, 10000), n_inside=1.5
     )
     hyperbolic_lens = AsphericSurface(
         center=[0, 55, 0],

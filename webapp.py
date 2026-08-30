@@ -1,6 +1,7 @@
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
 
+import json
 import asyncio
 import numpy as np
 import pyvista as pv
@@ -17,7 +18,7 @@ from main import (
 
 # Режим отрисовки: "client" или "server"
 RENDER_MODE = "client"   # или "client"
-
+pv.OFF_SCREEN = True
 
 class OpticsAppController:
     def __init__(self, server):
@@ -29,8 +30,8 @@ class OpticsAppController:
         self.plotter = pv.Plotter(off_screen=True)
         self.plotter.set_background("#1a1a2e")
         self.plotter.add_axes(color="white")
-        self.plotter.enable_parallel_projection()
-        self.plotter.view_isometric()
+        self.plotter.enable_terrain_style()
+        self.plotter.camera.roll = 0
 
         self.temp_plotter = pv.Plotter(off_screen=True)
         self.pool = RayPool(initial_size=0)
@@ -101,12 +102,12 @@ class OpticsAppController:
             "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
         })
         self.add_object("lens", "Линза 2", {
-            "origin": (2.0, 0.0, 0.0), "rotation": (0, 0, 0),
+            "origin": (2.0, 0.0, 0.0), "rotation": (0, 0, 45),
             "R1": 5.0, "R2": 2.0, "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
             "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
         })
 
-        for y in np.linspace(-1, 1, 100):
+        for y in np.linspace(-1, 1, 500):
             self.manual_rays.append(
                 Ray(origin=(-5.0, y, 0.0), direction=(1, 0, 0), energy=1.0, color="yellow", wavelength=550)
             )
@@ -271,7 +272,7 @@ class OpticsAppController:
                     render_lines_as_tubes=False,
                     name="traced_rays_geometry"  # Регистрируем под тем же именем
                 )
-
+            self.scene_objects[0]["instance"].debug_draw_analytical_cylinder(self.plotter, color="red", opacity=0.6)
             self.plotter.render()
             if hasattr(self.ctrl, 'view_update'):
                 self.ctrl.view_update()
@@ -514,7 +515,17 @@ with SinglePageLayout(server) as layout:
 
                 # Правая колонка с 3D окном pyvista
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
-                    ui_view = plotter_ui(app.plotter, mode=RENDER_MODE, add_menu=False, image_scale=1)
+
+                    ui_view = plotter_ui(
+                        app.plotter,
+                        mode="trame",
+                        add_menu=False,
+                        image_scale=1,
+                        dsfgh=324,
+                        v_props={
+                            "interactor_settings": []
+                        }
+                    )
                     app.ctrl.view_update = ui_view.update
 
 app.update_scene()

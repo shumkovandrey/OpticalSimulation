@@ -319,7 +319,7 @@ class SimpleMode(TraceMode):
     """
     def __init__(self,
                  max_bounces: int = 30,
-                 offset_distance: float = 0.01,
+                 offset_distance: float = 0.001,
                  prioritize_refraction: bool = True,
                  energy_color_type=1,
                  pool=None):
@@ -1557,9 +1557,9 @@ class UniversalLens:
     Двояковыпуклая/вогнутая/мениск линза в произвольной ориентации.
     Параметры:
         origin      – геометрический центр линзы,
-        axis_dir    – вектор оптической оси (направление от передней к задней грани),
+        rotation_degrees – углы Эйлера поворота линзы,
         R1, R2      – радиусы кривизны передней и задней поверхностей (None = плоскость),
-        thickness   – толщина вдоль оси,
+        thickness   – толщина вдоль оси по центру,
         edge_radius – радиус апертуры,
         n           – показатель преломления материала.
     """
@@ -1569,10 +1569,8 @@ class UniversalLens:
                  reflection_range=None, refraction_range=(0, np.inf),
                  absorption_range=None):
         self.origin = np.array(origin, dtype=float)
-        self.rotation_degrees = rotation_degrees  # сохраняем для rotate
-        # Матрица поворота из углов Эйлера (нужна для get_mesh)
+        self.rotation_degrees = rotation_degrees
         self.rotation = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
-        # Оптическая ось – повёрнутый базовый вектор (1,0,0)
         self.axis_dir = self.rotation @ np.array([1.0, 0.0, 0.0])
         self.thickness = thickness
         self.edge_radius = edge_radius
@@ -1582,85 +1580,133 @@ class UniversalLens:
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
 
+        self.debug_cylinder_actor = None
+
         self._create_surfaces()
         self._calc_optical_params()
 
     def _create_surfaces(self):
-        half = self.thickness / 2
-
-        # --- НАЧАЛО ИСПРАВЛЕНИЯ БАГА ЦИЛИНДРА ---
-        # Вычисляем стрелки прогиба (sagitta) для передней и задней поверхностей на краю апертуры
         r = float(self.edge_radius)
 
+        # Минимальная технологическая толщина бокового ободка (чтобы линза не схлопывалась в ноль на краях)
+        MIN_RIM_THICKNESS = 0.5  # или self.thickness * 0.1
+
+        # 1. Вычисляем стрелки прогиба (sagitta) для передней и задней поверхностей
         sag1 = 0.0
-        if self.R1 is not None and abs(self.R1) > r:
-            sag1 = abs(self.R1) - np.sqrt(abs(self.R1) ** 2 - r ** 2)
+        if self.R1 is not None:
+            # Ограничиваем радиус, чтобы избежать деления на ноль / корня из отрицательного числа на полусфере
+            effective_R1 = max(abs(self.R1), r + 1e-5)
+            sag1 = effective_R1 - np.sqrt(effective_R1 ** 2 - r ** 2)
+            if self.R1 < 0:
+                sag1 = -sag1
 
         sag2 = 0.0
-        if self.R2 is not None and abs(self.R2) > r:
-            sag2 = abs(self.R2) - np.sqrt(abs(self.R2) ** 2 - r ** 2)
+        if self.R2 is not None:
+            effective_R2 = max(abs(self.R2), r + 1e-5)
+            sag2 = effective_R2 - np.sqrt(effective_R2 ** 2 - r ** 2)
+            if self.R2 < 0:
+                sag2 = -sag2
 
-        # Реальная толщина ободка линзы на её краях
-        edge_thickness = max(0.001, self.thickness - sag1 - sag2)
+        self.internal_thickness = self.thickness
+
+        # Пересчитываем параметры на основе скорректированной внутренней толщины
+        half = self.internal_thickness / 2
+        edge_thickness = self.internal_thickness - (sag1 if self.R1 else 0.0) - (sag2 if self.R2 else 0.0)
         half_rim_length = edge_thickness / 2.0
-        # --- КОНЕЦ ИСПРАВЛЕНИЯ БАГА ЦИЛИНДРА ---
 
-        # Строим матрицу трансформации линзы 4x4 (Поворот + Смещение)
+        # Корректируем смещение центра ободка (для несимметричных крутых линз)
+        rim_center_x = (sag1 - sag2) / 2.0 if (self.R1 and self.R2) else 0.0
+        local_cylinder_center = np.array([rim_center_x, 0.0, 0.0])
+
+        # Строим мировую матрицу трансформации 4x4
         mat = np.eye(4)
         mat[:3, :3] = self.rotation
         mat[:3, 3] = self.origin
 
-        # 1. Передняя поверхность (в локальных координатах вершина в [-half, 0, 0])
+        # 3. Инициализируем поверхности с учётом новой внутренней толщины `self.internal_thickness`
         if self.R1 is None:
             self.front = PlaneSurface(
                 point=[-half, 0, 0], normal=[-1.0, 0.0, 0.0],
                 n_inside=self.n, edge_radius=self.edge_radius,
-                reflection_range=self.reflection_range,
-                refraction_range=self.refraction_range,
+                reflection_range=self.reflection_range, refraction_range=self.refraction_range,
                 absorption_range=self.absorption_range
             )
         else:
             self.front = SphereSurface(
                 radius=self.R1, n_inside=self.n, edge_radius=self.edge_radius,
-                thickness=self.thickness, reflection_range=self.reflection_range,
+                thickness=self.internal_thickness, reflection_range=self.reflection_range,
                 refraction_range=self.refraction_range, absorption_range=self.absorption_range,
                 lens_origin=[-half, 0, 0], lens_axis=[-1.0, 0.0, 0.0]
             )
 
-        # 2. Задняя поверхность (в локальных координатах вершина в [half, 0, 0])
         if self.R2 is None:
             self.back = PlaneSurface(
                 point=[half, 0, 0], normal=[1.0, 0.0, 0.0],
                 n_inside=self.n, edge_radius=self.edge_radius,
-                reflection_range=self.reflection_range,
-                refraction_range=self.refraction_range,
+                reflection_range=self.reflection_range, refraction_range=self.refraction_range,
                 absorption_range=self.absorption_range
             )
         else:
             self.back = SphereSurface(
                 radius=self.R2, n_inside=self.n, edge_radius=self.edge_radius,
-                thickness=self.thickness, reflection_range=self.reflection_range,
+                thickness=self.internal_thickness, reflection_range=self.reflection_range,
                 refraction_range=self.refraction_range, absorption_range=self.absorption_range,
                 lens_origin=[half, 0, 0], lens_axis=[1.0, 0.0, 0.0]
             )
 
-        # 3. Боковой цилиндр (ИСПОЛЬЗУЕМ КОРРЕКТНУЮ ДЛИНУ ОБОДКА half_rim_length)
+        # Боковой цилиндр встает ровно посередине между краями «чаш»
         self.cylinder = CylinderSurface(
-            center=[0, 0, 0], axis_dir=[1.0, 0.0, 0.0], radius=self.edge_radius,
+            center=local_cylinder_center, axis_dir=[1.0, 0.0, 0.0], radius=self.edge_radius,
             half_length=half_rim_length, n_inside=self.n, reflection_range=self.reflection_range,
             refraction_range=self.refraction_range, absorption_range=self.absorption_range
         )
 
-        # Применяем мировую матрицу трансформации ко ВСЕМ поверхностям разом
+        # Применяем трансформации к мировым координатам
         self.front.apply_transform(mat)
         self.back.apply_transform(mat)
-
-        # Для цилиндра (простой перенос центра и поворот оси):
         self.cylinder.center = mat[:3, :3] @ self.cylinder.center + mat[:3, 3]
         self.cylinder.axis_dir = mat[:3, :3] @ self.cylinder.axis_dir
 
+    def get_mesh(self) -> pv.PolyData:
+        """Обновленный метод генерации полигонального меша с учетом измененной внутренней толщины."""
+        rs = np.linspace(0, self.edge_radius, 30)
+        phis = np.linspace(0, 2 * np.pi, 60)
+        r_grid, phi_grid = np.meshgrid(rs, phis)
+
+        y = r_grid * np.cos(phi_grid)
+        z = r_grid * np.sin(phi_grid)
+
+        # Используем внутреннюю скорректированную толщину вместо исходной
+        v1_local = -self.internal_thickness / 2
+        v2_local = self.internal_thickness / 2
+
+        def get_local_x(R, v_x, r_vals, is_front):
+            if R is not None:
+                c_x = v_x + R if is_front else v_x - R
+                dx = np.sqrt(np.maximum(0, abs(R) ** 2 - r_vals ** 2))
+                return c_x - dx if (is_front and R > 0) or (not is_front and R < 0) else c_x + dx
+            else:
+                return np.full_like(r_vals, v_x)
+
+        x_front = get_local_x(self.R1, v1_local, r_grid, True)
+        x_back = get_local_x(self.R2, v2_local, r_grid, False)
+
+        front_mesh = pv.StructuredGrid(x_front, y, z).extract_surface(algorithm='dataset_surface')
+        back_mesh = pv.StructuredGrid(x_back, y, z).extract_surface(algorithm='dataset_surface')
+
+        rim_x = np.array([x_front[:, -1], x_back[:, -1]])
+        rim_y = np.array([y[:, -1], y[:, -1]])
+        rim_z = np.array([z[:, -1], z[:, -1]])
+        rim_mesh = pv.StructuredGrid(rim_x, rim_y, rim_z).extract_surface(algorithm='dataset_surface')
+
+        local_mesh = front_mesh.merge(back_mesh).merge(rim_mesh)
+
+        matrix = np.eye(4)
+        matrix[:3, :3] = self.rotation
+        matrix[:3, 3] = self.origin
+        return local_mesh.transform(matrix, inplace=False)
+
     def _calc_optical_params(self):
-        # (оставьте ваш существующий расчёт f_dist)
         r1_val = self.R1 if self.R1 else 1e10
         r2_val = -self.R2 if self.R2 else -1e10
         inv_f = (self.n - 1) * (1 / r1_val - 1 / r2_val +
@@ -1690,10 +1736,8 @@ class UniversalLens:
         return best_t
 
     def get_normal(self, point: np.ndarray) -> np.ndarray:
-        """Нормаль последней пересечённой поверхности."""
         if self._last_hit_surface is not None:
             return self._last_hit_surface.get_normal(point)
-        # Запасной вариант: возвращаем нормаль передней поверхности
         return self.front.get_normal(point)
 
     def is_active(self, wavelength) -> bool:
@@ -1705,7 +1749,7 @@ class UniversalLens:
         rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
         self.axis_dir = rot @ self.axis_dir
         self.axis_dir /= np.linalg.norm(self.axis_dir)
-        self.rotation = rot @ self.rotation  # <-- добавить эту строку
+        self.rotation = rot @ self.rotation
         self._create_surfaces()
 
     def translate(self, vec):
@@ -1715,91 +1759,33 @@ class UniversalLens:
     def get_surfaces(self) -> List:
         return [self.front, self.back, self.cylinder]
 
-    def get_mesh(self) -> pv.PolyData:
-        """Генерирует полигональную модель линзы."""
-        rs = np.linspace(0, self.edge_radius, 30)
-        phis = np.linspace(0, 2 * np.pi, 60)
-        r_grid, phi_grid = np.meshgrid(rs, phis)
+    def debug_draw_analytical_cylinder(self, plot: pv.Plotter, color="red", opacity=0.4):
+        """
+        Метод отладки. Добавляет на сцену реальный аналитический цилиндр
+        из CylinderSurface, используемый в расчете трассировки лучей.
+        """
 
-        y = r_grid * np.cos(phi_grid)
-        z = r_grid * np.sin(phi_grid)
+        if self.debug_cylinder_actor:
+            print("Clear")
+            plot.remove_actor(self.debug_cylinder_actor)
 
-        v1_local = -self.thickness / 2
-        v2_local = self.thickness / 2
+        # Запрашиваем меш напрямую у объекта CylinderSurface
+        cylinder_mesh = self.cylinder.get_mesh()
 
-        def get_local_x(R, v_x, r_vals, is_front):
-            if R is not None:
-                c_x = v_x + R if is_front else v_x - R
-                dx = np.sqrt(np.maximum(0, abs(R) ** 2 - r_vals ** 2))
-                return c_x - dx if (is_front and R > 0) or (not is_front and R < 0) else c_x + dx
-            else:
-                return np.full_like(r_vals, v_x)
+        # Добавляем на сцену как каркас (wireframe) или полупрозрачный объект
+        self.debug_cylinder_actor = plot.add_mesh(
+            cylinder_mesh,
+            color=color,
+            opacity=opacity,
+            style="wireframe",
+            line_width=2,
+            name=f"debug_cyl"
+        )
 
-        x_front = get_local_x(self.R1, v1_local, r_grid, True)
-        x_back = get_local_x(self.R2, v2_local, r_grid, False)
-
-        front_mesh = pv.StructuredGrid(x_front, y, z).extract_surface(algorithm='dataset_surface')
-        back_mesh = pv.StructuredGrid(x_back, y, z).extract_surface(algorithm='dataset_surface')
-
-        # Ободок (соединение краёв)
-        rim_x = np.array([x_front[:, -1], x_back[:, -1]])
-        rim_y = np.array([y[:, -1], y[:, -1]])
-        rim_z = np.array([z[:, -1], z[:, -1]])
-        rim_mesh = pv.StructuredGrid(rim_x, rim_y, rim_z).extract_surface(algorithm='dataset_surface')
-
-        local_mesh = front_mesh.merge(back_mesh).merge(rim_mesh)
-
-        # Перенос в мировые координаты
-        matrix = np.eye(4)
-        matrix[:3, :3] = self.rotation
-        matrix[:3, 3] = self.origin
-        return local_mesh.transform(matrix, inplace=False)
-        return local_mesh
-
-    def draw_axis(self, plot, length=100):
-        # if not self.show_axis:
-        #     return
-
-        # 1. Отрисовка основной оси
-        # Направляем её вдоль вектора axis_dir
-        axis_start = self.origin - self.axis_dir * (length / 2)
-        axis_stop = self.origin + self.axis_dir * (length / 2)
-        axis_line = pv.Line(axis_start, axis_stop)
-        plot.add_mesh(axis_line, color="white", line_width=1, opacity=0.5)
-
-        # 2. Проверка на бесконечный фокус
-        if np.isinf(self.f_dist) or abs(self.f_dist) > 1000:
-            return
-
-        # 3. Расчет положения главной плоскости H2 относительно центра линзы
-        # (необходимо для точного отображения фокуса в "толстой" линзе)
-        r1_val = self.R1 if self.R1 else 1e10
-        h2 = -(self.f_dist * (self.n - 1) * self.thickness) / (self.n * r1_val)
-
-        # Точка отсчета фокуса (Главная точка на оптической оси)
-        # Смещаемся от центра вдоль оси на (толщина/2 + h2)
-        p_point = self.origin + self.axis_dir * (self.thickness / 2 + h2)
-
-        # 4. Метки фокусов F и -F
-        f = self.f_dist
-
-        # Вектор "вверх" для отрисовки засечек (перпендикулярен оси)
-        up_vec = np.array([0, 1, 0]) if abs(self.axis_dir[0]) < 0.9 else np.array([0, 0, 1])
-        mark_vec = np.cross(self.axis_dir, up_vec)
-        mark_vec /= np.linalg.norm(mark_vec)
-
-        for i in range(-5, 5):
-            # Позиция метки в мировых координатах
-            f_pos = p_point + self.axis_dir * i * f
-
-            # Вертикальная засечка
-            mark_line = pv.Line(f_pos - mark_vec * 0.5, f_pos + mark_vec * 0.5)
-            plot.add_mesh(mark_line, color="red", line_width=3)
-
-            # Текстовая подпись
-            plot.add_point_labels([f_pos + mark_vec * 0.8], [f"{i}F"],
-                                     font_size=12, text_color="yellow",
-                                     shape=None, show_points=False)
+        # Отрисуем ребра-границы цилиндра для наглядности длины half_rim_length
+        half_l = self.cylinder.half_length
+        c = self.cylinder.center
+        d = self.cylinder.axis_dir
 
 
 # --------------------------------
