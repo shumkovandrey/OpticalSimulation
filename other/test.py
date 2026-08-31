@@ -1,119 +1,52 @@
-r"""
-Version for trame 1.x - https://github.com/Kitware/trame/blob/release-v1/examples/VTK/SimpleCone/LocalRendering.py
-Delta v1..v2          - https://github.com/Kitware/trame/commit/674f72774228bbcab5689417c1c5642230b1eab8
-
-Installation requirements:
-    pip install trame trame-vuetify trame-vtk
-"""
-
-from vtkmodules.vtkFiltersSources import vtkConeSource
-from vtkmodules.vtkInteractionStyle import vtkInteractorStyleSwitch  # noqa
-from vtkmodules.vtkRenderingCore import (
-    vtkActor,
-    vtkPolyDataMapper,
-    vtkRenderer,
-    vtkRenderWindow,
-    vtkRenderWindowInteractor,
-)
-
+import pyvista as pv
 from trame.app import get_server
-from trame.ui.vuetify import SinglePageLayout
-from trame.widgets import vtk as vtk_widgets
-from trame.widgets import vuetify
+from trame.ui.vuetify3 import SinglePageLayout
+from trame.widgets import vuetify3 as v
 
-# -----------------------------------------------------------------------------
-# Trame initialization
-# -----------------------------------------------------------------------------
+# Импортируем напрямую актуальный класс представления
+from trame_pyvista.widgets import PyVistaLocalView
 
-server = get_server(client_type="vue2")
+# 1. Инициализация сервера Trame и PyVista
+server = get_server()
 state, ctrl = server.state, server.controller
 
-state.trame__title = "VTK Remote View - Local Rendering"
+# Обязательный флаг для корректной синхронизации геометрии с веб-клиентом
+pv.OFF_SCREEN = True
 
-# -----------------------------------------------------------------------------
-# VTK pipeline
-# -----------------------------------------------------------------------------
+# 2. Создание и базовая настройка сцены PyVista
+pl = pv.Plotter()
+pl.add_mesh(pv.Cone(), color="teal")
 
-DEFAULT_RESOLUTION = 6
+# Жестко фиксируем вектор "Верх" в Python, чтобы клиент его унаследовал
+pl.camera.view_up = (0.0, 0.0, 1.0)
+pl.camera_set = True
 
-renderer = vtkRenderer()
-renderWindow = vtkRenderWindow()
-renderWindow.AddRenderer(renderer)
+# 3. Конфигурация интерактора vtk.js (Блокируем Roll/Spin)
+# Мы объявляем только Rotate, Pan и Zoom. Отсутствие Spin отключает крен камеры.
+custom_interactor_settings = [
+    {"button": 1, "action": "Rotate"},                       # ЛКМ: вращение Yaw/Pitch
+    {"button": 2, "action": "Pan"},                          # СКМ: сдвиг сцены
+    {"button": 3, "action": "Zoom"},                         # ПКМ: приближение
+    {"button": 1, "shift": True, "action": "Pan"},           # Shift + ЛКМ: сдвиг
+    {"button": 1, "control": True, "action": "Zoom"},        # Ctrl + ЛКМ: зум
+]
 
-renderWindowInteractor = vtkRenderWindowInteractor()
-renderWindowInteractor.SetRenderWindow(renderWindow)
-renderWindowInteractor.GetInteractorStyle().SetCurrentStyleToTrackballCamera()
-
-cone_source = vtkConeSource()
-mapper = vtkPolyDataMapper()
-actor = vtkActor()
-mapper.SetInputConnection(cone_source.GetOutputPort())
-actor.SetMapper(mapper)
-renderer.AddActor(actor)
-renderer.ResetCamera()
-renderWindow.Render()
-
-# -----------------------------------------------------------------------------
-# Callbacks
-# -----------------------------------------------------------------------------
-
-
-@state.change("resolution")
-def update_cone(resolution=DEFAULT_RESOLUTION, **kwargs):
-    cone_source.SetResolution(resolution)
-    ctrl.view_update()
-
-
-def update_reset_resolution():
-    state.resolution = DEFAULT_RESOLUTION
-
-
-# -----------------------------------------------------------------------------
-# GUI
-# -----------------------------------------------------------------------------
-
+# 4. Построение UI интерфейса
 with SinglePageLayout(server) as layout:
-    layout.icon.click = ctrl.view_reset_camera
-    layout.title.set_text("Cone Application")
-
-    with layout.toolbar:
-        vuetify.VSpacer()
-        vuetify.VSlider(
-            v_model=("resolution", DEFAULT_RESOLUTION),
-            min=3,
-            max=60,
-            step=1,
-            hide_details=True,
-            dense=True,
-            style="max-width: 300px",
-        )
-        vuetify.VDivider(vertical=True, classes="mx-2")
-        with vuetify.VBtn(icon=True, click=update_reset_resolution):
-            vuetify.VIcon("mdi-undo-variant")
-
+    layout.title.text = "PyVista Client View - No Roll"
+    
     with layout.content:
-        with vuetify.VContainer(
-            fluid=True,
-            classes="pa-0 fill-height",
-        ):
-            view = vtk_widgets.VtkLocalView(renderWindow, ref="view")
-            ctrl.view_update = view.update
-            ctrl.view_reset_camera = view.reset_camera
-
-# -----------------------------------------------------------------------------
-# Jupyter
-# -----------------------------------------------------------------------------
-
-
-def show(**kwargs):
-    from trame.app import jupyter
-
-    jupyter.show(server, **kwargs)
-
-
-# -----------------------------------------------------------------------------
-# Main
-# -----------------------------------------------------------------------------
+        with v.VContainer(fluid=True, classes="fill-height pa-0"):
+            # Создаем представление напрямую
+            html_view = PyVistaLocalView(
+                pl,
+                # Пробрасываем конфигурацию в vtk.js интерактор напрямую
+                # interactor_settings=custom_interactor_settings
+            )
+            
+            # Сохраняем ссылку для управления (например, для сброса камеры)
+            ctrl.view_update = html_view.update
+            ctrl.view_reset_camera = html_view.reset_camera
 
 if __name__ == "__main__":
     server.start()

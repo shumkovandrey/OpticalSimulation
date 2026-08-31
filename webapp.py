@@ -12,8 +12,9 @@ from trame.widgets import vtk as trame_vtk
 from scipy.spatial.transform import Rotation as R
 from pyvista.trame.ui import plotter_ui
 
+
 from main import (
-    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode
+    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode, MeshSurface
 )
 
 # Режим отрисовки: "client" или "server"
@@ -49,6 +50,7 @@ class OpticsAppController:
             gamma=1,
         )
         self.ray_tracer.mode.energy_color_type = 0
+        self.ray_tracer.mode.max_bounces = 100
 
         self._debounce_delay = 0.01  # Уменьшено для более плавного отклика при оптимизации
         self._debounce_timer = None
@@ -78,6 +80,7 @@ class OpticsAppController:
         self.state.param_min_offset = -0.5
         self.state.param_max_offset = 0.5
         self.state.param_wavelength = 550.0
+        self.state.param_mesh_path = ""
 
         self.ctrl.trigger("delete_object_event")(self.remove_object)
 
@@ -106,8 +109,14 @@ class OpticsAppController:
             "R1": 5.0, "R2": 2.0, "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
             "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
         })
+        # self.add_object("mesh", f"Меш {len(self.scene_objects) + 1}", {
+        #     "origin": (10, 4, -16), "rotation": (0, -90, 0),
+        #     "mesh_path": "Models/provod.stl",  # Значение по умолчанию или путь к вашей модели
+        #     "n": 1.5,
+        #     "reflection_range": (0, np.inf), "absorption_range": None
+        # })
 
-        for y in np.linspace(-1, 1, 500):
+        for y in np.linspace(-1, 0.8, 50):
             self.manual_rays.append(
                 Ray(origin=(-5.0, y, 0.0), direction=(1, 0, 0), energy=1.0, color="yellow", wavelength=550)
             )
@@ -145,6 +154,14 @@ class OpticsAppController:
                 color="green",
                 name=obj_id
             )
+        elif isinstance(instance, MeshSurface):
+            self.plotter.add_mesh(
+                instance.get_mesh(),
+                color="Blue",
+                opacity=0.6,
+                smooth_shading=True,
+                name=obj_id
+            )
 
         if not self.initializing:
             self._update_objects_list_state()
@@ -164,6 +181,14 @@ class OpticsAppController:
         self.add_object("emitter", f"Источник {len(self.scene_objects) + 1}", {
             "origin": (0, 0, 0), "rotation": (0, 0, 0), "num_rays": 5, "min_offset": -0.5,
             "max_offset": 0.5, "wavelength": 550.0, "color": "yellow", "energy": 1.0, "current_n": 1.0
+        })
+
+    def add_mesh_click(self):
+        self.add_object("mesh", f"Меш {len(self.scene_objects) + 1}", {
+            "origin": (0, 0, 0), "rotation": (0, 0, 0),
+            "mesh_path": "Models/Prism.stl",  # Значение по умолчанию или путь к вашей модели
+            "n": 1.5,
+            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
         })
 
     def remove_object(self, *args, **kwargs):
@@ -208,6 +233,16 @@ class OpticsAppController:
                 color=params.get("color", "yellow"), wavelength=params.get("wavelength", 550),
                 energy=params.get("energy", 1.0), current_n=params.get("current_n", 1.0), pool=self.pool
             )
+        elif obj_type == "mesh":
+            return MeshSurface(
+                mesh=params.get("mesh_path", ""),
+                rotation_degrees=params.get("rotation", (0, 0, 0)),
+                translation=params.get("origin", (0, 0, 0)),
+                n_inside=params.get("n", 1.5),
+                reflection_range=params.get("reflection_range", (0, np.inf)),
+                # refraction_range=params.get("refraction_range", (0, np.inf)),
+                absorption_range=params.get("absorption_range")
+            )
 
     def on_trace_mode_changed(self, **kwargs):
         mode = self.state.trace_mode
@@ -219,6 +254,7 @@ class OpticsAppController:
             self.ray_tracer.mode.total_limit = 1000
         else:
             self.ray_tracer.set_mode("simple")
+            self.ray_tracer.mode.max_bounces = 100
 
         # Принудительно пересчитываем лучи для нового режима трассировки
         self.update_scene()
@@ -237,6 +273,8 @@ class OpticsAppController:
                 if isinstance(instance, UniversalLens):
                     for surf in instance.get_surfaces():
                         self.ray_tracer.add_elements(surf)
+                elif isinstance(instance, MeshSurface):
+                    self.ray_tracer.add_elements(instance)
 
             for ray in self.manual_rays:
                 self.ray_tracer.add_ray(ray)
@@ -272,7 +310,6 @@ class OpticsAppController:
                     render_lines_as_tubes=False,
                     name="traced_rays_geometry"  # Регистрируем под тем же именем
                 )
-            self.scene_objects[0]["instance"].debug_draw_analytical_cylinder(self.plotter, color="red", opacity=0.6)
             self.plotter.render()
             if hasattr(self.ctrl, 'view_update'):
                 self.ctrl.view_update()
@@ -313,6 +350,9 @@ class OpticsAppController:
             self.state.param_min_offset = float(p.get("min_offset", -0.5))
             self.state.param_max_offset = float(p.get("max_offset", 0.5))
             self.state.param_wavelength = float(p.get("wavelength", 550.0))
+        elif obj_entry["type"] == "mesh":
+            self.state.param_n = float(p.get("n", 1.5))
+            self.state.param_mesh_path = str(p.get("mesh_path", ""))
 
     def update_selected_object(self, *args, **kwargs):
         """Финальное исправление: устраняет преломление 'в воздухе' при вращении по 2+ осям.
@@ -345,6 +385,10 @@ class OpticsAppController:
                     p["max_offset"] != float(self.state.param_max_offset) or
                     p["wavelength"] != float(self.state.param_wavelength)):
                 shape_changed = True
+        elif obj_entry["type"] == "mesh":
+            if (p["n"] != float(self.state.param_n) or
+                    p["mesh_path"] != str(self.state.param_mesh_path)):
+                shape_changed = True
 
         # Сохраняем новые параметры в словарь состояния объекта
         p["origin"] = tuple(new_origin)
@@ -360,6 +404,9 @@ class OpticsAppController:
             p["min_offset"] = float(self.state.param_min_offset)
             p["max_offset"] = float(self.state.param_max_offset)
             p["wavelength"] = float(self.state.param_wavelength)
+        elif obj_entry["type"] == "mesh":
+            p["n"] = float(self.state.param_n)
+            p["mesh_path"] = str(self.state.param_mesh_path)
 
         # РЕШЕНИЕ БАГА ПРЕЛОМЛЕНИЯ В ВОЗДУХЕ:
         # Вместо постепенного накопления дельт мы ВСЕГДА генерируем чистый инстанс в нулевых координатах
@@ -402,6 +449,14 @@ class OpticsAppController:
                     color="green",
                     name=obj_id
                 )
+            elif obj_entry["type"] == "mesh":
+                self.plotter.add_mesh(
+                    obj_entry["instance"].get_mesh(),
+                    color="blue",
+                    opacity=0.6,
+                    smooth_shading=True,
+                    name=obj_id
+                )
 
         # Пересчитываем трассировку лучей для новой сцены
         self.update_scene()
@@ -424,7 +479,7 @@ app = OpticsAppController(server)
 
 for param in ["param_pos_x", "param_pos_y", "param_pos_z", "param_rot_x", "param_rot_y", "param_rot_z",
               "param_n", "param_R1", "param_R2", "param_thickness", "param_edge_radius", "param_num_rays",
-              "param_min_offset", "param_max_offset", "param_wavelength"]:
+              "param_min_offset", "param_max_offset", "param_wavelength", "param_mesh_path"]:
     server.state.change(param)(app.on_param_change)
 
 with SinglePageLayout(server) as layout:
@@ -440,6 +495,8 @@ with SinglePageLayout(server) as layout:
                         vuetify.VBtn("Добавить линзу", color="cyan", block=True, click=app.add_lens_click)
                         vuetify.VBtn("Добавить источник", color="green", block=True, class_="mt-2",
                                      click=app.add_emitter_click)
+                        vuetify.VBtn("Добавить 3D-меш", color="yellow", block=True, class_="mt-2",
+                                     click=app.add_mesh_click)
                     vuetify.VDivider(class_="my-4")
                     with vuetify.VCard(flat=True, color="transparent", style="max-height: 200px; overflow-y: auto;"):
                         with vuetify.VList(dense=True, nav=True):
@@ -509,6 +566,13 @@ with SinglePageLayout(server) as layout:
                         vuetify.VSlider(v_model="param_wavelength", min=380, max=780, step=10,
                                         label="Длина волны (нм)", dense=True)
 
+                    with vuetify.VContainer(v_if="selected_object_type == 'mesh'", class_="pa-0"):
+                        vuetify.VListSubheader("Параметры 3D-модели", class_="px-0")
+                        vuetify.VTextField(v_model="param_mesh_path", label="Путь к файлу (.obj/.stl)", dense=True,
+                                           class_="mb-2")
+                        vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01, label="Показатель преломления",
+                                        dense=True)
+
                     vuetify.VDivider(class_="my-4")
                     vuetify.VSelect(label="Режим трассировки", v_model="trace_mode", items=("trace_modes",),
                                     item_title="title", item_value="value", dense=True, class_="mt-2")
@@ -518,13 +582,10 @@ with SinglePageLayout(server) as layout:
 
                     ui_view = plotter_ui(
                         app.plotter,
-                        mode="trame",
+                        mode="client",
                         add_menu=False,
                         image_scale=1,
-                        dsfgh=324,
-                        v_props={
-                            "interactor_settings": []
-                        }
+                        interactor_style="Terrain"
                     )
                     app.ctrl.view_update = ui_view.update
 
