@@ -14,7 +14,7 @@ from pyvista.trame.ui import plotter_ui
 
 
 from main import (
-    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode, MeshSurface
+    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode, MeshSurface, HyperbolicLens
 )
 
 # Режим отрисовки: "client" или "server"
@@ -75,6 +75,8 @@ class OpticsAppController:
         self.state.param_R1 = 5.0
         self.state.param_R2 = -5.0
         self.state.param_thickness = 0.5
+        # self.state.param_R_curvature = 5.0
+        self.state.param_f_target = 10.0
         self.state.param_edge_radius = 1.0
         self.state.param_num_rays = 5
         self.state.param_min_offset = -0.5
@@ -99,22 +101,28 @@ class OpticsAppController:
         ]
 
     def create_initial_objects(self):
-        self.add_object("lens", "Линза 1", {
-            "origin": (-2.0, 0.0, 0.0), "rotation": (0, 0, 0),
-            "R1": 5.0, "R2": -5.0, "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
-            "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
-        })
-        self.add_object("lens", "Линза 2", {
-            "origin": (2.0, 0.0, 0.0), "rotation": (0, 0, 45),
-            "R1": 5.0, "R2": 2.0, "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
-            "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
-        })
+        # self.add_object("lens", "Линза 1", {
+        #     "origin": (-2.0, 0.0, 0.0), "rotation": (0, 0, 0),
+        #     "R1": 5.0, "R2": -5.0, "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
+        #     "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
+        # })
+        # self.add_object("lens", "Линза 2", {
+        #     "origin": (2.0, 0.0, 0.0), "rotation": (0, 0, 45),
+        #     "R1": 5.0, "R2": 2.0, "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
+        #     "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
+        # })
         # self.add_object("mesh", f"Меш {len(self.scene_objects) + 1}", {
         #     "origin": (10, 4, -16), "rotation": (0, -90, 0),
         #     "mesh_path": "Models/provod.stl",  # Значение по умолчанию или путь к вашей модели
         #     "n": 1.5,
         #     "reflection_range": (0, np.inf), "absorption_range": None
         # })
+
+        self.add_object("hyperbolic_lens", f"Гиперб. линза {len(self.scene_objects) + 1}", {
+            "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius_of_curvature": -0.5,
+            "thickness": 0.5, "edge_radius": 0.75, "n": 1.5,
+            "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
+        })
 
         for y in np.linspace(-1, 0.8, 50):
             self.manual_rays.append(
@@ -140,10 +148,10 @@ class OpticsAppController:
         # Первичная отрисовка нового объекта на сцене.
         # Меш уже содержит в себе origin и rotation из main.py, поэтому
         # свойства actor.position/orientation не трогаем (они остаются 0, 0, 0)
-        if isinstance(instance, UniversalLens):
+        if isinstance(instance, (UniversalLens, HyperbolicLens)):
             self.plotter.add_mesh(
                 instance.get_mesh(),
-                color="cyan",
+                color="magenta" if obj_type == "hyperbolic_lens" else "cyan",
                 opacity=0.5,
                 smooth_shading=True,
                 name=obj_id
@@ -177,6 +185,14 @@ class OpticsAppController:
             "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
         })
 
+    def add_hyperbolic_lens_click(self):
+        """Метод обработки добавления гиперболической линзы."""
+        self.add_object("hyperbolic_lens", f"Гиперб. линза {len(self.scene_objects) + 1}", {
+            "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius_of_curvature": 5.0,
+            "thickness": 0.5, "edge_radius": 1.0, "n": 1.5, "f_target": 10.0,
+            "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
+        })
+
     def add_emitter_click(self):
         self.add_object("emitter", f"Источник {len(self.scene_objects) + 1}", {
             "origin": (0, 0, 0), "rotation": (0, 0, 0), "num_rays": 5, "min_offset": -0.5,
@@ -190,6 +206,23 @@ class OpticsAppController:
             "n": 1.5,
             "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
         })
+
+    def compute_radius_from_n_click(self):
+        """Кнопка: Считать Радиус по заданному N и Фокусу"""
+        f = float(self.state.param_f_target)
+        n = float(self.state.param_n)
+        # Рассчитываем и обновляем ползунок радиуса в UI
+        new_R = HyperbolicLens.calculate_radius_by_n(f, n)
+        self.state.param_curvature = round(new_R, 3)
+
+    def compute_n_from_radius_click(self):
+        """Кнопка: Считать N по заданному Радиусу и Фокусу"""
+        f = float(self.state.param_f_target)
+        R_curv = float(self.state.param_R_curvature)
+        # Рассчитываем и обновляем ползунок преломления в UI
+        new_n = HyperbolicLens.calculate_n_by_radius(f, R_curv)
+        # Ограничиваем разумными пределами для слайдера (1.0 - 2.5)
+        self.state.param_n = round(max(1.0, min(2.5, new_n)), 3)
 
     def remove_object(self, *args, **kwargs):
         if args and isinstance(args[0], list):
@@ -220,6 +253,15 @@ class OpticsAppController:
                 origin=params.get("origin", (0, 0, 0)), rotation_degrees=params.get("rotation", (0, 0, 0)),
                 R1=params.get("R1"), R2=params.get("R2"), thickness=params.get("thickness", 0.5),
                 edge_radius=params.get("edge_radius", 1.0), n=params.get("n", 1.5),
+                reflection_range=params.get("reflection_range"),
+                refraction_range=params.get("refraction_range", (0, np.inf)),
+                absorption_range=params.get("absorption_range")
+            )
+        elif obj_type == "hyperbolic_lens":
+            return HyperbolicLens(
+                origin=params.get("origin", (0, 0, 0)), rotation_degrees=params.get("rotation", (0, 0, 0)),
+                thickness=params.get("thickness", 0.5), edge_radius=params.get("edge_radius", 1.0),
+                n=params.get("n", 1.5), f_target=params.get("f_target", 10.0),
                 reflection_range=params.get("reflection_range"),
                 refraction_range=params.get("refraction_range", (0, np.inf)),
                 absorption_range=params.get("absorption_range")
@@ -255,6 +297,7 @@ class OpticsAppController:
         else:
             self.ray_tracer.set_mode("simple")
             self.ray_tracer.mode.max_bounces = 100
+            self.ray_tracer.mode.offset_distance = 0.01
 
         # Принудительно пересчитываем лучи для нового режима трассировки
         self.update_scene()
@@ -270,7 +313,7 @@ class OpticsAppController:
             # 1. Собираем оптические поверхности для трассировки
             for obj_entry in self.scene_objects:
                 instance = obj_entry["instance"]
-                if isinstance(instance, UniversalLens):
+                if isinstance(instance, (UniversalLens, HyperbolicLens)):
                     for surf in instance.get_surfaces():
                         self.ray_tracer.add_elements(surf)
                 elif isinstance(instance, MeshSurface):
@@ -345,6 +388,11 @@ class OpticsAppController:
             self.state.param_R2 = float(p.get("R2", -5.0))
             self.state.param_thickness = float(p.get("thickness", 0.5))
             self.state.param_edge_radius = float(p.get("edge_radius", 1.0))
+        elif obj_entry["type"] == "hyperbolic_lens":
+            p["n"] = float(self.state.param_n)
+            p["f_target"] = float(self.state.param_f_target)
+            p["thickness"] = float(self.state.param_thickness)
+            p["edge_radius"] = float(self.state.param_edge_radius)
         elif obj_entry["type"] == "emitter":
             self.state.param_num_rays = int(p.get("num_rays", 5))
             self.state.param_min_offset = float(p.get("min_offset", -0.5))
@@ -399,6 +447,12 @@ class OpticsAppController:
             p["R2"] = float(self.state.param_R2)
             p["thickness"] = float(self.state.param_thickness)
             p["edge_radius"] = float(self.state.param_edge_radius)
+        elif obj_entry["type"] == "hyperbolic_lens":
+            p["n"] = float(self.state.param_n)
+            # p["radius_of_curvature"] = float(self.state.param_R_curvature)
+            p["f_target"] = float(self.state.param_f_target)  # Прямая запись без формул пересчета
+            p["thickness"] = float(self.state.param_thickness)
+            p["edge_radius"] = float(self.state.param_edge_radius)
         elif obj_entry["type"] == "emitter":
             p["num_rays"] = int(self.state.param_num_rays)
             p["min_offset"] = float(self.state.param_min_offset)
@@ -435,10 +489,10 @@ class OpticsAppController:
         if obj_id in self.plotter.actors:
             self.plotter.remove_actor(obj_id)
 
-            if obj_entry["type"] == "lens":
+            if obj_entry["type"] in ["lens", "hyperbolic_lens"]:
                 self.plotter.add_mesh(
                     obj_entry["instance"].get_mesh(),
-                    color="cyan",
+                    color="magenta" if obj_entry["type"] == "hyperbolic_lens" else "cyan",
                     opacity=0.5,
                     smooth_shading=True,
                     name=obj_id
@@ -478,7 +532,7 @@ server.client_type = "vue3"
 app = OpticsAppController(server)
 
 for param in ["param_pos_x", "param_pos_y", "param_pos_z", "param_rot_x", "param_rot_y", "param_rot_z",
-              "param_n", "param_R1", "param_R2", "param_thickness", "param_edge_radius", "param_num_rays",
+              "param_n", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius", "param_num_rays",
               "param_min_offset", "param_max_offset", "param_wavelength", "param_mesh_path"]:
     server.state.change(param)(app.on_param_change)
 
@@ -492,7 +546,8 @@ with SinglePageLayout(server) as layout:
                                   style="height: 100%; overflow-y: auto; border-right: 1px solid #444; color: white;"):
                     vuetify.VCardTitle("Объекты сцены", classes="text-h6 px-0")
                     with vuetify.VRow(classes="py-2", no_gutters=True):
-                        vuetify.VBtn("Добавить линзу", color="cyan", block=True, click=app.add_lens_click)
+                        vuetify.VBtn("Добавить сферич. линзу", color="cyan", block=True, click=app.add_lens_click)
+                        vuetify.VBtn("Добавить гиперб. линзу", color="magenta", block=True, click=app.add_hyperbolic_lens_click)
                         vuetify.VBtn("Добавить источник", color="green", block=True, class_="mt-2",
                                      click=app.add_emitter_click)
                         vuetify.VBtn("Добавить 3D-меш", color="yellow", block=True, class_="mt-2",
@@ -543,7 +598,7 @@ with SinglePageLayout(server) as layout:
                     vuetify.VDivider(class_="my-4")
 
                     with vuetify.VContainer(v_if="selected_object_type == 'lens'", class_="pa-0"):
-                        vuetify.VListSubheader("Параметры линзы", class_="px-0")
+                        vuetify.VListSubheader("Параметры сферич. линзы", class_="px-0")
                         vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01,
                                         label="Показатель преломления", dense=True)
                         vuetify.VSlider(v_model="param_R1", min=-20, max=20, step=0.5,
@@ -554,6 +609,17 @@ with SinglePageLayout(server) as layout:
                                         label="Толщина", dense=True)
                         vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1,
                                         label="Радиус апертуры", dense=True)
+
+                    with vuetify.VContainer(v_if="selected_object_type == 'hyperbolic_lens'", class_="pa-0"):
+                        vuetify.VListSubheader("Параметры гиперболической линзы", class_="px-0")
+                        vuetify.VSlider(v_model="param_thickness", min=0.1, max=5.0, step=0.1,
+                                        label="Толщина", dense=True)
+                        vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1,
+                                        label="Радиус апертуры", dense=True)
+                        vuetify.VSlider(v_model="param_f_target", min=-30.0, max=30.0, step=0.1,
+                                        label="Целевой фокус (f)", dense=True)
+                        vuetify.VSlider(v_model="param_n", min=1.001, max=2.5, step=0.01,
+                                        label="Показатель преломления (n)", dense=True)
 
                     with vuetify.VContainer(v_if="selected_object_type == 'emitter'", class_="pa-0"):
                         vuetify.VListSubheader("Параметры источника", class_="px-0")
