@@ -52,7 +52,7 @@ class OpticsAppController:
         self.ray_tracer.mode.energy_color_type = 0
         self.ray_tracer.mode.max_bounces = 100
 
-        self._debounce_delay = 0.01  # Уменьшено для более плавного отклика при оптимизации
+        self._debounce_delay = 0.01
         self._debounce_timer = None
 
         self.state.selected_object_id = None
@@ -64,7 +64,7 @@ class OpticsAppController:
             {"title": "Tree", "value": "tree"},
         ]
 
-        # Инициализация базовых полей параметров
+        # Основные параметры
         self.state.param_pos_x = 0.0
         self.state.param_pos_y = 0.0
         self.state.param_pos_z = 0.0
@@ -75,7 +75,6 @@ class OpticsAppController:
         self.state.param_R1 = 5.0
         self.state.param_R2 = -5.0
         self.state.param_thickness = 0.5
-        # self.state.param_R_curvature = 5.0
         self.state.param_f_target = 10.0
         self.state.param_edge_radius = 1.0
         self.state.param_num_rays = 5
@@ -83,6 +82,22 @@ class OpticsAppController:
         self.state.param_max_offset = 0.5
         self.state.param_wavelength = 550.0
         self.state.param_mesh_path = ""
+
+        self.state.temp_pos_delta_x = 0.0
+        self.state.temp_pos_delta_y = 0.0
+        self.state.temp_pos_delta_z = 0.0
+
+        self.state.temp_last_pos_x = 0.0
+        self.state.temp_last_pos_y = 0.0
+        self.state.temp_last_pos_z = 0.0
+
+        self.ctrl.trigger("apply_x_delta")(self.apply_x_delta)
+        self.ctrl.trigger("apply_y_delta")(self.apply_y_delta)
+        self.ctrl.trigger("apply_z_delta")(self.apply_z_delta)
+
+        self.ctrl.trigger("set_last_pos_x")(self.set_last_pos_x)
+        self.ctrl.trigger("set_last_pos_y")(self.set_last_pos_y)
+        self.ctrl.trigger("set_last_pos_z")(self.set_last_pos_z)
 
         self.ctrl.trigger("delete_object_event")(self.remove_object)
 
@@ -94,30 +109,15 @@ class OpticsAppController:
         self.create_initial_objects()
         self.initializing = False
 
+    # ---------- Вспомогательные методы ----------
     def _update_objects_list_state(self):
         self.state.scene_objects_list = [
             {"id": o["id"], "name": o["name"], "type": o["type"]}
             for o in self.scene_objects
         ]
 
+    # ---------- Создание объектов ----------
     def create_initial_objects(self):
-        # self.add_object("lens", "Линза 1", {
-        #     "origin": (-2.0, 0.0, 0.0), "rotation": (0, 0, 0),
-        #     "R1": 5.0, "R2": -5.0, "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
-        #     "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
-        # })
-        # self.add_object("lens", "Линза 2", {
-        #     "origin": (2.0, 0.0, 0.0), "rotation": (0, 0, 45),
-        #     "R1": 5.0, "R2": 2.0, "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
-        #     "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
-        # })
-        # self.add_object("mesh", f"Меш {len(self.scene_objects) + 1}", {
-        #     "origin": (10, 4, -16), "rotation": (0, -90, 0),
-        #     "mesh_path": "Models/provod.stl",  # Значение по умолчанию или путь к вашей модели
-        #     "n": 1.5,
-        #     "reflection_range": (0, np.inf), "absorption_range": None
-        # })
-
         self.add_object("hyperbolic_lens", f"Гиперб. линза {len(self.scene_objects) + 1}", {
             "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius_of_curvature": -0.5,
             "thickness": 0.5, "edge_radius": 0.75, "n": 1.5,
@@ -145,9 +145,6 @@ class OpticsAppController:
         }
         self.scene_objects.append(obj_entry)
 
-        # Первичная отрисовка нового объекта на сцене.
-        # Меш уже содержит в себе origin и rotation из main.py, поэтому
-        # свойства actor.position/orientation не трогаем (они остаются 0, 0, 0)
         if isinstance(instance, (UniversalLens, HyperbolicLens)):
             self.plotter.add_mesh(
                 instance.get_mesh(),
@@ -186,7 +183,6 @@ class OpticsAppController:
         })
 
     def add_hyperbolic_lens_click(self):
-        """Метод обработки добавления гиперболической линзы."""
         self.add_object("hyperbolic_lens", f"Гиперб. линза {len(self.scene_objects) + 1}", {
             "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius_of_curvature": 5.0,
             "thickness": 0.5, "edge_radius": 1.0, "n": 1.5, "f_target": 10.0,
@@ -202,28 +198,12 @@ class OpticsAppController:
     def add_mesh_click(self):
         self.add_object("mesh", f"Меш {len(self.scene_objects) + 1}", {
             "origin": (0, 0, 0), "rotation": (0, 0, 0),
-            "mesh_path": "Models/Prism.stl",  # Значение по умолчанию или путь к вашей модели
+            "mesh_path": "Models/Prism.stl",
             "n": 1.5,
             "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
         })
 
-    def compute_radius_from_n_click(self):
-        """Кнопка: Считать Радиус по заданному N и Фокусу"""
-        f = float(self.state.param_f_target)
-        n = float(self.state.param_n)
-        # Рассчитываем и обновляем ползунок радиуса в UI
-        new_R = HyperbolicLens.calculate_radius_by_n(f, n)
-        self.state.param_curvature = round(new_R, 3)
-
-    def compute_n_from_radius_click(self):
-        """Кнопка: Считать N по заданному Радиусу и Фокусу"""
-        f = float(self.state.param_f_target)
-        R_curv = float(self.state.param_R_curvature)
-        # Рассчитываем и обновляем ползунок преломления в UI
-        new_n = HyperbolicLens.calculate_n_by_radius(f, R_curv)
-        # Ограничиваем разумными пределами для слайдера (1.0 - 2.5)
-        self.state.param_n = round(max(1.0, min(2.5, new_n)), 3)
-
+    # ---------- Удаление объекта ----------
     def remove_object(self, *args, **kwargs):
         if args and isinstance(args[0], list):
             obj_id = args[0][0]
@@ -232,7 +212,6 @@ class OpticsAppController:
         else:
             return
 
-        # Удаляем актера с графика PyVista, чтобы он не висел в памяти
         self.plotter.remove_actor(obj_id)
         self.scene_objects = [o for o in self.scene_objects if o["id"] != obj_id]
 
@@ -247,6 +226,7 @@ class OpticsAppController:
         self._update_objects_list_state()
         self.update_scene()
 
+    # ---------- Создание экземпляров ----------
     def _create_instance(self, obj_type, params):
         if obj_type == "lens":
             return UniversalLens(
@@ -282,35 +262,29 @@ class OpticsAppController:
                 translation=params.get("origin", (0, 0, 0)),
                 n_inside=params.get("n", 1.5),
                 reflection_range=params.get("reflection_range", (0, np.inf)),
-                # refraction_range=params.get("refraction_range", (0, np.inf)),
                 absorption_range=params.get("absorption_range")
             )
 
+    # ---------- Трассировка ----------
     def on_trace_mode_changed(self, **kwargs):
         mode = self.state.trace_mode
-
         if mode == "tree":
             self.ray_tracer.set_mode("tree")
-            # Увеличиваем глубину дерева рекурсии для прохода через много линз
             self.ray_tracer.mode.max_depth = 30
             self.ray_tracer.mode.total_limit = 1000
         else:
             self.ray_tracer.set_mode("simple")
             self.ray_tracer.mode.max_bounces = 100
             self.ray_tracer.mode.offset_distance = 0.01
-
-        # Принудительно пересчитываем лучи для нового режима трассировки
         self.update_scene()
 
     def update_scene(self):
-        """ОПТИМИЗИРОВАНО: Перестраивает геометрию лучей с учетом их энергии и прозрачности."""
         if self._updating: return
         self._updating = True
         try:
             self.ray_tracer.elements.clear()
             self.ray_tracer.rays.clear()
 
-            # 1. Собираем оптические поверхности для трассировки
             for obj_entry in self.scene_objects:
                 instance = obj_entry["instance"]
                 if isinstance(instance, (UniversalLens, HyperbolicLens)):
@@ -322,36 +296,24 @@ class OpticsAppController:
             for ray in self.manual_rays:
                 self.ray_tracer.add_ray(ray)
 
-            # 2. Математический расчет лучей (возвращает список объектов Segment)
             segments = self.ray_tracer.trace_all()
-
-            # 3. ИСПОЛЬЗУЕМ КЛАСС RayCloud ИЗ main.py ДЛЯ РАСЧЕТА ПРОЗРАЧНОСТИ (ALPHA)
-            # Вызываем метод update у встроенного в ray_tracer объекта cloud.
-            # Он самостоятельно запишет массив "colors" (RGBA) в свой внутренний меш.
             energy_type = self.ray_tracer.mode.energy_color_type
             self.ray_tracer.cloud.update(segments, energy_color_type=energy_type)
-
-            # Извлекаем правильно сформированный меш с RGBA-информацией из RayCloud
             calculated_ray_mesh = self.ray_tracer.cloud.actor.mapper.dataset
 
-            # 4. ОБНОВЛЕНИЕ UI-АКТОРА С АКТИВАЦИЕЙ ПРОЗРАЧНОСТИ
             if "traced_rays_geometry" in self.plotter.actors:
-                # Удаляем старый актор, чтобы сбросить жесткий кэш непрозрачности на клиенте
                 self.plotter.remove_actor("traced_rays_geometry")
 
-            # Если меш содержит данные, добавляем его на сцену с поддержкой RGBA
             if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
-                # Явно выставляем имя массива активных скаляров
                 calculated_ray_mesh.active_scalars_name = "colors"
-
                 self.plotter.add_mesh(
                     calculated_ray_mesh,
-                    scalars="colors",  # Читаем цвета вершин
-                    rgba=True,  # Активируем чтение альфа-канала (прозрачности)
-                    opacity="linear",  # Отключаем дефолтные маски, используем чистый альфа-канал
+                    scalars="colors",
+                    rgba=True,
+                    opacity="linear",
                     line_width=4,
                     render_lines_as_tubes=False,
-                    name="traced_rays_geometry"  # Регистрируем под тем же именем
+                    name="traced_rays_geometry"
                 )
             self.plotter.render()
             if hasattr(self.ctrl, 'view_update'):
@@ -359,6 +321,7 @@ class OpticsAppController:
         finally:
             self._updating = False
 
+    # ---------- Выбор объекта ----------
     def on_object_selected(self, *args, **kwargs):
         obj_id = args[0] if args else self.state.selected_object_id
         if not obj_id:
@@ -382,6 +345,10 @@ class OpticsAppController:
         self.state.param_rot_x = float(p["rotation"][0])
         self.state.param_rot_y = float(p["rotation"][1])
         self.state.param_rot_z = float(p["rotation"][2])
+        # Сбрасываем временные смещения при выборе объекта
+        self.state.temp_pos_delta_x = 0.0
+        self.state.temp_pos_delta_y = 0.0
+        self.state.temp_pos_delta_z = 0.0
         if obj_entry["type"] == "lens":
             self.state.param_n = float(p.get("n", 1.5))
             self.state.param_R1 = float(p.get("R1", 5.0))
@@ -389,10 +356,10 @@ class OpticsAppController:
             self.state.param_thickness = float(p.get("thickness", 0.5))
             self.state.param_edge_radius = float(p.get("edge_radius", 1.0))
         elif obj_entry["type"] == "hyperbolic_lens":
-            p["n"] = float(self.state.param_n)
-            p["f_target"] = float(self.state.param_f_target)
-            p["thickness"] = float(self.state.param_thickness)
-            p["edge_radius"] = float(self.state.param_edge_radius)
+            self.state.param_n = float(p.get("n", 1.5))
+            self.state.param_f_target = float(p.get("f_target", 10.0))
+            self.state.param_thickness = float(p.get("thickness", 0.5))
+            self.state.param_edge_radius = float(p.get("edge_radius", 1.0))
         elif obj_entry["type"] == "emitter":
             self.state.param_num_rays = int(p.get("num_rays", 5))
             self.state.param_min_offset = float(p.get("min_offset", -0.5))
@@ -402,23 +369,28 @@ class OpticsAppController:
             self.state.param_n = float(p.get("n", 1.5))
             self.state.param_mesh_path = str(p.get("mesh_path", ""))
 
+    # ---------- Обновление выбранного объекта ----------
     def update_selected_object(self, *args, **kwargs):
-        """Финальное исправление: устраняет преломление 'в воздухе' при вращении по 2+ осям.
-        Синхронизирует внутренний порядок осей Эйлера с логикой main.py.
-        """
         obj_id = self.state.selected_object_id
         obj_entry = self._find_object(obj_id)
         if not obj_entry: return
 
         p = obj_entry["params"]
+        # Базовые координаты из параметров
+        base_origin = np.array([float(self.state.param_pos_x),
+                                float(self.state.param_pos_y),
+                                float(self.state.param_pos_z)])
+        # Временное смещение от слайдера
+        # temp_shift = np.array([float(self.state.temp_pos_delta_x),
+        #                        float(self.state.temp_pos_delta_y),
+        #                        float(self.state.temp_pos_delta_z)])
+        # Итоговая позиция = базовая + временное смещение
+        new_origin = base_origin# + temp_shift
 
-        # Получаем целевые абсолютные значения из UI
-        new_origin = np.array(
-            [float(self.state.param_pos_x), float(self.state.param_pos_y), float(self.state.param_pos_z)])
-        new_rotation = np.array(
-            [float(self.state.param_rot_x), float(self.state.param_rot_y), float(self.state.param_rot_z)])
+        new_rotation = np.array([float(self.state.param_rot_x),
+                                 float(self.state.param_rot_y),
+                                 float(self.state.param_rot_z)])
 
-        # Проверяем, изменились ли конструктивные параметры формы (радиусы, толщина)
         shape_changed = False
         if obj_entry["type"] == "lens":
             if (p["n"] != float(self.state.param_n) or
@@ -438,8 +410,8 @@ class OpticsAppController:
                     p["mesh_path"] != str(self.state.param_mesh_path)):
                 shape_changed = True
 
-        # Сохраняем новые параметры в словарь состояния объекта
-        p["origin"] = tuple(new_origin)
+        # Обновляем параметры (сохраняем только базовую позицию, без temp)
+        p["origin"] = tuple(base_origin)  # сохраняем базовую, а не new_origin
         p["rotation"] = tuple(new_rotation)
         if obj_entry["type"] == "lens":
             p["n"] = float(self.state.param_n)
@@ -449,8 +421,7 @@ class OpticsAppController:
             p["edge_radius"] = float(self.state.param_edge_radius)
         elif obj_entry["type"] == "hyperbolic_lens":
             p["n"] = float(self.state.param_n)
-            # p["radius_of_curvature"] = float(self.state.param_R_curvature)
-            p["f_target"] = float(self.state.param_f_target)  # Прямая запись без формул пересчета
+            p["f_target"] = float(self.state.param_f_target)
             p["thickness"] = float(self.state.param_thickness)
             p["edge_radius"] = float(self.state.param_edge_radius)
         elif obj_entry["type"] == "emitter":
@@ -462,33 +433,23 @@ class OpticsAppController:
             p["n"] = float(self.state.param_n)
             p["mesh_path"] = str(self.state.param_mesh_path)
 
-        # РЕШЕНИЕ БАГА ПРЕЛОМЛЕНИЯ В ВОЗДУХЕ:
-        # Вместо постепенного накопления дельт мы ВСЕГДА генерируем чистый инстанс в нулевых координатах
-        # и с нулевым поворотом. После этого мы ОДНИМ вызовом .translate() и .rotate()
-        # приводим его к целевому виду. Это гарантирует, что и математические поверхности,
-        # и get_mesh() повернутся по абсолютно одинаковому математическому закону main.py.
-
-        # 1. Создаем базовый инстанс в нуле (с учетом возможных изменений R1, R2, толщины)
+        # Пересоздаём инстанс с новыми параметрами (используем new_origin, т.к. это реальная позиция)
         base_params = p.copy()
         base_params["origin"] = (0.0, 0.0, 0.0)
         base_params["rotation"] = (0.0, 0.0, 0.0)
         instance = self._create_instance(obj_entry["type"], base_params)
 
-        # 2. Применяем абсолютный поворот встроенным методом из main.py
+        # Применяем поворот и перенос на итоговую позицию
         if np.any(new_rotation != 0):
             instance.rotate(new_rotation)
-
-        # 3. Применяем абсолютное смещение встроенным методом из main.py
         if np.any(new_origin != 0):
             instance.translate(new_origin)
 
-        # Сохраняем собранный инстанс в память сцены
         obj_entry["instance"] = instance
 
-        # 4. Обновляем визуальную 3D-модель объекта на сцене PyVista
+        # Обновляем визуализацию
         if obj_id in self.plotter.actors:
             self.plotter.remove_actor(obj_id)
-
             if obj_entry["type"] in ["lens", "hyperbolic_lens"]:
                 self.plotter.add_mesh(
                     obj_entry["instance"].get_mesh(),
@@ -512,14 +473,75 @@ class OpticsAppController:
                     name=obj_id
                 )
 
-        # Пересчитываем трассировку лучей для новой сцены
         self.update_scene()
 
+    # Обработчик изменения любого параметра (кроме temp)
     def on_param_change(self, *args, **kwargs):
+        # Если изменился param_pos, сбрасываем соответствующий temp, чтобы избежать двойного учёта
+        # Определяем, какой параметр изменился, через kwargs
+        # В trame при изменении состояния передаётся имя в kwargs.get('key')
+        key = kwargs.get('key')
+        if key and key.startswith('param_pos_'):
+            axis = key[-1]
+            setattr(self.state, f"temp_pos_{axis}", 0.0)
         if self._debounce_timer is not None:
             self._debounce_timer.cancel()
         loop = asyncio.get_event_loop()
         self._debounce_timer = loop.call_later(self._debounce_delay, self.update_selected_object)
+
+    # Обработчик изменения временных слайдеров – обновляет объект без задержки
+    def on_temp_change(self, *args, **kwargs):
+        key = kwargs.get('key')
+
+        setattr(self.state, f"param_pos_x", float(float(getattr(self.state, f"temp_last_pos_x")) + kwargs["temp_pos_delta_x"]))
+        setattr(self.state, f"param_pos_y", float(float(getattr(self.state, f"temp_last_pos_y")) + kwargs["temp_pos_delta_y"]))
+        setattr(self.state, f"param_pos_z", float(float(getattr(self.state, f"temp_last_pos_z")) + kwargs["temp_pos_delta_z"]))
+
+        # if key and key.startswith('temp_pos_delta_'):
+        #     print(2222)
+        #     axis = key[-1]
+        #     temp = getattr(self.state, f"temp_pos_delta_{axis}")
+        #     if temp == 0.0:
+        #         return
+        #
+        #     current = getattr(self.state, f"param_pos_{axis}")
+        #     new_val = current + temp
+        #     setattr(self.state, f"param_pos_{axis}", new_val)
+        self.update_selected_object()
+
+    # Применение дельты при отпускании слайдера
+    def apply_delta(self, axis):
+        temp = getattr(self.state, f"temp_pos_{axis}")
+        if temp == 0.0:
+            return
+        current = getattr(self.state, f"param_pos_{axis}")
+        new_val = current + temp
+        setattr(self.state, f"param_pos_{axis}", new_val)
+        setattr(self.state, f"temp_pos_{axis}", 0.0)
+        # Обновляем объект (он уже обновился при движении, но теперь базовая позиция изменилась)
+        self.update_selected_object()
+
+    def apply_x_delta(self):
+        self.state.temp_last_pos_x = self.state.param_pos_x
+        self.state.temp_pos_delta_x = 0
+
+    def apply_y_delta(self):
+        self.state.temp_last_pos_y = self.state.param_pos_y
+        self.state.temp_pos_delta_y = 0
+
+    def apply_z_delta(self):
+        self.state.temp_last_pos_z = self.state.param_pos_z
+        self.state.temp_pos_delta_z = 0
+
+    def set_last_pos_x(self):
+        self.state.temp_last_pos_x = self.state.param_pos_x
+
+    def set_last_pos_y(self):
+        self.state.temp_last_pos_y = self.state.param_pos_y
+
+    def set_last_pos_z(self):
+        self.state.temp_last_pos_z = self.state.param_pos_z
+
 
     def select_object(self, obj_id):
         self.state.selected_object_id = obj_id
@@ -531,13 +553,23 @@ server = get_server()
 server.client_type = "vue3"
 app = OpticsAppController(server)
 
-for param in ["param_pos_x", "param_pos_y", "param_pos_z", "param_rot_x", "param_rot_y", "param_rot_z",
-              "param_n", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius", "param_num_rays",
-              "param_min_offset", "param_max_offset", "param_wavelength", "param_mesh_path"]:
+# Подписка на изменения параметров (кроме temp)
+for param in ["param_n", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
+              "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_mesh_path"]:
     server.state.change(param)(app.on_param_change)
 
+# Для позиционных координат и вращений тоже нужна подписка
+for axis in ["x", "y", "z"]:
+    server.state.change(f"param_pos_{axis}")(app.on_param_change)
+    server.state.change(f"param_rot_{axis}")(app.on_param_change)
+
+# Подписка на временные переменные (для движения во время перетаскивания)
+for axis in ["x", "y", "z"]:
+    server.state.change(f"temp_pos_delta_{axis}")(app.on_temp_change)
+
 with SinglePageLayout(server) as layout:
-    layout.title.set_text("Оптический симулятор")
+    # Заголовок убран
+    # layout.title.set_text("Оптический симулятор")
     with layout.content:
         with vuetify.VContainer(fluid=True, classes="pa-0", style="height: 100vh; overflow: hidden;"):
             with vuetify.VRow(no_gutters=True, style="height: 100%;"):
@@ -545,13 +577,18 @@ with SinglePageLayout(server) as layout:
                 with vuetify.VCol(cols=3, classes="pa-4 bg-grey-darken-4",
                                   style="height: 100%; overflow-y: auto; border-right: 1px solid #444; color: white;"):
                     vuetify.VCardTitle("Объекты сцены", classes="text-h6 px-0")
-                    with vuetify.VRow(classes="py-2", no_gutters=True):
-                        vuetify.VBtn("Добавить сферич. линзу", color="cyan", block=True, click=app.add_lens_click)
-                        vuetify.VBtn("Добавить гиперб. линзу", color="magenta", block=True, click=app.add_hyperbolic_lens_click)
-                        vuetify.VBtn("Добавить источник", color="green", block=True, class_="mt-2",
-                                     click=app.add_emitter_click)
-                        vuetify.VBtn("Добавить 3D-меш", color="yellow", block=True, class_="mt-2",
-                                     click=app.add_mesh_click)
+
+                    # Единая кнопка с выпадающим меню
+                    with vuetify.VBtn(color="primary", block=True):
+                        vuetify.VIcon("mdi-plus", class_="mr-2")
+                        "Добавить объект"
+                        with vuetify.VMenu(activator="parent"):
+                            with vuetify.VList():
+                                vuetify.VListItem("Сферическая линза", click=app.add_lens_click)
+                                vuetify.VListItem("Гиперболическая линза", click=app.add_hyperbolic_lens_click)
+                                vuetify.VListItem("Источник", click=app.add_emitter_click)
+                                vuetify.VListItem("3D-меш", click=app.add_mesh_click)
+
                     vuetify.VDivider(class_="my-4")
                     with vuetify.VCard(flat=True, color="transparent", style="max-height: 200px; overflow-y: auto;"):
                         with vuetify.VList(dense=True, nav=True):
@@ -573,18 +610,43 @@ with SinglePageLayout(server) as layout:
                     vuetify.VCardTitle("Параметры: {{ selected_object_id ? selected_object_id : 'не выбран' }}",
                                        classes="text-subtitle-1 px-0 text-cyan-lighten-2")
 
-                    # Блок позиционирования
+                    # --- Блок позиционирования ---
                     vuetify.VListSubheader("Позиция", class_="px-0")
-                    for axis in ["x", "y", "z"]:
-                        with vuetify.VRow(no_gutters=True, align="center"):
-                            with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model=f"param_pos_{axis}", label=axis.upper(), type="number",
-                                                   dense=True, class_="mb-2")
-                            with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model=f"param_pos_{axis}", min=-10 if axis == "x" else -5,
-                                                max=10 if axis == "x" else 5, step=0.1, dense=True, hide_details=True)
+                    # Ось X
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=4):
+                            vuetify.VTextField(v_model="param_pos_x", label="X", type="number",
+                                               dense=True, class_="mb-2")
+                        with vuetify.VCol(cols=8):
+                            vuetify.VSlider(v_model="temp_pos_delta_x", min=-5, max=5, step=0.05,
+                                            dense=True, hide_details=True,
+                                            thumb_label="always",
+                                            mouseup="trigger('apply_x_delta')",
+                                            mousedown="trigger('set_last_pos_x')",)
+                    # Ось Y
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=4):
+                            vuetify.VTextField(v_model="param_pos_y", label="Y", type="number",
+                                               dense=True, class_="mb-2")
+                        with vuetify.VCol(cols=8):
+                            vuetify.VSlider(v_model="temp_pos_delta_y", min=-5, max=5, step=0.05,
+                                            dense=True, hide_details=True,
+                                            thumb_label="always",
+                                            mouseup="trigger('apply_y_delta')",
+                                            mousedown="trigger('set_last_pos_y')",)
+                    # Ось Z
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=4):
+                            vuetify.VTextField(v_model="param_pos_z", label="Z", type="number",
+                                               dense=True, class_="mb-2")
+                        with vuetify.VCol(cols=8):
+                            vuetify.VSlider(v_model="temp_pos_delta_z", min=-5, max=5, step=0.05,
+                                            dense=True, hide_details=True,
+                                            thumb_label="always",
+                                            mouseup="trigger('apply_z_delta')",
+                                            mousedown="trigger('set_last_pos_z')",)
 
-                    # Блок вращения
+                    # --- Блок вращения ---
                     vuetify.VListSubheader("Поворот (град)", class_="px-0")
                     for axis in ["x", "y", "z"]:
                         with vuetify.VRow(no_gutters=True, align="center"):
@@ -597,47 +659,120 @@ with SinglePageLayout(server) as layout:
 
                     vuetify.VDivider(class_="my-4")
 
+                    # --- Параметры сферической линзы ---
                     with vuetify.VContainer(v_if="selected_object_type == 'lens'", class_="pa-0"):
                         vuetify.VListSubheader("Параметры сферич. линзы", class_="px-0")
-                        vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01,
-                                        label="Показатель преломления", dense=True)
-                        vuetify.VSlider(v_model="param_R1", min=-20, max=20, step=0.5,
-                                        label="R1 (передняя)", dense=True)
-                        vuetify.VSlider(v_model="param_R2", min=-20, max=20, step=0.5,
-                                        label="R2 (задняя)", dense=True)
-                        vuetify.VSlider(v_model="param_thickness", min=0.1, max=5.0, step=0.1,
-                                        label="Толщина", dense=True)
-                        vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1,
-                                        label="Радиус апертуры", dense=True)
+                        # n
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_n", label="n", type="number", dense=True, step=0.01)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01,
+                                                dense=True, hide_details=True)
+                        # R1
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_R1", label="R1", type="number", dense=True, step=0.5)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_R1", min=-20, max=20, step=0.5,
+                                                dense=True, hide_details=True)
+                        # R2
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_R2", label="R2", type="number", dense=True, step=0.5)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_R2", min=-20, max=20, step=0.5,
+                                                dense=True, hide_details=True)
+                        # Толщина
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_thickness", label="Толщина", type="number", dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_thickness", min=0.1, max=5.0, step=0.1,
+                                                dense=True, hide_details=True)
+                        # Радиус апертуры
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_edge_radius", label="Апертура", type="number", dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1,
+                                                dense=True, hide_details=True)
 
+                    # --- Параметры гиперболической линзы ---
                     with vuetify.VContainer(v_if="selected_object_type == 'hyperbolic_lens'", class_="pa-0"):
                         vuetify.VListSubheader("Параметры гиперболической линзы", class_="px-0")
-                        vuetify.VSlider(v_model="param_thickness", min=0.1, max=5.0, step=0.1,
-                                        label="Толщина", dense=True)
-                        vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1,
-                                        label="Радиус апертуры", dense=True)
-                        vuetify.VSlider(v_model="param_f_target", min=-30.0, max=30.0, step=0.1,
-                                        label="Целевой фокус (f)", dense=True)
-                        vuetify.VSlider(v_model="param_n", min=1.001, max=2.5, step=0.01,
-                                        label="Показатель преломления (n)", dense=True)
+                        # Толщина
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_thickness", label="Толщина", type="number", dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_thickness", min=0.1, max=5.0, step=0.1,
+                                                dense=True, hide_details=True)
+                        # Радиус апертуры
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_edge_radius", label="Апертура", type="number", dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1,
+                                                dense=True, hide_details=True)
+                        # Фокус
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_f_target", label="f", type="number", dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_f_target", min=-30.0, max=30.0, step=0.1,
+                                                dense=True, hide_details=True)
+                        # n
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_n", label="n", type="number", dense=True, step=0.01)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_n", min=1.001, max=2.5, step=0.01,
+                                                dense=True, hide_details=True)
 
+                    # --- Параметры источника ---
                     with vuetify.VContainer(v_if="selected_object_type == 'emitter'", class_="pa-0"):
                         vuetify.VListSubheader("Параметры источника", class_="px-0")
-                        vuetify.VSlider(v_model="param_num_rays", min=1, max=20, step=1,
-                                        label="Количество лучей", dense=True)
-                        vuetify.VSlider(v_model="param_min_offset", min=-3.0, max=0.0, step=0.1,
-                                        label="Мин. смещение", dense=True)
-                        vuetify.VSlider(v_model="param_max_offset", min=0.0, max=3.0, step=0.1,
-                                        label="Макс. смещение", dense=True)
-                        vuetify.VSlider(v_model="param_wavelength", min=380, max=780, step=10,
-                                        label="Длина волны (нм)", dense=True)
+                        # Количество лучей
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_num_rays", label="Кол-во", type="number", dense=True, step=1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_num_rays", min=1, max=20, step=1,
+                                                dense=True, hide_details=True)
+                        # Мин. смещение
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_min_offset", label="Мин. смещ.", type="number", dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_min_offset", min=-3.0, max=0.0, step=0.1,
+                                                dense=True, hide_details=True)
+                        # Макс. смещение
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_max_offset", label="Макс. смещ.", type="number", dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_max_offset", min=0.0, max=3.0, step=0.1,
+                                                dense=True, hide_details=True)
+                        # Длина волны
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_wavelength", label="λ (нм)", type="number", dense=True, step=10)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_wavelength", min=380, max=780, step=10,
+                                                dense=True, hide_details=True)
 
+                    # --- Параметры 3D-меша ---
                     with vuetify.VContainer(v_if="selected_object_type == 'mesh'", class_="pa-0"):
                         vuetify.VListSubheader("Параметры 3D-модели", class_="px-0")
                         vuetify.VTextField(v_model="param_mesh_path", label="Путь к файлу (.obj/.stl)", dense=True,
                                            class_="mb-2")
-                        vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01, label="Показатель преломления",
-                                        dense=True)
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_n", label="n", type="number", dense=True, step=0.01)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01,
+                                                dense=True, hide_details=True)
 
                     vuetify.VDivider(class_="my-4")
                     vuetify.VSelect(label="Режим трассировки", v_model="trace_mode", items=("trace_modes",),
@@ -645,7 +780,6 @@ with SinglePageLayout(server) as layout:
 
                 # Правая колонка с 3D окном pyvista
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
-
                     ui_view = plotter_ui(
                         app.plotter,
                         mode="client",
