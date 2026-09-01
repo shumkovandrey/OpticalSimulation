@@ -124,7 +124,7 @@ class OpticsAppController:
             "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
         })
 
-        for y in np.linspace(-1, 0.8, 50):
+        for y in np.linspace(-1, 0.8, 15):
             self.manual_rays.append(
                 Ray(origin=(-5.0, y, 0.0), direction=(1, 0, 0), energy=1.0, color="yellow", wavelength=550)
             )
@@ -261,7 +261,8 @@ class OpticsAppController:
                 rotation_degrees=params.get("rotation", (0, 0, 0)),
                 translation=params.get("origin", (0, 0, 0)),
                 n_inside=params.get("n", 1.5),
-                reflection_range=params.get("reflection_range", (0, np.inf)),
+                reflection_range=params.get("reflection_range"),
+                refraction_range=params.get("refraction_range"),
                 absorption_range=params.get("absorption_range")
             )
 
@@ -782,7 +783,7 @@ with SinglePageLayout(server) as layout:
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
                     ui_view = plotter_ui(
                         app.plotter,
-                        mode="client",
+                        mode="server",
                         add_menu=False,
                         image_scale=1,
                         interactor_style="Terrain"

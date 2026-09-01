@@ -94,8 +94,8 @@ def create_scene():
         tri_mesh.apply_scale(2.0)
         mesh_obj = MeshSurface(
             tri_mesh, n_inside=1.5,
-            # refraction_range=(0, 10000),
-            reflection_range=(0, 10000),
+            refraction_range=(0, 10000),
+            # reflection_range=(0, 10000),
             translation=[0, 70, 0], rotation_degrees=(0, 90, 0)
         )
     else:
