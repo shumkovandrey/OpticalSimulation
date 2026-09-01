@@ -775,8 +775,8 @@ class BeamEmitter:
 
 class PlaneSurface:
     def __init__(self, point,
-                 normal=None,                 # <-- новый параметр
-                 rotation_degrees=(0,0,0),
+                 normal=None,
+                 rotation_degrees=(0, 0, 0),
                  n_inside=1.0,
                  half_sizes=None, edge_radius=None,
                  reflection_range=None, refraction_range=None,
@@ -784,61 +784,72 @@ class PlaneSurface:
                  lens_origin=None, lens_axis=None):
         self.point = np.array(point, dtype=float)
 
-        # Определяем нормаль
-        if normal is not None:
-            self.normal = np.array(normal, dtype=float)
-            self.normal /= np.linalg.norm(self.normal)
-        else:
-            base_normal = np.array([1.0, 0.0, 0.0])
-            rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
-            self.normal = rot @ base_normal
+        # 1. Задаем начальную систему координат (по умолчанию нормаль вдоль базовой оси X)
+        self.base_normal = np.array([1.0, 0.0, 0.0])
+        self.normal = self.base_normal.copy()
+
+        # Получаем базовые тангенциальные направления для апертуры
+        self.base_t1, self.base_t2 = get_tangents(self.base_normal)
+        self.face_tangents = (self.base_t1.copy(), self.base_t2.copy())
 
         self.n = n_inside
-
-        # Автоматические lens_origin/lens_axis
-        self.lens_origin = np.array(lens_origin, dtype=float) if lens_origin is not None else self.point.copy()
-        self.lens_axis = np.array(lens_axis, dtype=float) if lens_axis is not None else self.normal.copy()
-        self.lens_axis /= np.linalg.norm(self.lens_axis)
-
-        # Прямоугольная апертура
-        if half_sizes is not None:
-            self.half_sizes = half_sizes
-            self.edge_radius = 0.0
-            self.face_tangents = get_tangents(self.normal)
-        else:
-            self.half_sizes = None
-            self.face_tangents = None
-            self.edge_radius = edge_radius if edge_radius is not None else 0.0
+        self.edge_radius = edge_radius if edge_radius is not None else 0.0
+        self.half_sizes = half_sizes
 
         self.reflection_range = reflection_range
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
 
+        # Накапливаемая абсолютная матрица поворота
+        self.rotation_matrix = np.eye(3)
+
+        # Если нормаль передана явно при инициализации — вычисляем матрицу под нее,
+        # иначе используем переданные углы Эйлера
+        if normal is not None:
+            explicit_norm = np.array(normal, dtype=float)
+            explicit_norm /= np.linalg.norm(explicit_norm)
+            self.rotation_matrix = calculate_rotation_matrix(explicit_norm)
+        else:
+            self.rotation_matrix = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+
+        # Применяем стартовую трансформацию к осям
+        self._apply_current_rotation()
+
+        # Настройка параметров линзы
+        self.lens_origin = np.array(lens_origin, dtype=float) if lens_origin is not None else self.point.copy()
+        self.lens_axis = np.array(lens_axis, dtype=float) if lens_axis is not None else self.normal.copy()
+        self.lens_axis /= np.linalg.norm(self.lens_axis)
+
+    def _apply_current_rotation(self):
+        """Обновляет мировые векторы нормали и тангенсов на основе накопленной матрицы поворота."""
+        self.normal = self.rotation_matrix @ self.base_normal
+        self.normal /= np.linalg.norm(self.normal)
+
+        t1 = self.rotation_matrix @ self.base_t1
+        t2 = self.rotation_matrix @ self.base_t2
+        self.face_tangents = (t1 / np.linalg.norm(t1), t2 / np.linalg.norm(t2))
+
     def rotate(self, angles_deg):
-        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
-        # point и lens_origin остаются на месте
-        self.normal = rot @ self.normal
-        self.lens_axis = rot @ self.lens_axis
-        if self.face_tangents is not None:
-            self.face_tangents = (rot @ self.face_tangents[0], rot @ self.face_tangents[1])
+        """ИСПРАВЛЕНИЕ: Перезаписываем абсолютную матрицу поворота из UI и синхронно вращаем все оси."""
+        self.rotation_matrix = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        self._apply_current_rotation()
+        self.lens_axis = self.normal.copy()
 
     def translate(self, vec):
         self.point += np.asarray(vec)
         self.lens_origin += np.asarray(vec)
 
     def apply_transform(self, mat):
-        """Применить аффинное преобразование 4x4 (без масштаба для нормали)."""
-        R = mat[:3, :3]
-        t = mat[:3, 3]
-        # Обновляем точки
-        self.point = R @ self.point + t
-        self.lens_origin = R @ self.lens_origin + t
-        # Нормаль и ось – только поворот
-        self.normal = R @ self.normal
-        self.lens_axis = R @ self.lens_axis
-        if self.face_tangents is not None:
-            t1, t2 = self.face_tangents
-            self.face_tangents = (R @ t1, R @ t2)
+        """Применение аффинной матрицы 4x4."""
+        R_part = mat[:3, :3]
+        t_part = mat[:3, 3]
+        self.point = R_part @ self.point + t_part
+        self.lens_origin = R_part @ self.lens_origin + t_part
+
+        # Обновляем матрицу поворота объекта
+        self.rotation_matrix = R_part @ self.rotation_matrix
+        self._apply_current_rotation()
+        self.lens_axis = self.normal.copy()
 
     def _slow_intersect(self, ray: Ray) -> Optional[float]:
         dot_dn = np.dot(ray.direction, self.normal)
@@ -875,7 +886,6 @@ class PlaneSurface:
             tangents = np.array(self.face_tangents, dtype=np.float64)
             half = np.array(self.half_sizes, dtype=np.float64)
         else:
-            # Фиктивные массивы – не будут использованы из-за use_rect=False
             tangents = np.zeros((2, 3), dtype=np.float64)
             half = np.zeros(2, dtype=np.float64)
 
@@ -908,7 +918,8 @@ class PlaneSurface:
         return in_ref or in_refr or in_abs
 
     def get_mesh(self) -> pv.PolyData:
-        if self.half_sizes is not None and self.face_tangents is not None:
+        """ИСПРАВЛЕНИЕ: Генерация меша строго согласована с базовой осью X симуляции."""
+        if self.half_sizes is not None:
             # Прямоугольник
             t1, t2 = self.face_tangents
             hu, hv = self.half_sizes
@@ -921,16 +932,13 @@ class PlaneSurface:
             faces = np.array([[3, 0, 1, 2], [3, 0, 2, 3]])
             return pv.PolyData(vertices, faces)
         else:
-            # Круглое (диск) с edge_radius
+            # Круглый диск: Создаем базовый диск в плоскости YZ (нормаль смотрит по X [1, 0, 0])
             radius = self.edge_radius if self.edge_radius else 1.0
-            disc = pv.Disc(center=(0, 0, 0), normal=(0, 0, 1), inner=0, outer=radius, c_res=64)
-            # Поворот и перенос
-            v_from = np.array([0., 0., 1.])
-            v_to = self.normal
-            # ... матрица поворота (используем calculate_rotation_matrix или аналогичную)
-            rot = calculate_rotation_matrix(v_to)  # уже есть в main
+            disc = pv.Disc(center=(0, 0, 0), normal=(1, 0, 0), inner=0, outer=radius, c_res=64)
+
+            # Строим мировую матрицу на основе НАШЕЙ накопленной rotation_matrix
             transform = np.eye(4)
-            transform[:3, :3] = rot
+            transform[:3, :3] = self.rotation_matrix
             transform[:3, 3] = self.lens_origin
             return disc.transform(transform, inplace=False)
 
