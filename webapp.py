@@ -29,7 +29,6 @@ class OpticsAppController:
         self.server = server
         self.state = server.state
         self.ctrl = server.controller
-        self.manual_rays = []
 
         self.plotter = pv.Plotter(off_screen=True)
         self.plotter.set_background("#1a1a2e")
@@ -134,16 +133,10 @@ class OpticsAppController:
 
     # ---------- Создание объектов ----------
     def create_initial_objects(self):
-        self.add_object("hyperbolic_lens", f"Гиперб. линза {len(self.scene_objects) + 1}", {
-            "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius_of_curvature": -0.5,
-            "thickness": 0.5, "edge_radius": 0.75, "n": 1.5,
-            "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
+        self.add_object("emitter", f"Источник {len(self.scene_objects) + 1}", {
+            "origin": (0, 0, 0), "rotation": (0, 0, 0), "num_rays": 5, "min_offset": -0.5,
+            "max_offset": 0.5, "wavelength": 550.0, "color": "yellow", "energy": 1.0, "current_n": 1.0
         })
-
-        for y in np.linspace(-1, 0.8, 15):
-            self.manual_rays.append(
-                Ray(origin=(-5.0, y, 0.0), direction=(1, 0, 0), energy=1.0, color="yellow", wavelength=550)
-            )
 
         if self.scene_objects:
             first_id = self.scene_objects[0]["id"]
@@ -326,9 +319,6 @@ class OpticsAppController:
                     self.ray_tracer.add_elements(instance)
                 elif isinstance(instance, BeamEmitter):
                     self.ray_tracer.add_emitter(instance)
-
-            for ray in self.manual_rays:
-                self.ray_tracer.add_ray(ray)
 
             segments = self.ray_tracer.trace_all()
             energy_type = self.ray_tracer.mode.energy_color_type
@@ -707,7 +697,7 @@ with SinglePageLayout(server) as layout:
                             vuetify.VTextField(v_model="param_pos_x", label="X", type="number",
                                                dense=True, class_="mb-2")
                         with vuetify.VCol(cols=8):
-                            vuetify.VSlider(v_model="temp_pos_delta_x", min=-5, max=5, step=0.05,
+                            vuetify.VSlider(v_model="temp_pos_delta_x", min=-10, max=10, step=0.01,
                                             dense=True, hide_details=True,
                                             thumb_label="always",
                                             mouseup="trigger('apply_x_delta')",
@@ -718,7 +708,7 @@ with SinglePageLayout(server) as layout:
                             vuetify.VTextField(v_model="param_pos_y", label="Y", type="number",
                                                dense=True, class_="mb-2")
                         with vuetify.VCol(cols=8):
-                            vuetify.VSlider(v_model="temp_pos_delta_y", min=-5, max=5, step=0.05,
+                            vuetify.VSlider(v_model="temp_pos_delta_y", min=-10, max=10, step=0.01,
                                             dense=True, hide_details=True,
                                             thumb_label="always",
                                             mouseup="trigger('apply_y_delta')",
@@ -729,7 +719,7 @@ with SinglePageLayout(server) as layout:
                             vuetify.VTextField(v_model="param_pos_z", label="Z", type="number",
                                                dense=True, class_="mb-2")
                         with vuetify.VCol(cols=8):
-                            vuetify.VSlider(v_model="temp_pos_delta_z", min=-5, max=5, step=0.05,
+                            vuetify.VSlider(v_model="temp_pos_delta_z", min=-10, max=10, step=0.01,
                                             dense=True, hide_details=True,
                                             thumb_label="always",
                                             mouseup="trigger('apply_z_delta')",

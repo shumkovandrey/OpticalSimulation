@@ -689,18 +689,26 @@ class BeamEmitter:
     Излучатель пучка лучей. Трансформируется (поворот, перемещение), может генерировать
     набор параллельных лучей или выдавать лучи из заданного пользователем списка.
     """
+
     def __init__(self, origin, direction=np.array([1.0, 0.0, 0.0]),
-                 rotation_degrees=(0,0,0), pool=None,
+                 rotation_degrees=(0, 0, 0), pool=None,
                  num_rays=5, min_offset=-2.0, max_offset=2.0,
                  color="yellow", wavelength=550, energy_color_type=2,
                  energy=1.0, current_n=1.0):
         self.origin = np.asarray(origin, dtype=float)
-        self.direction = np.asarray(direction, dtype=float)
-        self.direction /= np.linalg.norm(self.direction)
+
+        # Сохраняем исходное базовое направление
+        self.base_direction = np.asarray(direction, dtype=float)
+        self.base_direction /= np.linalg.norm(self.base_direction)
+
+        self.direction = self.base_direction.copy()
+
+        # Задаем начальную матрицу
+        self.rotation_matrix = np.eye(3)
+
         # Применяем начальный поворот
-        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
-        self.direction = rot @ self.direction
-        self.rotation_matrix = rot
+        self.rotate(rotation_degrees)
+
         # Параметры генерации
         self.num_rays = num_rays
         self.min_offset = min_offset
@@ -710,12 +718,9 @@ class BeamEmitter:
         self.energy_color_type = energy_color_type
         self.energy = energy
         self.current_n = current_n
-
         self.pool = pool
-
-        # Пользовательские лучи (храним в локальной системе)
         self.custom_rays: List[Ray] = []
-        self.use_custom = False   # если True, используются custom_rays вместо сетки
+        self.use_custom = False
 
     def add_ray(self, ray: Ray):
         """Добавить пользовательский луч (в локальной системе излучателя)."""
@@ -723,16 +728,28 @@ class BeamEmitter:
         self.use_custom = True
 
     def rotate(self, angles_deg):
+        # ИСПРАВЛЕНИЕ: Рассчитываем чистую абсолютную матрицу поворота
+        # для текущего состояния ползунков интерфейса
         rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
-        self.direction = rot @ self.direction
-        self.rotation_matrix = rot @ self.rotation_matrix
+        self.direction = rot @ self.base_direction
+        self.rotation_matrix = rot
 
     def translate(self, vec):
         self.origin += np.asarray(vec)
 
     def emit(self) -> List[Ray]:
         rays = []
-        perp1, perp2 = get_tangents(self.direction)
+
+        # ИСПРАВЛЕНИЕ: Вместо get_tangents берем базовые перпендикулярные
+        # оси Y [0, 1, 0] и Z [0, 0, 1] локального пространства эмиттера
+        # и трансформируем их через накопленную матрицу поворота объекта!
+        local_perp1 = np.array([0.0, 1.0, 0.0])
+
+        # Поворачиваем вектор распределения лучей в мировые координаты
+        perp1 = self.rotation_matrix @ local_perp1
+        perp1 /= np.linalg.norm(perp1)
+
+        # Генерируем смещения лучей в пучке по честной повернутой оси
         offsets = np.linspace(self.min_offset, self.max_offset, self.num_rays)
         for dy in offsets:
             world_origin = self.origin + dy * perp1
