@@ -781,30 +781,33 @@ class PlaneSurface:
                  half_sizes=None, edge_radius=None,
                  reflection_range=None, refraction_range=None,
                  absorption_range=None,
-                 lens_origin=None, lens_axis=None):
+                 lens_origin=None, lens_axis=None,
+                 shape_type="circle", width=2.0, height=2.0):  # <-- Добавлены новые параметры
         self.point = np.array(point, dtype=float)
 
-        # 1. Задаем начальную систему координат (по умолчанию нормаль вдоль базовой оси X)
         self.base_normal = np.array([1.0, 0.0, 0.0])
         self.normal = self.base_normal.copy()
 
-        # Получаем базовые тангенциальные направления для апертуры
         self.base_t1, self.base_t2 = get_tangents(self.base_normal)
         self.face_tangents = (self.base_t1.copy(), self.base_t2.copy())
 
         self.n = n_inside
-        self.edge_radius = edge_radius if edge_radius is not None else 0.0
-        self.half_sizes = half_sizes
+        self.edge_radius = edge_radius if edge_radius is not None else 1.5
+
+        # НАЧАЛО ИЗМЕНЕНИЙ: Инициализация формы плоскости
+        self.shape_type = shape_type  # "circle" или "rectangle"
+        self.width = float(width)
+        self.height = float(height)
+        self.half_sizes = np.array([self.width / 2.0, self.height / 2.0]) if half_sizes is None else np.array(
+            half_sizes)
+        # КОНЕЦ ИЗМЕНЕНИЙ
 
         self.reflection_range = reflection_range
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
 
-        # Накапливаемая абсолютная матрица поворота
         self.rotation_matrix = np.eye(3)
 
-        # Если нормаль передана явно при инициализации — вычисляем матрицу под нее,
-        # иначе используем переданные углы Эйлера
         if normal is not None:
             explicit_norm = np.array(normal, dtype=float)
             explicit_norm /= np.linalg.norm(explicit_norm)
@@ -812,10 +815,8 @@ class PlaneSurface:
         else:
             self.rotation_matrix = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
 
-        # Применяем стартовую трансформацию к осям
         self._apply_current_rotation()
 
-        # Настройка параметров линзы
         self.lens_origin = np.array(lens_origin, dtype=float) if lens_origin is not None else self.point.copy()
         self.lens_axis = np.array(lens_axis, dtype=float) if lens_axis is not None else self.normal.copy()
         self.lens_axis /= np.linalg.norm(self.lens_axis)
@@ -881,17 +882,21 @@ class PlaneSurface:
         return None
 
     def intersect(self, ray: Ray) -> Optional[float]:
-        use_rect = self.half_sizes is not None and self.face_tangents is not None
+        use_rect = (self.shape_type == "rectangle")
         if use_rect:
             tangents = np.array(self.face_tangents, dtype=np.float64)
-            half = np.array(self.half_sizes, dtype=np.float64)
+            half = np.array([self.width / 2.0, self.height / 2.0], dtype=np.float64)
+            # Если это прямоугольник, радиус круговой апертуры сбрасываем в 0.0,
+            # чтобы ядро fast_math не выполняло круговую отсечку поверх прямоугольной
+            r_aperture = 0.0
         else:
             tangents = np.zeros((2, 3), dtype=np.float64)
             half = np.zeros(2, dtype=np.float64)
+            r_aperture = self.edge_radius
 
         t = plane_intersect(
             ray.origin, ray.direction, self.point, self.normal,
-            self.lens_origin, self.lens_axis, self.edge_radius,
+            self.lens_origin, self.lens_axis, r_aperture,
             half, tangents, use_rect
         )
         if t < 0.0:
@@ -918,25 +923,30 @@ class PlaneSurface:
         return in_ref or in_refr or in_abs
 
     def get_mesh(self) -> pv.PolyData:
-        """ИСПРАВЛЕНИЕ: Генерация меша строго согласована с базовой осью X симуляции."""
-        if self.half_sizes is not None:
-            # Прямоугольник
+        if self.shape_type == "rectangle":
+            # ПРЯМОУГОЛЬНИК
             t1, t2 = self.face_tangents
-            hu, hv = self.half_sizes
+            hu, hv = self.width / 2.0, self.height / 2.0
             c = self.lens_origin
+
+            # Рассчитываем честные мировые координаты четырех углов
             p0 = c - hu * t1 - hv * t2
             p1 = c + hu * t1 - hv * t2
             p2 = c + hu * t1 + hv * t2
             p3 = c - hu * t1 + hv * t2
-            vertices = np.array([p0, p1, p2, p3])
-            faces = np.array([[3, 0, 1, 2], [3, 0, 2, 3]])
+
+            vertices = np.array([p0, p1, p2, p3], dtype=np.float32)
+
+            # ИСПРАВЛЕНИЕ: В PyVista массив граней должен начинаться с количества точек.
+            # Для одного четырехугольника: [4, индекс0, индекс1, индекс2, индекс3]
+            faces = np.array([4, 0, 1, 2, 3], dtype=np.int32)
+
             return pv.PolyData(vertices, faces)
         else:
-            # Круглый диск: Создаем базовый диск в плоскости YZ (нормаль смотрит по X [1, 0, 0])
+            # КРУГЛЫЙ ДИСК
             radius = self.edge_radius if self.edge_radius else 1.0
             disc = pv.Disc(center=(0, 0, 0), normal=(1, 0, 0), inner=0, outer=radius, c_res=64)
 
-            # Строим мировую матрицу на основе НАШЕЙ накопленной rotation_matrix
             transform = np.eye(4)
             transform[:3, :3] = self.rotation_matrix
             transform[:3, 3] = self.lens_origin
@@ -1107,7 +1117,8 @@ class CylinderSurface:
     def __init__(self, center, axis_dir, radius, half_length,
                  n_inside=1.0,
                  reflection_range=None, refraction_range=None,
-                 absorption_range=None):
+                 absorption_range=None,
+                 capping=False):
         self.center = np.array(center, dtype=float)
         self.axis_dir = np.array(axis_dir, dtype=float)
         self.axis_dir /= np.linalg.norm(self.axis_dir)
@@ -1118,39 +1129,82 @@ class CylinderSurface:
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
 
+        self.capping = capping
+        self._update_caps()
+
+    def _update_caps(self):
+        """Создает внутренние плоскости для торцов, если включен capping."""
+        if self.capping:
+            p1 = self.center + self.axis_dir * self.half_length
+            p2 = self.center - self.axis_dir * self.half_length
+            # Используем PlaneSurface в режиме круга ("circle")
+            self.cap1 = PlaneSurface(point=p1, normal=self.axis_dir, n_inside=self.n, edge_radius=self.radius,
+                                     reflection_range=self.reflection_range, refraction_range=self.refraction_range,
+                                     absorption_range=self.absorption_range)
+            self.cap2 = PlaneSurface(point=p2, normal=-self.axis_dir, n_inside=self.n, edge_radius=self.radius,
+                                     reflection_range=self.reflection_range, refraction_range=self.refraction_range,
+                                     absorption_range=self.absorption_range)
+        else:
+            self.cap1 = None
+            self.cap2 = None
+
     def intersect(self, ray: Ray) -> Optional[float]:
-        t = cylinder_intersect(ray.origin, ray.direction,
-                               self.center, self.axis_dir,
-                               self.radius, self.half_length)
-        if t < 0.0:
+        # Проверяем боковую поверхность
+        t_side = cylinder_intersect(ray.origin, ray.direction,
+                                    self.center, self.axis_dir,
+                                    self.radius, self.half_length)
+        best_t = float('inf') if t_side < 0.0 else float(t_side)
+
+        # НАЧАЛО ИЗМЕНЕНИЙ: Математика пересечения с крышками
+        if self.capping and self.cap1 and self.cap2:
+            t1 = self.cap1.intersect(ray)
+            t2 = self.cap2.intersect(ray)
+            if t1 is not None and t1 < best_t: best_t = t1
+            if t2 is not None and t2 < best_t: best_t = t2
+        # КОНЕЦ ИЗМЕНЕНИЙ
+
+        if best_t == float('inf'):
             return None
-        return t
+        return best_t
 
     def get_normal(self, point):
-        # Нормаль направлена радиально наружу от оси
+        # НАЧАЛО ИЗМЕНЕНИЙ: Определение нормали на крышках
+        if self.capping:
+            # Проверяем, близко ли точка к плоскостям торцов
+            vec = point - self.center
+            proj = np.dot(vec, self.axis_dir)
+            if abs(proj - self.half_length) < 1e-4:
+                return self.axis_dir
+            elif abs(proj + self.half_length) < 1e-4:
+                return -self.axis_dir
+        # КОНЕЦ ИЗМЕНЕНИЙ
+
         vec = point - self.center
         proj = np.dot(vec, self.axis_dir)
         closest_on_axis = self.center + proj * self.axis_dir
         radial = point - closest_on_axis
         norm = np.linalg.norm(radial)
         if norm < 1e-12:
-            return self.axis_dir  # редкий случай, точка на оси
+            return self.axis_dir
         return radial / norm
 
     def get_mesh(self) -> pv.PolyData:
-        # Боковая поверхность цилиндра без торцевых крышек
+        # НАЧАЛО ИЗМЕНЕНИЙ: Включаем или выключаем capping в меше PyVista
         cylinder = pv.Cylinder(center=self.center, direction=self.axis_dir,
                                radius=self.radius, height=2 * self.half_length,
-                               capping=False, resolution=64)
+                               capping=self.capping, resolution=64)
         return cylinder
 
     def rotate(self, angles_deg):
         rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
         self.center = rot @ self.center
         self.axis_dir = rot @ self.axis_dir
+        self.axis_dir /= np.linalg.norm(self.axis_dir)
+        if self.capping: self._update_caps() # Пересчитываем крышки
 
     def translate(self, vec):
         self.center += np.asarray(vec)
+        if self.capping: self._update_caps() # Пересчитываем крышк
 
     def is_active(self, wavelength):
         if wavelength is None:

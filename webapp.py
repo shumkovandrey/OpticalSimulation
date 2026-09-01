@@ -91,6 +91,10 @@ class OpticsAppController:
         self.state.param_scale_x = 1.0  # Раздельные ползунки
         self.state.param_scale_y = 1.0
         self.state.param_scale_z = 1.0
+        self.state.param_plane_shape = "rectangle"
+        self.state.param_plane_width = 2.0
+        self.state.param_plane_height = 2.0
+        self.state.param_cylinder_capping = False
 
         # НАЧАЛО ИЗМЕНЕНИЙ: Инициализация спектральных параметров в состоянии
         for effect in ["reflection", "refraction", "absorption"]:
@@ -196,6 +200,7 @@ class OpticsAppController:
     def add_plane_click(self):
         self.add_object("plane", f"Плоскость {len(self.scene_objects) + 1}", {
             "origin": (0, 0, 0), "rotation": (0, 0, 0), "edge_radius": 1.5, "n": 1.0,
+            "shape_type": "circle", "width": 2.0, "height": 2.0, # <-- Добавлено
             "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
         })
 
@@ -208,6 +213,7 @@ class OpticsAppController:
     def add_cylinder_surf_click(self):
         self.add_object("cylinder_surf", f"Цилиндр Поверхн. {len(self.scene_objects) + 1}", {
             "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius": 1.0, "half_length": 1.0, "n": 1.5,
+            "capping": False, # <-- Добавлено
             "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
         })
 
@@ -319,8 +325,11 @@ class OpticsAppController:
                 rotation_degrees=params.get("rotation", (0, 0, 0)),
                 n_inside=params.get("n", 1.0),
                 edge_radius=params.get("edge_radius", 1.5),
+                shape_type=params.get("shape_type", "circle"),  # <-- Добавлено
+                width=params.get("width", 2.0),  # <-- Добавлено
+                height=params.get("height", 2.0),  # <-- Добавлено
                 reflection_range=params.get("reflection_range"),
-                refraction_range=params.get("refraction_range"),
+                refraction_range=params.get("refraction_range", (0, np.inf)),
                 absorption_range=params.get("absorption_range")
             )
         elif obj_type == "sphere_surf":
@@ -335,13 +344,13 @@ class OpticsAppController:
                 lens_origin=params.get("origin", (0, 0, 0))
             )
         elif obj_type == "cylinder_surf":
-            # Для цилиндра axis_dir инициализируем по оси X, rotate/translate выровняют его
             return CylinderSurface(
                 center=params.get("origin", (0, 0, 0)),
                 axis_dir=np.array([1.0, 0.0, 0.0]),
                 radius=params.get("radius", 1.0),
                 half_length=params.get("half_length", 1.0),
                 n_inside=params.get("n", 1.5),
+                capping=params.get("capping", False),  # <-- Добавлено
                 reflection_range=params.get("reflection_range"),
                 refraction_range=params.get("refraction_range"),
                 absorption_range=params.get("absorption_range")
@@ -464,14 +473,22 @@ class OpticsAppController:
         elif obj_entry["type"] == "plane":
             self.state.param_n = float(p.get("n", 1.0))
             self.state.param_edge_radius = float(p.get("edge_radius", 1.5))
+            # НАЧАЛО ИЗМЕНЕНИЙ
+            self.state.param_plane_shape = str(p.get("shape_type", "circle"))
+            self.state.param_plane_width = float(p.get("width", 2.0))
+            self.state.param_plane_height = float(p.get("height", 2.0))
+            # КОНЕЦ ИЗМЕНЕНИЙ
         elif obj_entry["type"] == "sphere_surf":
             self.state.param_radius = float(p.get("radius", 3.0))
             self.state.param_edge_radius = float(p.get("edge_radius", 1.5))
             self.state.param_n = float(p.get("n", 1.5))
         elif obj_entry["type"] == "cylinder_surf":
             self.state.param_radius = float(p.get("radius", 1.0))
-            self.state.param_thickness = float(p.get("half_length", 1.0))  # переиспользуем param_thickness как длину
+            self.state.param_thickness = float(p.get("half_length", 1.0))
             self.state.param_n = float(p.get("n", 1.5))
+            # НАЧАЛО ИЗМЕНЕНИЙ
+            self.state.param_cylinder_capping = bool(p.get("capping", False))
+            # КОНЕЦ ИЗМЕНЕНИЙ
 
         for effect in ["reflection", "refraction", "absorption"]:
             r_range = p.get(f"{effect}_range")
@@ -530,7 +547,11 @@ class OpticsAppController:
                 p.get("scale_z") != float(self.state.param_scale_z)):
                 shape_changed = True
         elif obj_entry["type"] == "plane":
-            if p["n"] != float(self.state.param_n) or p["edge_radius"] != float(self.state.param_edge_radius):
+            if (p["n"] != float(self.state.param_n) or
+                p["edge_radius"] != float(self.state.param_edge_radius) or
+                str(p.get("shape_type")) != str(self.state.param_plane_shape) or
+                p.get("width") != float(self.state.param_plane_width) or
+                p.get("height") != float(self.state.param_plane_height)):
                 shape_changed = True
         elif obj_entry["type"] == "sphere_surf":
             if (p["radius"] != float(self.state.param_radius) or
@@ -538,7 +559,9 @@ class OpticsAppController:
                 shape_changed = True
         elif obj_entry["type"] == "cylinder_surf":
             if (p["radius"] != float(self.state.param_radius) or
-                    p["half_length"] != float(self.state.param_thickness) or p["n"] != float(self.state.param_n)):
+                p["half_length"] != float(self.state.param_thickness) or
+                p["n"] != float(self.state.param_n) or
+                p.get("capping") != self.state.param_cylinder_capping):
                 shape_changed = True
 
         for effect in ["reflection", "refraction", "absorption"]:
@@ -589,6 +612,9 @@ class OpticsAppController:
         elif obj_entry["type"] == "plane":
             p["n"] = float(self.state.param_n)
             p["edge_radius"] = float(self.state.param_edge_radius)
+            p["shape_type"] = str(self.state.param_plane_shape)
+            p["width"] = float(self.state.param_plane_width)
+            p["height"] = float(self.state.param_plane_height)
         elif obj_entry["type"] == "sphere_surf":
             p["radius"] = float(self.state.param_radius)
             p["edge_radius"] = float(self.state.param_edge_radius)
@@ -597,6 +623,7 @@ class OpticsAppController:
             p["radius"] = float(self.state.param_radius)
             p["half_length"] = float(self.state.param_thickness)
             p["n"] = float(self.state.param_n)
+            p["capping"] = self.state.param_cylinder_capping
 
         # Пересоздаём инстанс с новыми параметрами (используем new_origin, т.к. это реальная позиция)
         base_params = p.copy()
@@ -728,7 +755,8 @@ app = OpticsAppController(server)
 
 # Подписка на изменения параметров (кроме temp)
 for param in ["param_n", "param_radius", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
-              "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_mesh_path"]:
+              "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_mesh_path",
+              "param_plane_shape", "param_plane_width", "param_plane_height", "param_cylinder_capping"]:
     server.state.change(param)(app.on_param_change)
 
 # Для позиционных координат и вращений тоже нужна подписка
@@ -847,14 +875,41 @@ with SinglePageLayout(server) as layout:
 
                     with vuetify.VContainer(v_if="selected_object_type == 'plane'", class_="pa-0"):
                         vuetify.VListSubheader("Параметры плоскости", class_="px-0")
-                        with vuetify.VRow(no_gutters=True, align="center"):
-                            with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_edge_radius", label="Радиус (Апертура)",
-                                                   type="number", dense=True, step=0.1)
-                            with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1, dense=True,
-                                                hide_details=True)
-                        with vuetify.VRow(no_gutters=True, align="center"):
+
+                        # ИСПРАВЛЕНИЕ: v_model перенесен строго на группу, убраны пустые блоки pass
+                        with vuetify.VRadioGroup(v_model="param_plane_shape", inline=True, class_="mb-2",
+                                                 hide_details=True):
+                            vuetify.VRadio(label="Круг", value="circle", color="cyan")
+                            vuetify.VRadio(label="Прямоугольник", value="rectangle", color="cyan")
+
+                        # Если выбран КРУГ — показываем радиус апертуры
+                        with vuetify.VContainer(v_if="param_plane_shape == 'circle'", class_="pa-0"):
+                            with vuetify.VRow(no_gutters=True, align="center"):
+                                with vuetify.VCol(cols=4):
+                                    vuetify.VTextField(v_model="param_edge_radius", label="Радиус", type="number",
+                                                       dense=True)
+                                with vuetify.VCol(cols=8):
+                                    vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1, dense=True,
+                                                    hide_details=True)
+
+                        # Если ПРЯМОУГОЛЬНИК — показываем настройки ширины и высоты
+                        with vuetify.VContainer(v_if="param_plane_shape == 'rectangle'", class_="pa-0"):
+                            with vuetify.VRow(no_gutters=True, align="center", class_="mb-1"):
+                                with vuetify.VCol(cols=4):
+                                    vuetify.VTextField(v_model="param_plane_width", label="Ширина", type="number",
+                                                       dense=True)
+                                with vuetify.VCol(cols=8):
+                                    vuetify.VSlider(v_model="param_plane_width", min=0.1, max=10.0, step=0.1,
+                                                    dense=True, hide_details=True)
+                            with vuetify.VRow(no_gutters=True, align="center"):
+                                with vuetify.VCol(cols=4):
+                                    vuetify.VTextField(v_model="param_plane_height", label="Высота", type="number",
+                                                       dense=True)
+                                with vuetify.VCol(cols=8):
+                                    vuetify.VSlider(v_model="param_plane_height", min=0.1, max=10.0, step=0.1,
+                                                    dense=True, hide_details=True)
+
+                        with vuetify.VRow(no_gutters=True, align="center", class_="mt-2"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_n", label="n (внутри)", type="number", dense=True,
                                                    step=0.01)
@@ -890,6 +945,11 @@ with SinglePageLayout(server) as layout:
                     # Параметры CylinderSurface
                     with vuetify.VContainer(v_if="selected_object_type == 'cylinder_surf'", class_="pa-0"):
                         vuetify.VListSubheader("Параметры цилиндрической поверхности", class_="px-0")
+
+                        # Тумблер включения/выключения оснований
+                        vuetify.VSwitch(v_model="param_cylinder_capping", label="Включить основания (крышки)",
+                                        dense=True, hide_details=True, class_="mb-2", color="orange")
+
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_radius", label="Радиус", type="number", dense=True,
