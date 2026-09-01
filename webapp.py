@@ -17,7 +17,8 @@ from trame_pyvista.widgets import PyVistaRemoteLocalView
 
 
 from main import (
-    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode, MeshSurface, HyperbolicLens
+    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode, MeshSurface, HyperbolicLens,
+    PlaneSurface, SphereSurface, CylinderSurface
 )
 
 # Режим отрисовки: "client" или "server"
@@ -176,6 +177,14 @@ class OpticsAppController:
                 smooth_shading=True,
                 name=obj_id
             )
+        elif obj_type in ["plane", "sphere_surf", "cylinder_surf"]:
+            self.plotter.add_mesh(
+                instance.get_mesh(),
+                color="lightblue" if obj_type == "plane" else ("grey" if obj_type == "sphere_surf" else "orange"),
+                opacity=0.5,
+                smooth_shading=True,
+                name=obj_id
+            )
 
         if not self.initializing:
             self._update_objects_list_state()
@@ -183,6 +192,24 @@ class OpticsAppController:
             self.on_object_selected(obj_id)
             self.update_scene()
         return obj_id
+
+    def add_plane_click(self):
+        self.add_object("plane", f"Плоскость {len(self.scene_objects) + 1}", {
+            "origin": (0, 0, 0), "rotation": (0, 0, 0), "edge_radius": 1.5, "n": 1.0,
+            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
+        })
+
+    def add_sphere_surf_click(self):
+        self.add_object("sphere_surf", f"Сфера Поверхн. {len(self.scene_objects) + 1}", {
+            "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius": 3.0, "edge_radius": 1.5, "n": 1.5,
+            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
+        })
+
+    def add_cylinder_surf_click(self):
+        self.add_object("cylinder_surf", f"Цилиндр Поверхн. {len(self.scene_objects) + 1}", {
+            "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius": 1.0, "half_length": 1.0, "n": 1.5,
+            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
+        })
 
     def add_lens_click(self):
         self.add_object("lens", f"Линза {len(self.scene_objects) + 1}", {
@@ -286,6 +313,39 @@ class OpticsAppController:
                 absorption_range=params.get("absorption_range"),
                 scale_factors=s_factors
             )
+        elif obj_type == "plane":
+            return PlaneSurface(
+                point=params.get("origin", (0, 0, 0)),
+                rotation_degrees=params.get("rotation", (0, 0, 0)),
+                n_inside=params.get("n", 1.0),
+                edge_radius=params.get("edge_radius", 1.5),
+                reflection_range=params.get("reflection_range"),
+                refraction_range=params.get("refraction_range"),
+                absorption_range=params.get("absorption_range")
+            )
+        elif obj_type == "sphere_surf":
+            return SphereSurface(
+                radius=params.get("radius", 3.0),
+                rotation_degrees=params.get("rotation", (0, 0, 0)),
+                n_inside=params.get("n", 1.5),
+                edge_radius=params.get("edge_radius", 1.5),
+                reflection_range=params.get("reflection_range"),
+                refraction_range=params.get("refraction_range"),
+                absorption_range=params.get("absorption_range"),
+                lens_origin=params.get("origin", (0, 0, 0))
+            )
+        elif obj_type == "cylinder_surf":
+            # Для цилиндра axis_dir инициализируем по оси X, rotate/translate выровняют его
+            return CylinderSurface(
+                center=params.get("origin", (0, 0, 0)),
+                axis_dir=np.array([1.0, 0.0, 0.0]),
+                radius=params.get("radius", 1.0),
+                half_length=params.get("half_length", 1.0),
+                n_inside=params.get("n", 1.5),
+                reflection_range=params.get("reflection_range"),
+                refraction_range=params.get("refraction_range"),
+                absorption_range=params.get("absorption_range")
+            )
 
     # ---------- Трассировка ----------
     def on_trace_mode_changed(self, **kwargs):
@@ -317,8 +377,11 @@ class OpticsAppController:
                         self.ray_tracer.add_elements(surf)
                 elif isinstance(instance, MeshSurface):
                     self.ray_tracer.add_elements(instance)
+                elif isinstance(instance, (PlaneSurface, SphereSurface, CylinderSurface, MeshSurface)):
+                    self.ray_tracer.add_elements(instance)
                 elif isinstance(instance, BeamEmitter):
                     self.ray_tracer.add_emitter(instance)
+
 
             segments = self.ray_tracer.trace_all()
             energy_type = self.ray_tracer.mode.energy_color_type
@@ -398,6 +461,17 @@ class OpticsAppController:
             self.state.param_scale_x = float(p.get("scale_x", 1.0))
             self.state.param_scale_y = float(p.get("scale_y", 1.0))
             self.state.param_scale_z = float(p.get("scale_z", 1.0))
+        elif obj_entry["type"] == "plane":
+            self.state.param_n = float(p.get("n", 1.0))
+            self.state.param_edge_radius = float(p.get("edge_radius", 1.5))
+        elif obj_entry["type"] == "sphere_surf":
+            self.state.param_radius = float(p.get("radius", 3.0))
+            self.state.param_edge_radius = float(p.get("edge_radius", 1.5))
+            self.state.param_n = float(p.get("n", 1.5))
+        elif obj_entry["type"] == "cylinder_surf":
+            self.state.param_radius = float(p.get("radius", 1.0))
+            self.state.param_thickness = float(p.get("half_length", 1.0))  # переиспользуем param_thickness как длину
+            self.state.param_n = float(p.get("n", 1.5))
 
         for effect in ["reflection", "refraction", "absorption"]:
             r_range = p.get(f"{effect}_range")
@@ -455,6 +529,17 @@ class OpticsAppController:
                 p.get("scale_y") != float(self.state.param_scale_y) or
                 p.get("scale_z") != float(self.state.param_scale_z)):
                 shape_changed = True
+        elif obj_entry["type"] == "plane":
+            if p["n"] != float(self.state.param_n) or p["edge_radius"] != float(self.state.param_edge_radius):
+                shape_changed = True
+        elif obj_entry["type"] == "sphere_surf":
+            if (p["radius"] != float(self.state.param_radius) or
+                    p["edge_radius"] != float(self.state.param_edge_radius) or p["n"] != float(self.state.param_n)):
+                shape_changed = True
+        elif obj_entry["type"] == "cylinder_surf":
+            if (p["radius"] != float(self.state.param_radius) or
+                    p["half_length"] != float(self.state.param_thickness) or p["n"] != float(self.state.param_n)):
+                shape_changed = True
 
         for effect in ["reflection", "refraction", "absorption"]:
             if not self.state[f"param_{effect}_enabled"]:
@@ -501,6 +586,17 @@ class OpticsAppController:
             p["scale_x"] = float(self.state.param_scale_x)
             p["scale_y"] = float(self.state.param_scale_y)
             p["scale_z"] = float(self.state.param_scale_z)
+        elif obj_entry["type"] == "plane":
+            p["n"] = float(self.state.param_n)
+            p["edge_radius"] = float(self.state.param_edge_radius)
+        elif obj_entry["type"] == "sphere_surf":
+            p["radius"] = float(self.state.param_radius)
+            p["edge_radius"] = float(self.state.param_edge_radius)
+            p["n"] = float(self.state.param_n)
+        elif obj_entry["type"] == "cylinder_surf":
+            p["radius"] = float(self.state.param_radius)
+            p["half_length"] = float(self.state.param_thickness)
+            p["n"] = float(self.state.param_n)
 
         # Пересоздаём инстанс с новыми параметрами (используем new_origin, т.к. это реальная позиция)
         base_params = p.copy()
@@ -538,6 +634,15 @@ class OpticsAppController:
                     obj_entry["instance"].get_mesh(),
                     color="blue",
                     opacity=0.6,
+                    smooth_shading=True,
+                    name=obj_id
+                )
+            elif obj_entry["type"] in ["plane", "sphere_surf", "cylinder_surf"]:
+                self.plotter.add_mesh(
+                    obj_entry["instance"].get_mesh(),
+                    color="lightblue" if obj_entry["type"] == "plane" else (
+                        "grey" if obj_entry["type"] == "sphere_surf" else "orange"),
+                    opacity=0.5,
                     smooth_shading=True,
                     name=obj_id
                 )
@@ -611,7 +716,6 @@ class OpticsAppController:
     def set_last_pos_z(self):
         self.state.temp_last_pos_z = self.state.param_pos_z
 
-
     def select_object(self, obj_id):
         self.state.selected_object_id = obj_id
         self.on_object_selected(obj_id)
@@ -623,7 +727,7 @@ server.client_type = "vue3"
 app = OpticsAppController(server)
 
 # Подписка на изменения параметров (кроме temp)
-for param in ["param_n", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
+for param in ["param_n", "param_radius", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
               "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_mesh_path"]:
     server.state.change(param)(app.on_param_change)
 
@@ -665,6 +769,9 @@ with SinglePageLayout(server) as layout:
                             with vuetify.VList():
                                 vuetify.VListItem("Сферическая линза", click=app.add_lens_click)
                                 vuetify.VListItem("Гиперболическая линза", click=app.add_hyperbolic_lens_click)
+                                vuetify.VListItem("Плоская поверхность", click=app.add_plane_click)
+                                vuetify.VListItem("Сферическая поверхность", click=app.add_sphere_surf_click)
+                                vuetify.VListItem("Цилиндрическая поверхность", click=app.add_cylinder_surf_click)
                                 vuetify.VListItem("Источник", click=app.add_emitter_click)
                                 vuetify.VListItem("3D-меш", click=app.add_mesh_click)
 
@@ -737,6 +844,73 @@ with SinglePageLayout(server) as layout:
                                                 hide_details=True)
 
                     vuetify.VDivider(class_="my-4")
+
+                    with vuetify.VContainer(v_if="selected_object_type == 'plane'", class_="pa-0"):
+                        vuetify.VListSubheader("Параметры плоскости", class_="px-0")
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_edge_radius", label="Радиус (Апертура)",
+                                                   type="number", dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1, dense=True,
+                                                hide_details=True)
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_n", label="n (внутри)", type="number", dense=True,
+                                                   step=0.01)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True,
+                                                hide_details=True)
+
+                    # Параметры SphereSurface
+                    with vuetify.VContainer(v_if="selected_object_type == 'sphere_surf'", class_="pa-0"):
+                        vuetify.VListSubheader("Параметры сферической поверхности", class_="px-0")
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_radius", label="Радиус кривизны", type="number",
+                                                   dense=True, step=0.5)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_radius", min=-20.0, max=20.0, step=0.5, dense=True,
+                                                hide_details=True)
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_edge_radius", label="Апертура", type="number",
+                                                   dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1, dense=True,
+                                                hide_details=True)
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_n", label="n (внутри)", type="number", dense=True,
+                                                   step=0.01)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True,
+                                                hide_details=True)
+
+                    # Параметры CylinderSurface
+                    with vuetify.VContainer(v_if="selected_object_type == 'cylinder_surf'", class_="pa-0"):
+                        vuetify.VListSubheader("Параметры цилиндрической поверхности", class_="px-0")
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_radius", label="Радиус", type="number", dense=True,
+                                                   step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_radius", min=0.1, max=5.0, step=0.1, dense=True,
+                                                hide_details=True)
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_thickness", label="Полудлина", type="number",
+                                                   dense=True, step=0.1)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_thickness", min=0.1, max=5.0, step=0.1, dense=True,
+                                                hide_details=True)
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_n", label="n (внутри)", type="number", dense=True,
+                                                   step=0.01)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True,
+                                                hide_details=True)
 
                     # --- Параметры сферической линзы ---
                     with vuetify.VContainer(v_if="selected_object_type == 'lens'", class_="pa-0"):
@@ -879,7 +1053,7 @@ with SinglePageLayout(server) as layout:
                                         vuetify.VSlider(v_model=f"param_scale_{axis}", min=0.1, max=10.0, step=0.1,
                                                         dense=True, hide_details=True)
 
-                    with vuetify.VContainer(v_if="selected_object_type == 'lens' || selected_object_type == 'hyperbolic_lens' ||  selected_object_type == 'mesh'", class_="pa-0"):
+                    with vuetify.VContainer(v_if="selected_object_type != 'emitter'", class_="pa-0"):
                         vuetify.VListSubheader("Оптические свойства (λ, нм)", class_="px-0 text-cyan-lighten-2")
 
                         # Шаблон для генерации трех типов взаимодействия
