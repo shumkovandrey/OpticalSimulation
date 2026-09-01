@@ -62,7 +62,7 @@ class OpticsAppController:
         self.state.selected_object_type = None
         self.state.trace_mode = "simple"
         self.state.scene_objects_list = []
-        self.state.render_mode = "remote"
+        self.state.render_mode = "local"
         self.state.trace_modes = [
             {"title": "Simple", "value": "simple"},
             {"title": "Tree", "value": "tree"},
@@ -86,6 +86,11 @@ class OpticsAppController:
         self.state.param_max_offset = 0.5
         self.state.param_wavelength = 550.0
         self.state.param_mesh_path = ""
+        self.state.param_scale_uniform = True  # Тумблер по умолчанию ВКЛ
+        self.state.param_scale_all = 1.0  # Единый ползунок
+        self.state.param_scale_x = 1.0  # Раздельные ползунки
+        self.state.param_scale_y = 1.0
+        self.state.param_scale_z = 1.0
 
         # НАЧАЛО ИЗМЕНЕНИЙ: Инициализация спектральных параметров в состоянии
         for effect in ["reflection", "refraction", "absorption"]:
@@ -211,7 +216,8 @@ class OpticsAppController:
             "origin": (0, 0, 0), "rotation": (0, 0, 0),
             "mesh_path": "Models/Prism.stl",
             "n": 1.5,
-            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
+            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None,
+            "scale_uniform": True, "scale_all": 1.0, "scale_x": 1.0, "scale_y": 1.0, "scale_z": 1.0
         })
 
     # ---------- Удаление объекта ----------
@@ -266,6 +272,17 @@ class OpticsAppController:
                 energy=params.get("energy", 1.0), current_n=params.get("current_n", 1.0), pool=self.pool
             )
         elif obj_type == "mesh":
+            if params.get("scale_uniform", True):
+                s_val = float(params.get("scale_all", 1.0))
+                s_factors = (s_val, s_val, s_val)
+            else:
+                s_factors = (
+                    float(params.get("scale_x", 1.0)),
+                    float(params.get("scale_y", 1.0)),
+                    float(params.get("scale_z", 1.0))
+                )
+
+            # Передаем кортеж коэффициентов (X, Y, Z)
             return MeshSurface(
                 mesh=params.get("mesh_path", ""),
                 rotation_degrees=params.get("rotation", (0, 0, 0)),
@@ -273,7 +290,8 @@ class OpticsAppController:
                 n_inside=params.get("n", 1.5),
                 reflection_range=params.get("reflection_range"),
                 refraction_range=params.get("refraction_range"),
-                absorption_range=params.get("absorption_range")
+                absorption_range=params.get("absorption_range"),
+                scale_factors=s_factors
             )
 
     # ---------- Трассировка ----------
@@ -384,6 +402,12 @@ class OpticsAppController:
         elif obj_entry["type"] == "mesh":
             self.state.param_n = float(p.get("n", 1.5))
             self.state.param_mesh_path = str(p.get("mesh_path", ""))
+            # Загружаем масштабы
+            self.state.param_scale_uniform = bool(p.get("scale_uniform", True))
+            self.state.param_scale_all = float(p.get("scale_all", 1.0))
+            self.state.param_scale_x = float(p.get("scale_x", 1.0))
+            self.state.param_scale_y = float(p.get("scale_y", 1.0))
+            self.state.param_scale_z = float(p.get("scale_z", 1.0))
 
         for effect in ["reflection", "refraction", "absorption"]:
             r_range = p.get(f"{effect}_range")
@@ -421,20 +445,25 @@ class OpticsAppController:
         shape_changed = False
         if obj_entry["type"] == "lens":
             if (p["n"] != float(self.state.param_n) or
-                    p["R1"] != float(self.state.param_R1) or
-                    p["R2"] != float(self.state.param_R2) or
-                    p["thickness"] != float(self.state.param_thickness) or
-                    p["edge_radius"] != float(self.state.param_edge_radius)):
+                p["R1"] != float(self.state.param_R1) or
+                p["R2"] != float(self.state.param_R2) or
+                p["thickness"] != float(self.state.param_thickness) or
+                p["edge_radius"] != float(self.state.param_edge_radius)):
                 shape_changed = True
         elif obj_entry["type"] == "emitter":
             if (p["num_rays"] != int(self.state.param_num_rays) or
-                    p["min_offset"] != float(self.state.param_min_offset) or
-                    p["max_offset"] != float(self.state.param_max_offset) or
-                    p["wavelength"] != float(self.state.param_wavelength)):
+                p["min_offset"] != float(self.state.param_min_offset) or
+                p["max_offset"] != float(self.state.param_max_offset) or
+                p["wavelength"] != float(self.state.param_wavelength)):
                 shape_changed = True
         elif obj_entry["type"] == "mesh":
             if (p["n"] != float(self.state.param_n) or
-                    p["mesh_path"] != str(self.state.param_mesh_path)):
+                p["mesh_path"] != str(self.state.param_mesh_path) or
+                p.get("scale_uniform") != self.state.param_scale_uniform or
+                p.get("scale_all") != float(self.state.param_scale_all) or
+                p.get("scale_x") != float(self.state.param_scale_x) or
+                p.get("scale_y") != float(self.state.param_scale_y) or
+                p.get("scale_z") != float(self.state.param_scale_z)):
                 shape_changed = True
 
         for effect in ["reflection", "refraction", "absorption"]:
@@ -476,6 +505,12 @@ class OpticsAppController:
         elif obj_entry["type"] == "mesh":
             p["n"] = float(self.state.param_n)
             p["mesh_path"] = str(self.state.param_mesh_path)
+            # Сохраняем новые свойства масштаба
+            p["scale_uniform"] = self.state.param_scale_uniform
+            p["scale_all"] = float(self.state.param_scale_all)
+            p["scale_x"] = float(self.state.param_scale_x)
+            p["scale_y"] = float(self.state.param_scale_y)
+            p["scale_z"] = float(self.state.param_scale_z)
 
         # Пересоздаём инстанс с новыми параметрами (используем new_origin, т.к. это реальная позиция)
         base_params = p.copy()
@@ -606,6 +641,9 @@ for param in ["param_n", "param_R1", "param_R2", "param_f_target", "param_thickn
 for axis in ["x", "y", "z"]:
     server.state.change(f"param_pos_{axis}")(app.on_param_change)
     server.state.change(f"param_rot_{axis}")(app.on_param_change)
+
+for scale_param in ["param_scale_uniform", "param_scale_all", "param_scale_x", "param_scale_y", "param_scale_z"]:
+    server.state.change(scale_param)(app.on_param_change)
 
 for effect in ["reflection", "refraction", "absorption"]:
     server.state.change(f"param_{effect}_enabled")(app.on_param_change)
@@ -818,12 +856,38 @@ with SinglePageLayout(server) as layout:
                         vuetify.VListSubheader("Параметры 3D-модели", class_="px-0")
                         vuetify.VTextField(v_model="param_mesh_path", label="Путь к файлу (.obj/.stl)", dense=True,
                                            class_="mb-2")
-                        with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VRow(no_gutters=True, align="center", class_="mb-2"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_n", label="n", type="number", dense=True, step=0.01)
                             with vuetify.VCol(cols=8):
                                 vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01,
                                                 dense=True, hide_details=True)
+
+                        vuetify.VDivider(class_="my-2")
+                        # НАЧАЛО ИЗМЕНЕНИЙ ИНТЕРФЕЙСА ДЛЯ МАСШТАБИРОВАНИЯ
+                        vuetify.VSwitch(v_model="param_scale_uniform", label="Пропорциональный масштаб",
+                                        dense=True, hide_details=True, class_="mb-2", color="cyan")
+
+                        # Если тумблер включен: один общий ползунок
+                        with vuetify.VContainer(v_if="param_scale_uniform", class_="pa-0"):
+                            with vuetify.VRow(no_gutters=True, align="center"):
+                                with vuetify.VCol(cols=4):
+                                    vuetify.VTextField(v_model="param_scale_all", label="Масштаб", type="number",
+                                                       dense=True, step=0.1)
+                                with vuetify.VCol(cols=8):
+                                    vuetify.VSlider(v_model="param_scale_all", min=0.1, max=10.0, step=0.1,
+                                                    dense=True, hide_details=True)
+
+                        # Если тумблер выключен: три раздельных ползунка по осям X, Y, Z
+                        with vuetify.VContainer(v_if="!param_scale_uniform", class_="pa-0"):
+                            for axis in ["x", "y", "z"]:
+                                with vuetify.VRow(no_gutters=True, align="center", class_="mb-1"):
+                                    with vuetify.VCol(cols=4):
+                                        vuetify.VTextField(v_model=f"param_scale_{axis}", label=f"Scale {axis.upper()}",
+                                                           type="number", dense=True, step=0.1)
+                                    with vuetify.VCol(cols=8):
+                                        vuetify.VSlider(v_model=f"param_scale_{axis}", min=0.1, max=10.0, step=0.1,
+                                                        dense=True, hide_details=True)
 
                     with vuetify.VContainer(v_if="selected_object_type == 'lens' || selected_object_type == 'hyperbolic_lens' ||  selected_object_type == 'mesh'", class_="pa-0"):
                         vuetify.VListSubheader("Оптические свойства (λ, нм)", class_="px-0 text-cyan-lighten-2")

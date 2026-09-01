@@ -1147,10 +1147,10 @@ class MeshSurface:
     Может быть зеркальной, преломляющей или поглощающей.
     """
 
-    def __init__(self, mesh, rotation_degrees=(0,0,0), translation=(0,0,0),
+    def __init__(self, mesh, rotation_degrees=(0, 0, 0), translation=(0, 0, 0),
                  n_inside=1.0, reflection_range=None, refraction_range=None,
-                 absorption_range=None):
-        # Загрузка тримеша (как и раньше)
+                 absorption_range=None, scale_factors=(1.0, 1.0, 1.0)):
+        # Загрузка тримеша
         if isinstance(mesh, str):
             self.trimesh_obj = trimesh.load(mesh)
             if isinstance(self.trimesh_obj, trimesh.Scene):
@@ -1159,17 +1159,40 @@ class MeshSurface:
             if not isinstance(self.trimesh_obj, trimesh.Trimesh):
                 raise TypeError("Файл не содержит треугольной сетки")
         elif isinstance(mesh, trimesh.Trimesh):
-            self.trimesh_obj = mesh
+            self.trimesh_obj = mesh.copy()  # Копируем, чтобы не портить исходник
         elif isinstance(mesh, pv.PolyData):
             verts, faces = mesh.points, mesh.faces.reshape(-1, 4)[:, 1:4]
             self.trimesh_obj = trimesh.Trimesh(vertices=verts, faces=faces)
         else:
             raise TypeError("mesh должен быть str, trimesh.Trimesh или pv.PolyData")
 
+        # СОХРАНЯЕМ ИСХОДНЫЕ ЭТАЛОННЫЕ НОРМАЛИ (до любых деформаций)
+        # Они нужны, чтобы при изменении ползунков не накапливалась ошибка
+        self._base_face_normals = self.trimesh_obj.face_normals.copy()
+
+        # Применяем масштаб ДО поворотов и переносов
+        if scale_factors is not None and not np.allclose(scale_factors, 1.0):
+            # ВНИМАНИЕ: Нам нужно построить правильную диагональную матрицу 4x4
+            scale_mat = np.eye(4)
+            scale_mat[0, 0] = scale_factors[0]
+            scale_mat[1, 1] = scale_factors[1]
+            scale_mat[2, 2] = scale_factors[2]
+            self.trimesh_obj.apply_transform(scale_mat)
+
+            # Корректируем нормали под этот масштаб
+            self._apply_optical_normals_scale(scale_factors)
+
         # Применяем поворот и перенос
         rot_4x4 = np.eye(4)
         rot_4x4[:3, :3] = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
         self.trimesh_obj.apply_transform(rot_4x4)
+
+        # Корректируем нормали под поворот (просто умножаем на матрицу вращения)
+        if 'face_normals' in self.trimesh_obj._cache:
+            current_normals = self.trimesh_obj._cache['face_normals']
+            rotated_normals = current_normals @ rot_4x4[:3, :3].T
+            self.trimesh_obj._cache['face_normals'] = rotated_normals
+
         if translation is not None:
             self.trimesh_obj.apply_translation(translation)
 
@@ -1180,6 +1203,50 @@ class MeshSurface:
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
         self._last_hit_triangle_idx = None
+
+    def _apply_optical_normals_scale(self, scale_factors):
+        """Внутренний метод пересчета нормалей по законам оптики."""
+        # Для нормалей используется транспонированная обратная матрица масштабных коэффициентов
+        inv_scale = 1.0 / np.array(scale_factors, dtype=float)
+
+        # Модифицируем базовые нормали
+        scaled_normals = self._base_face_normals * inv_scale
+
+        # Нормализуем каждый вектор нормали (приводим к длине 1)
+        norms = np.linalg.norm(scaled_normals, axis=1, keepdims=True)
+        # Защита от деления на 0
+        norms = np.where(norms < 1e-12, 1.0, norms)
+        correct_normals = scaled_normals / norms
+
+        # Принудительно жестко записываем их в кэш trimesh.
+        # Теперь trimesh будет брать их отсюда, а не считать геометрически!
+        self.trimesh_obj._cache['face_normals'] = correct_normals
+
+    def scale(self, scale_factors):
+        """Применяет оптически корректное масштабирование к мешу относительно его центра."""
+        # Строим правильную матрицу масштаба 4x4
+        scale_mat = np.eye(4)
+        scale_mat[0, 0] = scale_factors[0]
+        scale_mat[1, 1] = scale_factors[1]
+        scale_mat[2, 2] = scale_factors[2]
+
+        center = self.mesh.bounding_box.center_mass
+        T1 = np.eye(4)
+        T1[:3, 3] = -center
+        T2 = np.eye(4)
+        T2[:3, 3] = center
+
+        # Очищаем старый кэш, чтобы trimesh не сопротивлялся изменениям
+        self.mesh._cache.clear()
+
+        # Смещаем, скейлим вершины, возвращаем
+        self.mesh.apply_transform(T2 @ scale_mat @ T1)
+
+        # Накатываем корректные нормали, рассчитанные через инверсию масштаба
+        self._apply_optical_normals_scale(scale_factors)
+
+        # Перестраиваем BVH-дерево пересечений для лучей
+        self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
 
     def is_active(self, wavelength):
         if wavelength is None:
@@ -1209,10 +1276,17 @@ class MeshSurface:
         return t
 
     def get_normal(self, point):
+        """Возвращает строго нормализованный вектор нормали из кэша."""
         if self._last_hit_triangle_idx is not None:
-            return self.mesh.face_normals[self._last_hit_triangle_idx]
-        _, _, tri_idx = trimesh.proximity.closest_point(self.mesh, [point])
-        return self.mesh.face_normals[tri_idx[0]]
+            raw_normal = self.mesh.face_normals[self._last_hit_triangle_idx]
+        else:
+            _, _, tri_idx = trimesh.proximity.closest_point(self.mesh, [point])
+            raw_normal = self.mesh.face_normals[tri_idx[0]]
+
+        norm = np.linalg.norm(raw_normal)
+        if norm < 1e-12:
+            return raw_normal
+        return raw_normal / norm
 
     def get_mesh(self):
         verts = self.mesh.vertices
