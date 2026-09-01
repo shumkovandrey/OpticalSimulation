@@ -10,7 +10,10 @@ from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as vuetify
 from trame.widgets import vtk as trame_vtk
 from scipy.spatial.transform import Rotation as R
+
+# Для холста
 from pyvista.trame.ui import plotter_ui
+from trame_pyvista.widgets import PyVistaRemoteLocalView
 
 
 from main import (
@@ -59,6 +62,7 @@ class OpticsAppController:
         self.state.selected_object_type = None
         self.state.trace_mode = "simple"
         self.state.scene_objects_list = []
+        self.state.render_mode = "remote"
         self.state.trace_modes = [
             {"title": "Simple", "value": "simple"},
             {"title": "Tree", "value": "tree"},
@@ -254,10 +258,9 @@ class OpticsAppController:
                 absorption_range=params.get("absorption_range")
             )
         elif obj_type == "emitter":
-            rot = params.get("rotation", (0, 0, 0))
-            direction = R.from_euler('xyz', rot, degrees=True).apply([1, 0, 0])
             return BeamEmitter(
-                origin=params.get("origin", (0, 0, 0)), direction=direction, num_rays=params.get("num_rays", 5),
+                origin=params.get("origin", (0, 0, 0)), direction=np.array([1.0, 0.0, 0.0]),
+                num_rays=params.get("num_rays", 5),
                 min_offset=params.get("min_offset", -0.5), max_offset=params.get("max_offset", 0.5),
                 color=params.get("color", "yellow"), wavelength=params.get("wavelength", 550),
                 energy=params.get("energy", 1.0), current_n=params.get("current_n", 1.0), pool=self.pool
@@ -293,6 +296,9 @@ class OpticsAppController:
             self.ray_tracer.elements.clear()
             self.ray_tracer.rays.clear()
 
+            if hasattr(self.ray_tracer, 'emitters'):
+                self.ray_tracer.emitters.clear()
+
             for obj_entry in self.scene_objects:
                 instance = obj_entry["instance"]
                 if isinstance(instance, (UniversalLens, HyperbolicLens)):
@@ -300,6 +306,8 @@ class OpticsAppController:
                         self.ray_tracer.add_elements(surf)
                 elif isinstance(instance, MeshSurface):
                     self.ray_tracer.add_elements(instance)
+                elif isinstance(instance, BeamEmitter):
+                    self.ray_tracer.add_emitter(instance)
 
             for ray in self.manual_rays:
                 self.ray_tracer.add_ray(ray)
@@ -608,6 +616,8 @@ for effect in ["reflection", "refraction", "absorption"]:
 for axis in ["x", "y", "z"]:
     server.state.change(f"temp_pos_delta_{axis}")(app.on_temp_change)
 
+# rendering_state_key = f"{app.plotter.id}_id_render"
+
 with SinglePageLayout(server) as layout:
     # Заголовок убран
     # layout.title.set_text("Оптический симулятор")
@@ -850,16 +860,30 @@ with SinglePageLayout(server) as layout:
                     vuetify.VSelect(label="Режим трассировки", v_model="trace_mode", items=("trace_modes",),
                                     item_title="title", item_value="value", dense=True, class_="mt-2")
 
+                    vuetify.VListSubheader("Рендеринг 3D-сцены", class_="px-0 text-cyan-lighten-2")
+                    with vuetify.VBtnToggle(v_model="render_mode", mandatory=True, block=True, class_="mb-2",
+                                            color="cyan-darken-3"):
+                        with vuetify.VBtn(value="remote", style="width: 50%"):
+                            vuetify.VIcon("mdi-server", class_="mr-1")
+                            "Server"
+                        with vuetify.VBtn(value="local", style="width: 50%"):
+                            vuetify.VIcon("mdi-monitor", class_="mr-1")
+                            "Client"
+
                 # Правая колонка с 3D окном pyvista
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
-                    ui_view = plotter_ui(
-                        app.plotter,
-                        mode="server",
-                        add_menu=False,
-                        image_scale=1,
-                        interactor_style="Terrain"
-                    )
+                    # ui_view = plotter_ui(
+                    #     app.plotter,
+                    #     mode="trame",
+                    #     default_server_rendering=False,
+                    #     add_menu=False,
+                    #     image_scale=1,
+                    #     interactor_style="Terrain"
+                    # )
+                    ui_view = PyVistaRemoteLocalView(app.plotter, mode=("render_mode",))
+                    # ui_view.set_mode(server.state.viewMode)
                     app.ctrl.view_update = ui_view.update
+
 
 app.update_scene()
 
