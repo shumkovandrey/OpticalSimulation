@@ -1,52 +1,69 @@
 import pyvista as pv
-from trame.app import get_server
-from trame.ui.vuetify3 import SinglePageLayout
-from trame.widgets import vuetify3 as v
+import numpy as np
+from main import *
 
-# Импортируем напрямую актуальный класс представления
-from trame_pyvista.widgets import PyVistaLocalView
+# 1. Инициализация окна
+plotter = pv.Plotter()
+plotter.set_background("black")
+plotter.view_isometric()
+plotter.enable_parallel_projection()
+plotter.enable_terrain_style(mouse_wheel_zooms=True)
+plotter.add_axes(color="white")
 
-# 1. Инициализация сервера Trame и PyVista
-server = get_server()
-state, ctrl = server.state, server.controller
+# 2. Создание двояковыпуклой линзы
+lens = UniversalLens(
+    origin=(0.0, 0.0, 0.0),          # центр линзы
+    rotation_degrees=(0, 0, 0),      # оптическая ось вдоль X
+    R1=10.0,                         # радиус передней поверхности (выпуклая)
+    R2=-10.0,                        # радиус задней поверхности (выпуклая)
+    thickness=2.0,                   # толщина по оси
+    edge_radius=3.0,                 # радиус апертуры
+    n=1.5,                           # показатель преломления
+    reflection_range=None,           # отражение отключено
+    refraction_range=(0, np.inf),    # преломление во всём диапазоне
+    absorption_range=None
+)
 
-# Обязательный флаг для корректной синхронизации геометрии с веб-клиентом
-pv.OFF_SCREEN = True
+# Добавляем линзу на сцену как полупрозрачный объект
+plotter.add_mesh(
+    lens.get_mesh(),
+    color="cyan",
+    opacity=0.6,
+    smooth_shading=True
+)
 
-# 2. Создание и базовая настройка сцены PyVista
-pl = pv.Plotter()
-pl.add_mesh(pv.Cone(), color="teal")
+# 3. Создание эмиттера пучка параллельных лучей
+emitter = BeamEmitter(
+    origin=(-20.0, 0.0, 0.0),        # стартовая точка эмиттера
+    direction=(1.0, 0.0, 0.0),       # направление распространения (вдоль X)
+    rotation_degrees=(0, 0, 0),      # без дополнительного поворота
+    num_rays=9,                      # количество лучей (нечётное, чтобы был центральный)
+    min_offset=-2.0,                 # минимальное смещение от оси в плоскости YZ
+    max_offset=2.0,                  # максимальное смещение
+    color="yellow",                  # цвет лучей
+    wavelength=550.0,                # длина волны (нм)
+    energy_color_type=2,             # прозрачность зависит от энергии (гамма)
+    energy=1.0,                      # начальная энергия
+    current_n=1.0                    # показатель преломления среды
+)
 
-# Жестко фиксируем вектор "Верх" в Python, чтобы клиент его унаследовал
-pl.camera.view_up = (0.0, 0.0, 1.0)
-pl.camera_set = True
+# 4. Создание трассировщика
+tracer = RayTracer(
+    plotter=plotter,
+    mode='simple',                   # последовательная трассировка без ветвления
+    pool=None,                       # без пула лучей
+    default_color="yellow",
+    line_width=2.0,
+    min_alpha=0.05,
+    gamma=0.3
+)
 
-# 3. Конфигурация интерактора vtk.js (Блокируем Roll/Spin)
-# Мы объявляем только Rotate, Pan и Zoom. Отсутствие Spin отключает крен камеры.
-custom_interactor_settings = [
-    {"button": 1, "action": "Rotate"},                       # ЛКМ: вращение Yaw/Pitch
-    {"button": 2, "action": "Pan"},                          # СКМ: сдвиг сцены
-    {"button": 3, "action": "Zoom"},                         # ПКМ: приближение
-    {"button": 1, "shift": True, "action": "Pan"},           # Shift + ЛКМ: сдвиг
-    {"button": 1, "control": True, "action": "Zoom"},        # Ctrl + ЛКМ: зум
-]
+# 5. Добавление эмиттера и линзы в трассировщик
+tracer.add_emitter(emitter)
+tracer.add_elements(lens)            # линза как единый объект сцены
 
-# 4. Построение UI интерфейса
-with SinglePageLayout(server) as layout:
-    layout.title.text = "PyVista Client View - No Roll"
-    
-    with layout.content:
-        with v.VContainer(fluid=True, classes="fill-height pa-0"):
-            # Создаем представление напрямую
-            html_view = PyVistaLocalView(
-                pl,
-                # Пробрасываем конфигурацию в vtk.js интерактор напрямую
-                # interactor_settings=custom_interactor_settings
-            )
-            
-            # Сохраняем ссылку для управления (например, для сброса камеры)
-            ctrl.view_update = html_view.update
-            ctrl.view_reset_camera = html_view.reset_camera
+# 6. Трассировка всех лучей и обновление облака отрезков на сцене
+tracer.render()
 
-if __name__ == "__main__":
-    server.start()
+# 7. Показ сцены
+plotter.show()

@@ -83,6 +83,13 @@ class OpticsAppController:
         self.state.param_wavelength = 550.0
         self.state.param_mesh_path = ""
 
+        # НАЧАЛО ИЗМЕНЕНИЙ: Инициализация спектральных параметров в состоянии
+        for effect in ["reflection", "refraction", "absorption"]:
+            self.state[f"param_{effect}_min"] = 0.0
+            self.state[f"param_{effect}_max"] = np.inf
+            self.state[f"param_{effect}_enabled"] = (effect == "refraction") # преломление включено по умолчанию
+        # КОНЕЦ ИЗМЕНЕНИЙ
+
         self.state.temp_pos_delta_x = 0.0
         self.state.temp_pos_delta_y = 0.0
         self.state.temp_pos_delta_z = 0.0
@@ -370,6 +377,17 @@ class OpticsAppController:
             self.state.param_n = float(p.get("n", 1.5))
             self.state.param_mesh_path = str(p.get("mesh_path", ""))
 
+        for effect in ["reflection", "refraction", "absorption"]:
+            r_range = p.get(f"{effect}_range")
+            if r_range is None:
+                self.state[f"param_{effect}_enabled"] = False
+                self.state[f"param_{effect}_min"] = 0.0
+                self.state[f"param_{effect}_max"] = np.inf
+            else:
+                self.state[f"param_{effect}_enabled"] = True
+                self.state[f"param_{effect}_min"] = float(r_range[0]) if r_range[0] is not None else 0.0
+                self.state[f"param_{effect}_max"] = float(r_range[1]) if r_range[1] is not None else np.inf
+
     # ---------- Обновление выбранного объекта ----------
     def update_selected_object(self, *args, **kwargs):
         obj_id = self.state.selected_object_id
@@ -410,6 +428,23 @@ class OpticsAppController:
             if (p["n"] != float(self.state.param_n) or
                     p["mesh_path"] != str(self.state.param_mesh_path)):
                 shape_changed = True
+
+        for effect in ["reflection", "refraction", "absorption"]:
+            if not self.state[f"param_{effect}_enabled"]:
+                p[f"{effect}_range"] = None
+            else:
+                # Преобразуем строки/числа из полей ввода, учитывая строки "Infinity"
+                try:
+                    v_min = float(self.state[f"param_{effect}_min"])
+                except (ValueError, TypeError):
+                    v_min = 0.0
+
+                try:
+                    v_max = float(self.state[f"param_{effect}_max"])
+                except (ValueError, TypeError):
+                    v_max = np.inf
+
+                p[f"{effect}_range"] = (v_min, v_max)
 
         # Обновляем параметры (сохраняем только базовую позицию, без temp)
         p["origin"] = tuple(base_origin)  # сохраняем базовую, а не new_origin
@@ -563,6 +598,11 @@ for param in ["param_n", "param_R1", "param_R2", "param_f_target", "param_thickn
 for axis in ["x", "y", "z"]:
     server.state.change(f"param_pos_{axis}")(app.on_param_change)
     server.state.change(f"param_rot_{axis}")(app.on_param_change)
+
+for effect in ["reflection", "refraction", "absorption"]:
+    server.state.change(f"param_{effect}_enabled")(app.on_param_change)
+    server.state.change(f"param_{effect}_min")(app.on_param_change)
+    server.state.change(f"param_{effect}_max")(app.on_param_change)
 
 # Подписка на временные переменные (для движения во время перетаскивания)
 for axis in ["x", "y", "z"]:
@@ -774,6 +814,37 @@ with SinglePageLayout(server) as layout:
                             with vuetify.VCol(cols=8):
                                 vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01,
                                                 dense=True, hide_details=True)
+
+                    with vuetify.VContainer(v_if="selected_object_type == 'lens' || selected_object_type == 'hyperbolic_lens' ||  selected_object_type == 'mesh'", class_="pa-0"):
+                        vuetify.VListSubheader("Оптические свойства (λ, нм)", class_="px-0 text-cyan-lighten-2")
+
+                        # Шаблон для генерации трех типов взаимодействия
+                        effects = [
+                            {"key": "refraction", "label": "Преломление"},
+                            {"key": "reflection", "label": "Отражение"},
+                            {"key": "absorption", "label": "Поглощение"}
+                        ]
+
+                        for eff in effects:
+                            k = eff["key"]
+                            vuetify.VCheckbox(v_model=f"param_{k}_enabled", label=eff["label"], dense=True,
+                                              hide_details=True)
+
+                            with vuetify.VRow(v_if=f"param_{k}_enabled", no_gutters=True, align="center",
+                                              class_="pl-4 mb-2"):
+                                # Поле MIN
+                                with vuetify.VCol(cols=5, class_="pr-1"):
+                                    vuetify.VTextField(v_model=f"param_{k}_min", label="Мин", type="number", dense=True,
+                                                       hide_details=True)
+                                # Поле MAX
+                                with vuetify.VCol(cols=5, class_="px-1"):
+                                    vuetify.VTextField(v_model=f"param_{k}_max", label="Макс", dense=True,
+                                                       hide_details=True)
+                                # Кнопка INFINITY
+                                with vuetify.VCol(cols=2, class_="pl-1"):
+                                    vuetify.VBtn(icon="mdi-infinity", size="small", color="grey-darken-2",
+                                                 variant="flat",
+                                                 click=f"param_{k}_max = Infinity")
 
                     vuetify.VDivider(class_="my-4")
                     vuetify.VSelect(label="Режим трассировки", v_model="trace_mode", items=("trace_modes",),

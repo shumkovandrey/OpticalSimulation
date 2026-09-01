@@ -82,6 +82,14 @@ def create_scene():
         refraction_range=(0, 10000), reflection_range=(0, 10000),
         n_inside=1.5
     )
+    # hyperbolic_lens2 = AsphericSurface(
+    #     center=[-1, 55, 0],
+    #     rotation_degrees=(0, 0, 180),
+    #     radius=5.0, conic_constant=-2.25,
+    #     edge_radius=4.0, thickness=10.0,
+    #     refraction_range=(0, 10000), reflection_range=(0, 10000),
+    #     n_inside=1.5
+    # )
     hyperbolic_lens_enter = PlaneSurface(
         point=[-1.5, 55, 0], rotation_degrees=(0, 0, 0),
         half_sizes=(4.0, 4.0), n_inside=1.5,
@@ -109,6 +117,7 @@ def create_scene():
         (lens2, "lens2", "cyan"),
         (parabolic_mirror, "parabolic", "orange"),
         (hyperbolic_lens, "hyperbolic", "magenta"),
+        # (hyperbolic_lens2, "hyperbolic2", "magenta"),
         (hyperbolic_lens_enter, "hyperbolic_enter", "magenta"),
     ]
     if mesh_obj:

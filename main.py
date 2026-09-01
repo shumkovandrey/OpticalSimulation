@@ -882,9 +882,12 @@ class PlaneSurface:
         if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
             return False
         # Проверяем попадание хотя бы в один диапазон
-        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
-        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
-        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        in_ref = self.reflection_range is not None and self.reflection_range[0] is not None and self.reflection_range[
+            1] is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and self.refraction_range[0] is not None and self.refraction_range[
+            1] is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and self.absorption_range[0] is not None and self.absorption_range[
+            1] is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
         return in_ref or in_refr or in_abs
 
     def get_mesh(self) -> pv.PolyData:
@@ -1064,9 +1067,12 @@ class SphereSurface:
         if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
             return False
         # Проверяем попадание хотя бы в один диапазон
-        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
-        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
-        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        in_ref = self.reflection_range is not None and self.reflection_range[0] is not None and self.reflection_range[
+            1] is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and self.refraction_range[0] is not None and self.refraction_range[
+            1] is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and self.absorption_range[0] is not None and self.absorption_range[
+            1] is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
         return in_ref or in_refr or in_abs
 
 
@@ -1126,9 +1132,12 @@ class CylinderSurface:
             return True
         if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
             return False
-        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
-        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
-        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        in_ref = self.reflection_range is not None and self.reflection_range[0] is not None and self.reflection_range[
+            1] is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and self.refraction_range[0] is not None and self.refraction_range[
+            1] is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and self.absorption_range[0] is not None and self.absorption_range[
+            1] is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
         return in_ref or in_refr or in_abs
 
 
@@ -1177,9 +1186,12 @@ class MeshSurface:
             return True
         if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
             return False
-        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
-        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
-        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        in_ref = self.reflection_range is not None and self.reflection_range[0] is not None and self.reflection_range[
+            1] is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and self.refraction_range[0] is not None and self.refraction_range[
+            1] is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and self.absorption_range[0] is not None and self.absorption_range[
+            1] is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
         return in_ref or in_refr or in_abs
 
     def intersect(self, ray: Ray) -> Optional[float]:
@@ -1496,9 +1508,12 @@ class AsphericSurface:
         if wavelength is None: return True
         if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
             return False
-        in_ref = self.reflection_range is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
-        in_refr = self.refraction_range is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
-        in_abs = self.absorption_range is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
+        in_ref = self.reflection_range is not None and self.reflection_range[0] is not None and self.reflection_range[
+            1] is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
+        in_refr = self.refraction_range is not None and self.refraction_range[0] is not None and self.refraction_range[
+            1] is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
+        in_abs = self.absorption_range is not None and self.absorption_range[0] is not None and self.absorption_range[
+            1] is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
         return in_ref or in_refr or in_abs
 
 
