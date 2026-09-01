@@ -1,69 +1,60 @@
 import pyvista as pv
-import numpy as np
-from main import *
+from pyvista import examples
+from trame.app import get_server
+from trame.ui.vuetify3 import SinglePageLayout
+from trame_pyvista.widgets import PyVistaRemoteLocalView
+from trame.widgets import vuetify3
 
-# 1. Инициализация окна
-plotter = pv.Plotter()
-plotter.set_background("black")
-plotter.view_isometric()
-plotter.enable_parallel_projection()
-plotter.enable_terrain_style(mouse_wheel_zooms=True)
-plotter.add_axes(color="white")
+server = get_server()
+state, ctrl = server.state, server.controller
 
-# 2. Создание двояковыпуклой линзы
-lens = UniversalLens(
-    origin=(0.0, 0.0, 0.0),          # центр линзы
-    rotation_degrees=(0, 0, 0),      # оптическая ось вдоль X
-    R1=10.0,                         # радиус передней поверхности (выпуклая)
-    R2=10.0,                        # радиус задней поверхности (выпуклая)
-    thickness=2.0,                   # толщина по оси
-    edge_radius=3.0,                 # радиус апертуры
-    n=1.5,                           # показатель преломления
-    reflection_range=(0, np.inf),           # отражение отключено
-    refraction_range=(0, np.inf),    # преломление во всём диапазоне
-    absorption_range=None
-)
+# 1. Настройка сцены
+plotter = pv.Plotter(off_screen=True)
+mesh = examples.download_st_helens()
+plotter.add_mesh(mesh, cmap="terrain")
+plotter.enable_terrain_style()  # Для Remote-режима
 
-# Добавляем линзу на сцену как полупрозрачный объект
-plotter.add_mesh(
-    lens.get_mesh(),
-    color="cyan",
-    opacity=0.6,
-    smooth_shading=True
-)
+# 2. JS-скрипт, который находит инстанс vtk.js и перенастраивает его
+# Мы берем текущую камеру и запрещаем ей произвольный крен (roll), фиксируя ось Z.
+TERRAIN_JS = """
+const viewElement = window.trame.refs['my_view'];
+if (viewElement && viewElement.view) {
+    const renderWindow = viewElement.view.getRenderWindow();
+    const interactor = renderWindow.getInteractor();
+    const style = interactor.getInteractorStyle();
 
-# 3. Создание эмиттера пучка параллельных лучей
-emitter = BeamEmitter(
-    origin=(-20.0, 0.0, 0.0),        # стартовая точка эмиттера
-    direction=(1.0, 0.0, 0.0),       # направление распространения (вдоль X)
-    rotation_degrees=(0, 0, 0),      # без дополнительного поворота
-    num_rays=20,                      # количество лучей (нечётное, чтобы был центральный)
-    min_offset=-1.0,                 # минимальное смещение от оси в плоскости YZ
-    max_offset=1.0,                  # максимальное смещение
-    color="green",                  # цвет лучей
-    wavelength=550.0,                # длина волны (нм)
-    energy_color_type=2,             # прозрачность зависит от энергии (гамма)
-    energy=0.1,                      # начальная энергия
-    current_n=1.0                    # показатель преломления среды
-)
+    // В vtk.js Terrain эмулируется через сброс Roll (крена) при каждом вращении
+    // или через кастомную фиксацию вектора ViewUp.
+    // Для базового эффекта "земли под ногами" достаточно жестко контролировать камеру:
+    const camera = renderWindow.getRenderer().getActiveCamera();
 
-# 4. Создание трассировщика
-tracer = RayTracer(
-    plotter=plotter,
-    mode='tree',                   # последовательная трассировка без ветвления
-    pool=None,                       # без пула лучей
-    default_color="yellow",
-    line_width=2.0,
-    min_alpha=0.05,
-    gamma=0.3
-)
+    // Подписываемся на событие анимации интерактора, чтобы удерживать горизонт
+    interactor.onAnimation(() => {
+        const vup = camera.getViewUp();
+        // Принудительно возвращаем ViewUp в сторону оси Z [0, 0, 1]
+        if (vup[2] < 0.99) {
+            camera.setViewUp([0, 0, 1]);
+            renderWindow.render();
+        }
+    });
+    console.log("Terrain style applied to vtk.js interactor");
+} else {
+    console.log("View not ready yet");
+}
+"""
 
-# 5. Добавление эмиттера и линзы в трассировщик
-tracer.add_emitter(emitter)
-tracer.add_elements(lens)            # линза как единый объект сцены
+with SinglePageLayout(server) as layout:
+    layout.title.text = "PyVista Terrain Local View"
 
-# 6. Трассировка всех лучей и обновление облака отрезков на сцене
-tracer.render()
+    with layout.content:
+        # Обязательно задаем ref="my_view", чтобы JS код мог найти этот компонент
+        view = PyVistaRemoteLocalView(plotter, ref="my_view")
 
-# 7. Показ сцены
-plotter.show()
+        # Кнопка для активации стиля на клиенте без вызова send_eval
+        vuetify3.VBtn(
+            "Активировать Terrain на клиенте",
+            click=f"eval(`{TERRAIN_JS}`)"  # Выполняется прямо в браузере
+        )
+
+if __name__ == "__main__":
+    server.start()

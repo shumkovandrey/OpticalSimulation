@@ -85,6 +85,7 @@ class OpticsAppController:
         self.state.param_min_offset = -0.5
         self.state.param_max_offset = 0.5
         self.state.param_wavelength = 550.0
+        self.state.param_current_n = 1.0
         self.state.param_mesh_path = ""
         self.state.param_scale_uniform = True  # Тумблер по умолчанию ВКЛ
         self.state.param_scale_all = 1.0  # Единый ползунок
@@ -120,7 +121,7 @@ class OpticsAppController:
         self.ctrl.trigger("set_last_pos_z")(self.set_last_pos_z)
 
         self.ctrl.trigger("delete_object_event")(self.remove_object)
-
+        self.ctrl.trigger("focus_on_object_event")(self.focus_on_selected_object)
         self.state.change("selected_object_id")(self.on_object_selected)
         self.state.change("trace_mode")(self.on_trace_mode_changed)
 
@@ -426,6 +427,31 @@ class OpticsAppController:
         if obj_entry:
             self._load_params_to_state(obj_entry)
 
+    def focus_on_selected_object(self, *args, **kwargs):
+        """Перемещает фокус камеры на текущие координаты выбранного объекта."""
+        obj_id = self.state.selected_object_id
+        if not obj_id:
+            return
+
+        obj_entry = self._find_object(obj_id)
+        if not obj_entry:
+            return
+
+        # Считываем текущую мировую позицию объекта из его сохраненных параметров
+        p = obj_entry["params"]
+        origin = p.get("origin", (0.0, 0.0, 0.0))
+
+        # Переносим фокальную точку камеры PyVista в центр объекта
+        target_point = (float(origin[0]), float(origin[1]), float(origin[2]))
+
+        # fly_to плавно смещает фокус камеры в эту точку
+        self.plotter.fly_to(target_point)
+
+        # Принудительно рендерим кадр и обновляем клиентский вид
+        self.plotter.render()
+        if hasattr(self.ctrl, 'view_update'):
+            self.ctrl.view_update()
+
     def _find_object(self, obj_id):
         for o in self.scene_objects:
             if o["id"] == obj_id:
@@ -461,6 +487,7 @@ class OpticsAppController:
             self.state.param_min_offset = float(p.get("min_offset", -0.5))
             self.state.param_max_offset = float(p.get("max_offset", 0.5))
             self.state.param_wavelength = float(p.get("wavelength", 550.0))
+            self.state.param_current_n = float(p.get("current_n", 550.0))
         elif obj_entry["type"] == "mesh":
             self.state.param_n = float(p.get("n", 1.5))
             self.state.param_mesh_path = str(p.get("mesh_path", ""))
@@ -535,7 +562,8 @@ class OpticsAppController:
             if (p["num_rays"] != int(self.state.param_num_rays) or
                 p["min_offset"] != float(self.state.param_min_offset) or
                 p["max_offset"] != float(self.state.param_max_offset) or
-                p["wavelength"] != float(self.state.param_wavelength)):
+                p["wavelength"] != float(self.state.param_wavelength) or
+                p["current_n"] != float(self.state.param_current_n)):
                 shape_changed = True
         elif obj_entry["type"] == "mesh":
             if (p["n"] != float(self.state.param_n) or
@@ -600,6 +628,7 @@ class OpticsAppController:
             p["min_offset"] = float(self.state.param_min_offset)
             p["max_offset"] = float(self.state.param_max_offset)
             p["wavelength"] = float(self.state.param_wavelength)
+            p["current_n"] = float(self.state.param_current_n)
         elif obj_entry["type"] == "mesh":
             p["n"] = float(self.state.param_n)
             p["mesh_path"] = str(self.state.param_mesh_path)
@@ -755,7 +784,7 @@ app = OpticsAppController(server)
 
 # Подписка на изменения параметров (кроме temp)
 for param in ["param_n", "param_radius", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
-              "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_mesh_path",
+              "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_current_n", "param_mesh_path",
               "param_plane_shape", "param_plane_width", "param_plane_height", "param_cylinder_capping"]:
     server.state.change(param)(app.on_param_change)
 
@@ -776,7 +805,7 @@ for effect in ["reflection", "refraction", "absorption"]:
 for axis in ["x", "y", "z"]:
     server.state.change(f"temp_pos_delta_{axis}")(app.on_temp_change)
 
-# rendering_state_key = f"{app.plotter.id}_id_render"
+
 
 with SinglePageLayout(server) as layout:
     # Заголовок убран
@@ -821,8 +850,19 @@ with SinglePageLayout(server) as layout:
                                                  click="trigger('delete_object_event', [obj.id])")
 
                     vuetify.VDivider(class_="my-4")
-                    vuetify.VCardTitle("Параметры: {{ selected_object_id ? selected_object_id : 'не выбран' }}",
-                                       classes="text-subtitle-1 px-0 text-cyan-lighten-2")
+                    with vuetify.VRow(no_gutters=True, align="center", class_="mb-2"):
+                        with vuetify.VCol(cols=9):
+                            vuetify.VCardTitle("Параметры: {{ selected_object_id ? selected_object_id : 'не выбран' }}",
+                                               classes="text-subtitle-1 px-0 text-cyan-lighten-2")
+                        with vuetify.VCol(cols=3, class_="text-right"):
+                            # Кнопка становится активной, только если объект выбран
+                            vuetify.VBtn(icon="mdi-crosshairs-gps",
+                                         size="small",
+                                         color="cyan-darken-2",
+                                         variant="flat",
+                                         # disabled="selected_object_id == None",
+                                         click="trigger('focus_on_object_event')",
+                                         title="Сфокусировать камеру на объекте")
 
                     # --- Блок позиционирования ---
                     vuetify.VListSubheader("Позиция", class_="px-0")
@@ -1075,6 +1115,14 @@ with SinglePageLayout(server) as layout:
                                 vuetify.VSlider(v_model="param_wavelength", min=380, max=780, step=10,
                                                 dense=True, hide_details=True)
 
+                        # n среды
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_current_n", label="n среды", type="number", dense=True, step=10)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_current_n", min=0, max=3, step=0.01,
+                                                dense=True, hide_details=True)
+
                     # --- Параметры 3D-меша ---
                     with vuetify.VContainer(v_if="selected_object_type == 'mesh'", class_="pa-0"):
                         vuetify.VListSubheader("Параметры 3D-модели", class_="px-0")
@@ -1123,6 +1171,7 @@ with SinglePageLayout(server) as layout:
                             {"key": "absorption", "label": "Поглощение"}
                         ]
 
+
                         for eff in effects:
                             k = eff["key"]
                             vuetify.VCheckbox(v_model=f"param_{k}_enabled", label=eff["label"], dense=True,
@@ -1168,7 +1217,10 @@ with SinglePageLayout(server) as layout:
                     #     image_scale=1,
                     #     interactor_style="Terrain"
                     # )
-                    ui_view = PyVistaRemoteLocalView(app.plotter, mode=("render_mode",))
+                    ui_view = PyVistaRemoteLocalView(
+                        app.plotter,
+                        mode=("render_mode",)
+                    )
                     # ui_view.set_mode(server.state.viewMode)
                     app.ctrl.view_update = ui_view.update
 
