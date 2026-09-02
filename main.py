@@ -176,18 +176,20 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
     if allow_reflection and (abs(r_s) > 1e-9 or abs(r_p) > 1e-9):
         new_E_s = r_s * E_s
         new_E_p = r_p * E_p
-        energy = abs(new_E_s)**2 + abs(new_E_p)**2
+        energy = abs(new_E_s) ** 2 + abs(new_E_p) ** 2
         if energy > 1e-9:
             reflected_dir = ray.direction - 2 * np.dot(ray.direction, normal) * normal
             new_pol = new_E_s * s_dir + new_E_p * p_dir
             if pool:
+                # Передаем type(ray) в пул, чтобы он извлек объект нужного класса
                 new_ray = pool.acquire(start_point + EPS * reflected_dir, reflected_dir,
                                        energy, n1, ray.color, ray.wavelength,
-                                       ray.energy_color_type, new_pol)
+                                       ray.energy_color_type, new_pol, ray_class=type(ray))
             else:
-                new_ray = Ray(start_point + EPS * reflected_dir, reflected_dir,
-                              energy, n1, ray.color, ray.wavelength,
-                              ray.energy_color_type, new_pol)
+                # Создаем экземпляр напрямую через тип текущего луча
+                new_ray = type(ray)(start_point + EPS * reflected_dir, reflected_dir,
+                                    energy, n1, ray.color, ray.wavelength,
+                                    ray.energy_color_type, new_pol)
             if use_polarization_color:
                 new_ray.update_color_from_polarization()
             new_rays.append(new_ray)
@@ -196,27 +198,27 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
     if allow_refraction and (abs(t_s) > 1e-9 or abs(t_p) > 1e-9):
         new_E_s = t_s * E_s
         new_E_p = t_p * E_p
-        energy = abs(new_E_s)**2 + abs(new_E_p)**2
+        energy = abs(new_E_s) ** 2 + abs(new_E_p) ** 2
         if energy > 1e-9:
             eta = n1 / n2
-            cos_t = np.sqrt(max(0.0, 1.0 - (eta**2) * (1.0 - cos_i**2)))
+            cos_t = np.sqrt(max(0.0, 1.0 - (eta ** 2) * (1.0 - cos_i ** 2)))
             refracted_dir = eta * ray.direction + (eta * cos_i - cos_t) * normal
             refracted_dir /= np.linalg.norm(refracted_dir)
             new_pol = new_E_s * s_dir + new_E_p * p_dir
             if pool:
+                # Передаем type(ray) в пул
                 new_ray = pool.acquire(start_point + EPS * refracted_dir, refracted_dir, energy, n2,
-                              color=ray.color, wavelength=ray.wavelength,
-                              energy_color_type=ray.energy_color_type,
-                              polarization=new_pol)
-            else:
-                new_ray = Ray(start_point + EPS * refracted_dir, refracted_dir, energy, n2,
                                        color=ray.color, wavelength=ray.wavelength,
                                        energy_color_type=ray.energy_color_type,
-                                       polarization=new_pol)
+                                       polarization=new_pol, ray_class=type(ray))
+            else:
+                new_ray = type(ray)(start_point + EPS * refracted_dir, refracted_dir, energy, n2,
+                                    color=ray.color, wavelength=ray.wavelength,
+                                    energy_color_type=ray.energy_color_type,
+                                    polarization=new_pol)
 
             if use_polarization_color:
                 new_ray.update_color_from_polarization()
-                print(f"Polarization color: {new_ray.color} for ray with energy {energy:.3f}")
             new_rays.append(new_ray)
 
     return new_rays
@@ -249,6 +251,26 @@ def _sag_numba(r, R, k, coeffs):
     for i, A in enumerate(coeffs):
         sag += A * r**(2 * (i + 1))
     return sag
+
+
+def get_dispersion_n(base_n: float, ray: Ray) -> float:
+    """
+    Вычисляет показатель преломления.
+    Если луч является экземпляром DispersiveRay, применяется формула Коши.
+    Если это обычный Ray, возвращается неизменный базовый base_n.
+    """
+    # Если это НЕ DispersiveRay или у него нет длины волны — возвращаем базовый n объекта
+    if not isinstance(ray, DispersiveRay) or ray.wavelength is None:
+        return base_n
+
+    # Переводим нанометры в микрометры для формулы Коши
+    lambda_mkm = ray.wavelength / 1000.0
+
+    # Эмпирические коэффициенты Коши для стекла типа К8 (BK7)
+    A = base_n - 0.01  # Смещение, чтобы в центре спектра получался примерно base_n
+    B = 0.005  # Коэффициент дисперсии
+
+    return A + B / (lambda_mkm ** 2)
 
 
 # ------------------------------------------------
@@ -452,23 +474,91 @@ class Ray:
             self.color = (r, 0.0, b)
 
 
+class DispersiveRay(Ray):
+    """
+    Класс луча, поддерживающий дисперсию (зависимость показателя преломления от длины волны).
+    Wavelength передается в нанометрах (например, 550).
+    """
+
+    def __init__(self, origin, direction, wavelength=550.0, **kwargs):
+        # Если в kwargs передан current_n, используем его, иначе рассчитываем для вакуума/воздуха (1.0)
+        current_n = kwargs.pop('current_n', 1.0)
+
+        super().__init__(
+            origin=origin,
+            direction=direction,
+            wavelength=wavelength,
+            current_n=current_n,
+            **kwargs
+        )
+
+        # Автоматически красим луч в спектральный цвет в зависимости от длины волны (опционально)
+        if self.color == "yellow" and wavelength is not None:
+            self.color = self.wavelength_to_rgb(wavelength)
+
+    @staticmethod
+    def wavelength_to_rgb(wavelength_nm: float) -> Tuple[float, float, float]:
+        """Утилита для перевода длины волны (нм) в приближенный RGB цвет (0..1) для красивой визуализации."""
+        w = wavelength_nm
+        if 380 <= w < 440:
+            R, G, B = -(w - 440) / (440 - 380), 0.0, 1.0
+        elif 440 <= w < 490:
+            R, G, B = 0.0, (w - 440) / (490 - 440), 1.0
+        elif 490 <= w < 510:
+            R, G, B = 0.0, 1.0, -(w - 510) / (510 - 490)
+        elif 510 <= w < 580:
+            R, G, B = (w - 510) / (580 - 510), 1.0, 0.0
+        elif 580 <= w < 645:
+            R, G, B = 1.0, -(w - 645) / (645 - 580), 0.0
+        elif 645 <= w <= 780:
+            R, G, B = 1.0, 0.0, 0.0
+        else:
+            R, G, B = 1.0, 1.0, 1.0  # Белый для невидимого спектра
+
+        # Интенсивность падает на краях видимого спектра
+        factor = 1.0
+        if 380 <= w < 420:
+            factor = 0.3 + 0.7 * (w - 380) / (420 - 380)
+        elif 700 < w <= 780:
+            factor = 0.3 + 0.7 * (780 - w) / (780 - 700)
+
+        return (R * factor, G * factor, B * factor)
+
+
 class RayPool:
     """Пул переиспользуемых лучей для снижения аллокаций."""
+
     def __init__(self, initial_size=100):
-        self.pool = [self._create_blank() for _ in range(initial_size)]
+        # Храним корзины для каждого типа луча отдельно
+        self.pools = {}
+        self.initial_size = initial_size
+
+        # Инициализируем пул базовыми лучами по умолчанию
+        self._ensure_pool_exists(Ray)
+
+    def _ensure_pool_exists(self, ray_class):
+        """Создает внутреннюю корзину для нового типа луча, если её нет."""
+        if ray_class not in self.pools:
+            self.pools[ray_class] = [ray_class(np.zeros(3), np.zeros(3)) for _ in range(self.initial_size)]
 
     def _create_blank(self):
         return Ray(np.zeros(3), np.zeros(3))
 
     def acquire(self, origin, direction, energy=1.0, current_n=1.0,
                 color="yellow", energy_color_type=2, wavelength=None,
-                polarization=None):
-        """Взять луч из пула и инициализировать поля."""
-        if self.pool:
-            ray = self.pool.pop()
+                polarization=None, ray_class=Ray):
+        """
+        Взять луч определенного класса из пула и инициализировать его поля.
+        По умолчанию (если ray_class не передан) возвращает обычный Ray.
+        """
+        self._ensure_pool_exists(ray_class)
+
+        if self.pools[ray_class]:
+            ray = self.pools[ray_class].pop()
         else:
-            ray = Ray(np.zeros(3), np.zeros(3))
-        # Заполняем все атрибуты
+            ray = ray_class(np.zeros(3), np.zeros(3))
+
+        # Инициализируем базовые атрибуты (выделено в векторные операции inplace, как в вашем коде)
         ray.origin[:] = origin
         ray.direction[:] = direction
         ray.direction /= np.linalg.norm(ray.direction)
@@ -477,15 +567,26 @@ class RayPool:
         ray.color = color
         ray.energy_color_type = energy_color_type
         ray.wavelength = wavelength
+
         if polarization is not None:
             ray.polarization = np.array(polarization, dtype=complex)
         else:
             ray.polarization = None
+
+        # Специфичный вызов для дисперсионного луча, если он затребован
+        if ray_class is DispersiveRay and wavelength is not None:
+            # Сбрасываем цвет на спектральный, если цвет остался дефолтным желтым
+            if color == "yellow":
+                ray.color = ray.wavelength_to_rgb(wavelength)
+
         return ray
 
     def release(self, ray: Ray):
-        """Вернуть луч в пул."""
-        self.pool.append(ray)
+        """Определяет тип луча и автоматически возвращает его в нужную корзину пула."""
+        ray_class = type(ray)
+        if ray_class not in self.pools:
+            self.pools[ray_class] = []
+        self.pools[ray_class].append(ray)
 
 
 class RayCloud:
@@ -694,7 +795,7 @@ class BeamEmitter:
                  rotation_degrees=(0, 0, 0), pool=None,
                  num_rays=5, min_offset=-2.0, max_offset=2.0,
                  color="yellow", wavelength=550, energy_color_type=2,
-                 energy=1.0, current_n=1.0):
+                 energy=1.0, current_n=1.0, ray_class=Ray):
         self.origin = np.asarray(origin, dtype=float)
 
         # Сохраняем исходное базовое направление
@@ -721,6 +822,7 @@ class BeamEmitter:
         self.pool = pool
         self.custom_rays: List[Ray] = []
         self.use_custom = False
+        self.ray_class = ray_class
 
     def add_ray(self, ray: Ray):
         """Добавить пользовательский луч (в локальной системе излучателя)."""
@@ -739,31 +841,26 @@ class BeamEmitter:
 
     def emit(self) -> List[Ray]:
         rays = []
-
-        # ИСПРАВЛЕНИЕ: Вместо get_tangents берем базовые перпендикулярные
-        # оси Y [0, 1, 0] и Z [0, 0, 1] локального пространства эмиттера
-        # и трансформируем их через накопленную матрицу поворота объекта!
         local_perp1 = np.array([0.0, 1.0, 0.0])
-
-        # Поворачиваем вектор распределения лучей в мировые координаты
         perp1 = self.rotation_matrix @ local_perp1
         perp1 /= np.linalg.norm(perp1)
 
-        # Генерируем смещения лучей в пучке по честной повернутой оси
         offsets = np.linspace(self.min_offset, self.max_offset, self.num_rays)
         for dy in offsets:
             world_origin = self.origin + dy * perp1
             if self.pool:
+                # Передаем self.ray_class в обновленный пул
                 ray = self.pool.acquire(origin=world_origin, direction=self.direction,
                                         energy=self.energy, current_n=self.current_n,
                                         color=self.color, wavelength=self.wavelength,
                                         energy_color_type=self.energy_color_type,
-                                        polarization=None)
+                                        polarization=None, ray_class=self.ray_class) # <--- ТУТ
             else:
-                ray = Ray(origin=world_origin, direction=self.direction,
-                          energy=self.energy, current_n=self.current_n,
-                          color=self.color, wavelength=self.wavelength,
-                          energy_color_type=self.energy_color_type)
+                # Создаем напрямую экземпляр выбранного класса
+                ray = self.ray_class(origin=world_origin, direction=self.direction,
+                                     energy=self.energy, current_n=self.current_n,
+                                     color=self.color, wavelength=self.wavelength,
+                                     energy_color_type=self.energy_color_type) # <--- ТУТ
             rays.append(ray)
         return rays
 
@@ -2357,7 +2454,8 @@ def _trace_simple(ray: 'Ray',
 
         # Преломление
         if allow_refraction:
-            n_next = hit.n_inside if abs(current_n - 1.0) < 1e-6 else 1.0
+            resolved_n_inside = get_dispersion_n(hit.n_inside, current_ray)
+            n_next = resolved_n_inside if abs(current_n - 1.0) < 1e-6 else 1.0
             refracted_dir = refract(current_ray.direction, hit.normal, current_n, n_next)
             if refracted_dir is not None:
                 current_n = n_next
@@ -2461,7 +2559,8 @@ def _trace_recursive(ray: 'Ray',
             return
 
         # Прозрачный проход или отражение/преломление
-        n_next = hit.n_inside if abs(current_ray.current_n - 1.0) < 1e-6 else 1.0
+        resolved_n_inside = get_dispersion_n(hit.n_inside, current_ray)
+        n_next = resolved_n_inside if abs(current_ray.current_n - 1.0) < 1e-6 else 1.0
 
         if not hit.allow_reflection and not hit.allow_refraction:
             start = hit.point + offset_distance * current_ray.direction

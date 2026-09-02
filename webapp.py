@@ -18,7 +18,7 @@ from trame_pyvista.widgets import PyVistaRemoteLocalView
 
 from main import (
     RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode, MeshSurface, HyperbolicLens,
-    PlaneSurface, SphereSurface, CylinderSurface
+    PlaneSurface, SphereSurface, CylinderSurface, DispersiveRay
 )
 
 # Режим отрисовки: "client" или "server"
@@ -43,6 +43,7 @@ class OpticsAppController:
         self.object_counter = 0
         self.initializing = True
         self._updating = False
+        self._loading_state = False
 
         self.ray_tracer = RayTracer(
             self.temp_plotter,
@@ -116,9 +117,7 @@ class OpticsAppController:
         self.ctrl.trigger("apply_y_delta")(self.apply_y_delta)
         self.ctrl.trigger("apply_z_delta")(self.apply_z_delta)
 
-        self.ctrl.trigger("set_last_pos_x")(self.set_last_pos_x)
-        self.ctrl.trigger("set_last_pos_y")(self.set_last_pos_y)
-        self.ctrl.trigger("set_last_pos_z")(self.set_last_pos_z)
+        self.ctrl.trigger("set_last_pos")(self.set_last_pos)
 
         self.ctrl.trigger("delete_object_event")(self.remove_object)
         self.ctrl.trigger("focus_on_object_event")(self.focus_on_selected_object)
@@ -139,15 +138,66 @@ class OpticsAppController:
 
     # ---------- Создание объектов ----------
     def create_initial_objects(self):
-        self.add_object("emitter", f"Источник {len(self.scene_objects) + 1}", {
-            "origin": (0, 0, 0), "rotation": (0, 0, 0), "num_rays": 5, "min_offset": -0.5,
-            "max_offset": 0.5, "wavelength": 550.0, "color": "yellow", "energy": 1.0, "current_n": 1.0
+        # 1. Входящий пучок света (параллельные лучи слева направо)
+        self.add_object("emitter", "Входящий свет", {
+            "origin": (-10.0, 0.0, 0.0),
+            "rotation": (0.0, 0.0, 0.0),
+            "num_rays": 30,
+            "min_offset": -1.2,
+            "max_offset": 1.2,
+            "wavelength": 550.0,
+            "color": "yellow",
+            "energy": 1.0,
+            "current_n": 1.0
         })
 
-        if self.scene_objects:
-            first_id = self.scene_objects[0]["id"]
-            self.state.selected_object_id = first_id
-            self.on_object_selected(first_id)
+        # 2. Главное зеркало (вогнутая сферическая поверхность справа)
+        # Отражает лучи обратно к центру трубы
+        self.add_object("sphere_surf", "Главное зеркало (Primary)", {
+            "origin": (5.0, 0.0, 0.0),
+            "rotation": (0.0, 0.0, 0.0),  # Развернуто навстречу лучам
+            "radius": 15.0,  # Радиус кривизны зеркала
+            "edge_radius": 1.5,  # Радиус апертуры
+            "n": 1.0,
+            "reflection_range": (0.0, np.inf),
+            "refraction_range": None,
+            "absorption_range": None
+        })
+
+        # 3. Вторичное плоское зеркало (наклонное под 45 градусов)
+        # Перенаправляет лучи от главного зеркала вертикально вверх
+        self.add_object("plane", "Вторичное зеркало (Secondary)", {
+            "origin": (-2.0, 0.0, 0.0),
+            "rotation": (0.0, 0.0, 45.0),  # Наклон 45 градусов для отражения вверх
+            "edge_radius": 0.5,
+            "shape_type": "circle",
+            "width": 1.0,
+            "height": 1.0,
+            "n": 1.0,
+            "reflection_range": (0.0, np.inf),
+            "refraction_range": None,
+            "absorption_range": None
+        })
+
+        # 4. Линза окуляра (Eyepiece Lens сверху)
+        # Собирает перенаправленный свет в финальный пучок
+        self.add_object("lens", "Окуляр (Eyepiece)", {
+            "origin": (-2.0, 3.17, 0.0),
+            "rotation": (0.0, 0.0, 90.0),  # Повернута горизонтально (вдоль оси Y)
+            "R1": 4.0,
+            "R2": 2.13,
+            "thickness": 0.2,
+            "edge_radius": 0.6,
+            "n": 1.5,
+            "reflection_range": None,
+            "refraction_range": (0.0, np.inf),
+            "absorption_range": None
+        })
+
+        # if self.scene_objects:
+        #     first_id = self.scene_objects[0]["id"]
+        #     self.state.selected_object_id = first_id
+        #     self.on_object_selected(first_id)
         self._update_objects_list_state()
 
     def add_object(self, obj_type, name, params):
@@ -163,7 +213,7 @@ class OpticsAppController:
         if isinstance(instance, (UniversalLens, HyperbolicLens)):
             self.plotter.add_mesh(
                 instance.get_mesh(),
-                color="magenta" if obj_type == "hyperbolic_lens" else "cyan",
+                color="cyan",
                 opacity=0.5,
                 smooth_shading=True,
                 name=obj_id
@@ -177,7 +227,7 @@ class OpticsAppController:
         elif isinstance(instance, MeshSurface):
             self.plotter.add_mesh(
                 instance.get_mesh(),
-                color="Blue",
+                color="cyan",
                 opacity=0.6,
                 smooth_shading=True,
                 name=obj_id
@@ -185,8 +235,8 @@ class OpticsAppController:
         elif obj_type in ["plane", "sphere_surf", "cylinder_surf"]:
             self.plotter.add_mesh(
                 instance.get_mesh(),
-                color="lightblue" if obj_type == "plane" else ("grey" if obj_type == "sphere_surf" else "orange"),
-                opacity=0.5,
+                color="cyan",
+                opacity=1,
                 smooth_shading=True,
                 name=obj_id
             )
@@ -296,7 +346,8 @@ class OpticsAppController:
                 num_rays=params.get("num_rays", 5),
                 min_offset=params.get("min_offset", -0.5), max_offset=params.get("max_offset", 0.5),
                 color=params.get("color", "yellow"), wavelength=params.get("wavelength", 550),
-                energy=params.get("energy", 1.0), current_n=params.get("current_n", 1.0), pool=self.pool
+                energy=params.get("energy", 1.0), current_n=params.get("current_n", 1.0), pool=self.pool,
+                ray_class=DispersiveRay
             )
         elif obj_type == "mesh":
             if params.get("scale_uniform", True):
@@ -425,7 +476,11 @@ class OpticsAppController:
             return
         obj_entry = self._find_object(obj_id)
         if obj_entry:
-            self._load_params_to_state(obj_entry)
+            self._loading_state = True  # Блокируем триггеры update
+            try:
+                self._load_params_to_state(obj_entry)
+            finally:
+                self._loading_state = False  # Снимаем блокировку
 
     def focus_on_selected_object(self, *args, **kwargs):
         """Перемещает фокус камеры на текущие координаты выбранного объекта."""
@@ -663,8 +718,7 @@ class OpticsAppController:
         # Применяем поворот и перенос на итоговую позицию
         if np.any(new_rotation != 0):
             instance.rotate(new_rotation)
-        if np.any(new_origin != 0):
-            instance.translate(new_origin)
+        instance.translate(new_origin)
 
         obj_entry["instance"] = instance
 
@@ -674,7 +728,7 @@ class OpticsAppController:
             if obj_entry["type"] in ["lens", "hyperbolic_lens"]:
                 self.plotter.add_mesh(
                     obj_entry["instance"].get_mesh(),
-                    color="magenta" if obj_entry["type"] == "hyperbolic_lens" else "cyan",
+                    color="cyan",
                     opacity=0.5,
                     smooth_shading=True,
                     name=obj_id
@@ -688,7 +742,7 @@ class OpticsAppController:
             elif obj_entry["type"] == "mesh":
                 self.plotter.add_mesh(
                     obj_entry["instance"].get_mesh(),
-                    color="blue",
+                    color="cyan",
                     opacity=0.6,
                     smooth_shading=True,
                     name=obj_id
@@ -696,8 +750,7 @@ class OpticsAppController:
             elif obj_entry["type"] in ["plane", "sphere_surf", "cylinder_surf"]:
                 self.plotter.add_mesh(
                     obj_entry["instance"].get_mesh(),
-                    color="lightblue" if obj_entry["type"] == "plane" else (
-                        "grey" if obj_entry["type"] == "sphere_surf" else "orange"),
+                    color="cyan",
                     opacity=0.5,
                     smooth_shading=True,
                     name=obj_id
@@ -710,6 +763,9 @@ class OpticsAppController:
         # Если изменился param_pos, сбрасываем соответствующий temp, чтобы избежать двойного учёта
         # Определяем, какой параметр изменился, через kwargs
         # В trame при изменении состояния передаётся имя в kwargs.get('key')
+        if getattr(self, '_loading_state', False):
+            return  # Если мы просто выбираем объект, ничего не делаем
+
         key = kwargs.get('key')
         if key and key.startswith('param_pos_'):
             axis = key[-1]
@@ -763,13 +819,9 @@ class OpticsAppController:
         self.state.temp_last_pos_z = self.state.param_pos_z
         self.state.temp_pos_delta_z = 0
 
-    def set_last_pos_x(self):
+    def set_last_pos(self):
         self.state.temp_last_pos_x = self.state.param_pos_x
-
-    def set_last_pos_y(self):
         self.state.temp_last_pos_y = self.state.param_pos_y
-
-    def set_last_pos_z(self):
         self.state.temp_last_pos_z = self.state.param_pos_z
 
     def select_object(self, obj_id):
@@ -867,7 +919,7 @@ with SinglePageLayout(server) as layout:
                     # --- Блок позиционирования ---
                     vuetify.VListSubheader("Позиция", class_="px-0")
                     # Ось X
-                    with vuetify.VRow(no_gutters=True, align="center"):
+                    with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
                             vuetify.VTextField(v_model="param_pos_x", label="X", type="number",
                                                dense=True, class_="mb-2")
@@ -876,9 +928,9 @@ with SinglePageLayout(server) as layout:
                                             dense=True, hide_details=True,
                                             thumb_label="always",
                                             mouseup="trigger('apply_x_delta')",
-                                            mousedown="trigger('set_last_pos_x')",)
+                                            mousedown="trigger('set_last_pos')",)
                     # Ось Y
-                    with vuetify.VRow(no_gutters=True, align="center"):
+                    with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
                             vuetify.VTextField(v_model="param_pos_y", label="Y", type="number",
                                                dense=True, class_="mb-2")
@@ -887,9 +939,9 @@ with SinglePageLayout(server) as layout:
                                             dense=True, hide_details=True,
                                             thumb_label="always",
                                             mouseup="trigger('apply_y_delta')",
-                                            mousedown="trigger('set_last_pos_y')",)
+                                            mousedown="trigger('set_last_pos')",)
                     # Ось Z
-                    with vuetify.VRow(no_gutters=True, align="center"):
+                    with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
                             vuetify.VTextField(v_model="param_pos_z", label="Z", type="number",
                                                dense=True, class_="mb-2")
@@ -898,12 +950,12 @@ with SinglePageLayout(server) as layout:
                                             dense=True, hide_details=True,
                                             thumb_label="always",
                                             mouseup="trigger('apply_z_delta')",
-                                            mousedown="trigger('set_last_pos_z')",)
+                                            mousedown="trigger('set_last_pos')",)
 
                     # --- Блок вращения ---
                     vuetify.VListSubheader("Поворот (град)", class_="px-0")
                     for axis in ["x", "y", "z"]:
-                        with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model=f"param_rot_{axis}", label=axis.upper(), type="number",
                                                    dense=True, class_="mb-2")
@@ -1174,10 +1226,10 @@ with SinglePageLayout(server) as layout:
 
                         for eff in effects:
                             k = eff["key"]
-                            vuetify.VCheckbox(v_model=f"param_{k}_enabled", label=eff["label"], dense=True,
+                            vuetify.VCheckbox(v_model=f"param_{k}_enabled", v_if=f"selected_object_type != None", label=eff["label"], dense=True,
                                               hide_details=True)
 
-                            with vuetify.VRow(v_if=f"param_{k}_enabled", no_gutters=True, align="center",
+                            with vuetify.VRow(v_if=f"param_{k}_enabled && selected_object_type != None", no_gutters=True, align="center",
                                               class_="pl-4 mb-2"):
                                 # Поле MIN
                                 with vuetify.VCol(cols=5, class_="pr-1"):
