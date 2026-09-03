@@ -18,7 +18,7 @@ from trame_pyvista.widgets import PyVistaRemoteLocalView
 
 from main import (
     RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode, MeshSurface, HyperbolicLens,
-    PlaneSurface, SphereSurface, CylinderSurface, DispersiveRay
+    PlaneSurface, SphereSurface, CylinderSurface, DispersiveRay, WhiteRay
 )
 
 # Режим отрисовки: "client" или "server"
@@ -148,7 +148,9 @@ class OpticsAppController:
             "wavelength": 550.0,
             "color": "yellow",
             "energy": 1.0,
-            "current_n": 1.0
+            "current_n": 1.0,
+            "ray_class": Ray,
+            "num_spectral_bands": 70
         })
 
         # 2. Главное зеркало (вогнутая сферическая поверхность справа)
@@ -347,7 +349,7 @@ class OpticsAppController:
                 min_offset=params.get("min_offset", -0.5), max_offset=params.get("max_offset", 0.5),
                 color=params.get("color", "yellow"), wavelength=params.get("wavelength", 550),
                 energy=params.get("energy", 1.0), current_n=params.get("current_n", 1.0), pool=self.pool,
-                ray_class=DispersiveRay
+                ray_class=params.get("ray_class", Ray), num_spectral_bands=params.get("num_spectral_bands", 7)
             )
         elif obj_type == "mesh":
             if params.get("scale_uniform", True):
