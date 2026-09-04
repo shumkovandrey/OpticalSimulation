@@ -1,6 +1,7 @@
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
 
+import io
 import json
 import asyncio
 import numpy as np
@@ -97,6 +98,13 @@ class OpticsAppController:
         self.state.param_plane_width = 2.0
         self.state.param_plane_height = 2.0
         self.state.param_cylinder_capping = False
+        self.state.param_ray_class = "Ray"  # Тип по умолчанию строкой для интерфейса
+        self.state.param_num_spectral_bands = 7
+        self.state.ray_classes_list = [
+            {"title": "Обычный луч (Ray)", "value": "Ray"},
+            {"title": "Дисперсионный луч (DispersiveRay)", "value": "DispersiveRay"},
+            {"title": "Белый свет (WhiteRay)", "value": "WhiteRay"},
+        ]
 
         # НАЧАЛО ИЗМЕНЕНИЙ: Инициализация спектральных параметров в состоянии
         for effect in ["reflection", "refraction", "absorption"]:
@@ -126,6 +134,9 @@ class OpticsAppController:
 
         self.plotter.add_mesh(pv.PolyData(), name="traced_rays_geometry")
 
+        self.ctrl.trigger("save_scene_to_file")(self.save_scene_to_file)
+        self.ctrl.trigger("load_scene_from_file")(self.load_scene_from_file)
+
         self.create_initial_objects()
         self.initializing = False
 
@@ -136,21 +147,140 @@ class OpticsAppController:
             for o in self.scene_objects
         ]
 
+    # ---------- Сохранение и загрузка сцены ----------
+    def save_scene_to_file(self, filename):
+        """Сохраняет параметры всех объектов сцены в JSON-файл в корне проекта."""
+        if not filename:
+            return
+
+        # Гарантируем расширение .json
+        if not filename.endswith(".json"):
+            filename += ".json"
+
+        # Формируем плоский словарь параметров для сохранения
+        serialized_data = []
+        for obj in self.scene_objects:
+            # Копируем параметры, чтобы не испортить текущие
+            save_params = obj["params"].copy()
+
+            # Преобразуем numpy-типы и специфичные объекты (например, Infinity) в JSON-совместимые
+            for key, val in save_params.items():
+                if isinstance(val, tuple):
+                    save_params[key] = list(val)
+                elif isinstance(val, type):  # Для ray_class (например, WhiteRay)
+                    save_params[key] = val.__name__
+                elif isinstance(val, (list, tuple)) and len(val) == 2:  # Для оптических диапазонов
+                    # Заменяем np.inf на строковое представление для JSON
+                    save_params[key] = [
+                        "Infinity" if v == np.inf or (isinstance(v, float) and np.isinf(v)) else v
+                        for v in val
+                    ]
+
+            serialized_data.append({
+                "name": obj["name"],
+                "type": obj["type"],
+                "params": save_params
+            })
+
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(serialized_data, f, ensure_ascii=False, indent=4)
+            print(f"Сцена успешно сохранена в файл: {filename}")
+        except Exception as e:
+            print(f"Ошибка при сохранении сцены: {e}")
+
+    def load_scene_from_file(self, filename):
+        """Загружает сцену из JSON-файла, полностью очищая текущую сцену."""
+        if not filename:
+            return
+
+        if not filename.endswith(".json"):
+            filename += ".json"
+
+        import os
+        if not os.path.exists(filename):
+            print(f"Файл {filename} не найден.")
+            return
+
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                loaded_data = json.load(f)
+        except Exception as e:
+            print(f"Ошибка чтения файла сцены: {e}")
+            return
+
+        # 1. Полностью очищаем текущую сцену
+        # Удаляем всех акторов из PyVista плоттера
+        for obj in self.scene_objects:
+            self.plotter.remove_actor(obj["id"])
+        self.scene_objects.clear()
+        self.object_counter = 0
+        self.state.selected_object_id = None
+        self.state.selected_object_type = None
+
+        # Отключаем триггеры обновления на время массовой загрузки
+        self._loading_state = True
+        self.initializing = True
+
+        try:
+            # 2. Восстанавливаем объекты из файла
+            for obj_data in loaded_data:
+                params = obj_data["params"]
+
+                # Приводим массивы обратно к кортежам, где это необходимо
+                if "origin" in params: params["origin"] = tuple(params["origin"])
+                if "rotation" in params: params["rotation"] = tuple(params["rotation"])
+
+                # Восстанавливаем классы лучей
+                if "ray_class" in params:
+                    if params["ray_class"] == "WhiteRay":
+                        params["ray_class"] = WhiteRay
+                    else:
+                        params["ray_class"] = Ray
+
+                # Восстанавливаем оптические диапазоны (строку "Infinity" преобразуем обратно в np.inf)
+                for effect in ["reflection", "refraction", "absorption"]:
+                    range_key = f"{effect}_range"
+                    if range_key in params and params[range_key] is not None:
+                        r_min = params[range_key][0]
+                        r_max = params[range_key][1]
+                        if r_max == "Infinity":
+                            r_max = np.inf
+                        params[range_key] = (r_min, r_max)
+
+                # Создаем объект на сцене
+                self.add_object(obj_data["type"], obj_data["name"], params)
+
+        except Exception as e:
+            print(f"Ошибка при разборе данных сцены: {e}")
+        finally:
+            self._loading_state = False
+            self.initializing = False
+
+        # Синхронизируем интерфейс
+        self._update_objects_list_state()
+        if self.scene_objects:
+            first_id = self.scene_objects[0]["id"]
+            self.state.selected_object_id = first_id
+            self.on_object_selected(first_id)
+
+        self.update_scene()
+
     # ---------- Создание объектов ----------
     def create_initial_objects(self):
         # 1. Входящий пучок света (параллельные лучи слева направо)
         self.add_object("emitter", "Входящий свет", {
             "origin": (-10.0, 0.0, 0.0),
             "rotation": (0.0, 0.0, 0.0),
-            "num_rays": 30,
+            "num_rays": 1,
             "min_offset": -1.2,
             "max_offset": 1.2,
             "wavelength": 550.0,
             "color": "yellow",
             "energy": 1.0,
             "current_n": 1.0,
-            "ray_class": Ray,
-            "num_spectral_bands": 70
+            "ray_class": WhiteRay,
+            "num_spectral_bands": 7
         })
 
         # 2. Главное зеркало (вогнутая сферическая поверхность справа)
@@ -544,7 +674,16 @@ class OpticsAppController:
             self.state.param_min_offset = float(p.get("min_offset", -0.5))
             self.state.param_max_offset = float(p.get("max_offset", 0.5))
             self.state.param_wavelength = float(p.get("wavelength", 550.0))
-            self.state.param_current_n = float(p.get("current_n", 550.0))
+            self.state.param_current_n = float(p.get("current_n", 1.0))
+
+            # Восстанавливаем строковое имя класса луча для UI
+            rc = p.get("ray_class", Ray)
+            if rc.__name__ in ["Ray", "DispersiveRay", "WhiteRay"]:
+                self.state.param_ray_class = rc.__name__
+            else:
+                self.state.param_ray_class = "Ray"
+
+            self.state.param_num_spectral_bands = int(p.get("num_spectral_bands", 7))
         elif obj_entry["type"] == "mesh":
             self.state.param_n = float(p.get("n", 1.5))
             self.state.param_mesh_path = str(p.get("mesh_path", ""))
@@ -616,11 +755,15 @@ class OpticsAppController:
                 p["edge_radius"] != float(self.state.param_edge_radius)):
                 shape_changed = True
         elif obj_entry["type"] == "emitter":
+            # Проверяем, изменился ли класс или количество спектральных полос
+            current_rc_name = p.get("ray_class").__name__ if p.get("ray_class") else "Ray"
             if (p["num_rays"] != int(self.state.param_num_rays) or
                 p["min_offset"] != float(self.state.param_min_offset) or
                 p["max_offset"] != float(self.state.param_max_offset) or
                 p["wavelength"] != float(self.state.param_wavelength) or
-                p["current_n"] != float(self.state.param_current_n)):
+                p["current_n"] != float(self.state.param_current_n) or
+                current_rc_name != str(self.state.param_ray_class) or
+                p.get("num_spectral_bands", 7) != int(self.state.param_num_spectral_bands)):
                 shape_changed = True
         elif obj_entry["type"] == "mesh":
             if (p["n"] != float(self.state.param_n) or
@@ -686,6 +829,10 @@ class OpticsAppController:
             p["max_offset"] = float(self.state.param_max_offset)
             p["wavelength"] = float(self.state.param_wavelength)
             p["current_n"] = float(self.state.param_current_n)
+            p["num_spectral_bands"] = int(self.state.param_num_spectral_bands)
+            # Маппинг строки из UI в реальный класс
+            mapping = {"Ray": Ray, "DispersiveRay": DispersiveRay, "WhiteRay": WhiteRay}
+            p["ray_class"] = mapping.get(self.state.param_ray_class, Ray)
         elif obj_entry["type"] == "mesh":
             p["n"] = float(self.state.param_n)
             p["mesh_path"] = str(self.state.param_mesh_path)
@@ -838,7 +985,7 @@ app = OpticsAppController(server)
 
 # Подписка на изменения параметров (кроме temp)
 for param in ["param_n", "param_radius", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
-              "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_current_n", "param_mesh_path",
+              "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_current_n", "param_ray_class", "param_num_spectral_bands", "param_mesh_path",
               "param_plane_shape", "param_plane_width", "param_plane_height", "param_cylinder_capping"]:
     server.state.change(param)(app.on_param_change)
 
@@ -870,6 +1017,50 @@ with SinglePageLayout(server) as layout:
                 # Левая колонка управления
                 with vuetify.VCol(cols=3, classes="pa-4 bg-grey-darken-4",
                                   style="height: 100%; overflow-y: auto; border-right: 1px solid #444; color: white;"):
+
+                    server.state.setdefault("save_dialog_visible", False)
+                    server.state.setdefault("load_dialog_visible", False)
+                    server.state.setdefault("file_to_save", "scene_1")
+                    server.state.setdefault("file_to_load", "scene_1")
+
+                    with vuetify.VRow(class_="mb-2", no_gutters=True):
+                        with vuetify.VCol(cols=6, class_="pr-1"):
+                            with vuetify.VBtn(color="success", block=True, size="small",
+                                              click="save_dialog_visible = true"):
+                                vuetify.VIcon("mdi-content-save", class_="mr-1")
+                                "Сохранить"
+                        with vuetify.VCol(cols=6, class_="pl-1"):
+                            with vuetify.VBtn(color="warning", block=True, size="small",
+                                              click="load_dialog_visible = true"):
+                                vuetify.VIcon("mdi-folder-open", class_="mr-1")
+                                "Загрузить"
+
+                    # Диалоговое окно сохранения файла
+                    with vuetify.VDialog(v_model="save_dialog_visible", max_width="400px"):
+                        with vuetify.VCard(class_="bg-grey-darken-3 text-white pa-4"):
+                            vuetify.VCardTitle("Сохранить сцену", class_="px-0")
+                            vuetify.VTextField(v_model="file_to_save", label="Имя файла (без расширения)",
+                                               class_="my-3", dense=True)
+                            with vuetify.VCardActions(class_="px-0"):
+                                vuetify.VSpacer()
+                                vuetify.VBtn("Отмена", color="grey", click="save_dialog_visible = false")
+                                vuetify.VBtn("ОК", color="success",
+                                             click="trigger('save_scene_to_file', [file_to_save]); save_dialog_visible = false")
+
+                    # Диалоговое окно загрузки файла
+                    with vuetify.VDialog(v_model="load_dialog_visible", max_width="400px"):
+                        with vuetify.VCard(class_="bg-grey-darken-3 text-white pa-4"):
+                            vuetify.VCardTitle("Загрузить сцену", class_="px-0")
+                            vuetify.VTextField(v_model="file_to_load", label="Имя файла (.json)", class_="my-3",
+                                               dense=True)
+                            with vuetify.VCardActions(class_="px-0"):
+                                vuetify.VSpacer()
+                                vuetify.VBtn("Отмена", color="grey", click="load_dialog_visible = false")
+                                vuetify.VBtn("ОК", color="warning",
+                                             click="trigger('load_scene_from_file', [file_to_load]); load_dialog_visible = false")
+
+                    vuetify.VDivider(class_="my-2")
+
                     vuetify.VCardTitle("Объекты сцены", classes="text-h6 px-0")
 
                     # Единая кнопка с выпадающим меню
@@ -1140,41 +1331,68 @@ with SinglePageLayout(server) as layout:
                     # --- Параметры источника ---
                     with vuetify.VContainer(v_if="selected_object_type == 'emitter'", class_="pa-0"):
                         vuetify.VListSubheader("Параметры источника", class_="px-0")
+
+                        # Выбор типа луча
+                        vuetify.VSelect(label="Тип луча", v_model="param_ray_class",
+                                        items=("ray_classes_list",),
+                                        item_title="title", item_value="value",
+                                        dense=True, class_="mb-2")
+
+                        # Количество спектральных полос (показывается только для WhiteRay)
+                        with vuetify.VContainer(v_if="param_ray_class == 'WhiteRay'", class_="pa-0 mb-2"):
+                            with vuetify.VRow(no_gutters=True, align="center"):
+                                with vuetify.VCol(cols=4):
+                                    vuetify.VTextField(v_model="param_num_spectral_bands",
+                                                       label="Спектр (кол-во)", type="number", dense=True,
+                                                       step=1)
+                                with vuetify.VCol(cols=8):
+                                    vuetify.VSlider(v_model="param_num_spectral_bands", min=2, max=30,
+                                                    step=1,
+                                                    dense=True, hide_details=True)
+
                         # Количество лучей
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_num_rays", label="Кол-во", type="number", dense=True, step=1)
+                                vuetify.VTextField(v_model="param_num_rays", label="Кол-во лучей",
+                                                   type="number", dense=True, step=1)
                             with vuetify.VCol(cols=8):
                                 vuetify.VSlider(v_model="param_num_rays", min=1, max=20, step=1,
                                                 dense=True, hide_details=True)
+
+                        # Длина волны (скрываем для Белого Света, так как он сам генерирует спектр)
+                        with vuetify.VRow(v_if="param_ray_class != 'WhiteRay'", no_gutters=True,
+                                          align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(v_model="param_wavelength", label="λ (нм)",
+                                                   type="number", dense=True, step=10)
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(v_model="param_wavelength", min=380, max=780, step=10,
+                                                dense=True, hide_details=True)
+
                         # Мин. смещение
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_min_offset", label="Мин. смещ.", type="number", dense=True, step=0.1)
+                                vuetify.VTextField(v_model="param_min_offset", label="Мин. смещ.",
+                                                   type="number", dense=True, step=0.1)
                             with vuetify.VCol(cols=8):
                                 vuetify.VSlider(v_model="param_min_offset", min=-3.0, max=0.0, step=0.1,
                                                 dense=True, hide_details=True)
                         # Макс. смещение
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_max_offset", label="Макс. смещ.", type="number", dense=True, step=0.1)
+                                vuetify.VTextField(v_model="param_max_offset", label="Макс. смещ.",
+                                                   type="number", dense=True, step=0.1)
                             with vuetify.VCol(cols=8):
                                 vuetify.VSlider(v_model="param_max_offset", min=0.0, max=3.0, step=0.1,
-                                                dense=True, hide_details=True)
-                        # Длина волны
-                        with vuetify.VRow(no_gutters=True, align="center"):
-                            with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_wavelength", label="λ (нм)", type="number", dense=True, step=10)
-                            with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_wavelength", min=380, max=780, step=10,
                                                 dense=True, hide_details=True)
 
                         # n среды
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_current_n", label="n среды", type="number", dense=True, step=10)
+                                vuetify.VTextField(v_model="param_current_n", label="n среды",
+                                                   type="number", dense=True, step=0.1)
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_current_n", min=0, max=3, step=0.01,
+                                vuetify.VSlider(v_model="param_current_n", min=1.0, max=3.0, step=0.01,
                                                 dense=True, hide_details=True)
 
                     # --- Параметры 3D-меша ---
