@@ -1,0 +1,148 @@
+[
+    {
+        "name": "Входящий свет",
+        "type": "emitter",
+        "params": {
+            "origin": [
+                -10.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "num_rays": 14,
+            "min_offset": -0.9,
+            "max_offset": 0.9,
+            "wavelength": 550.0,
+            "color": "yellow",
+            "energy": 1.0,
+            "current_n": 1.0,
+            "ray_class": "WhiteRay",
+            "num_spectral_bands": 35,
+            "reflection_range": null,
+            "refraction_range": null,
+            "absorption_range": null
+        }
+    },
+    {
+        "name": "Линза 2",
+        "type": "lens",
+        "params": {
+            "origin": [
+                -4.97,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "R1": 5.0,
+            "R2": 5.0,
+            "thickness": 0.2,
+            "edge_radius": 1.0,
+            "n": 1.52,
+            "reflection_range": [
+                0.0,
+                Infinity
+            ],
+            "refraction_range": [
+                0.0,
+                Infinity
+            ],
+            "absorption_range": null
+        }
+    },
+    {
+        "name": "Линза 3",
+        "type": "lens",
+        "params": {
+            "origin": [
+                -4.818,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "R1": -5.0,
+            "R2": -2.0,
+            "thickness": 0.1,
+            "edge_radius": 1.0,
+            "n": 1.62,
+            "reflection_range": [
+                0.0,
+                Infinity
+            ],
+            "refraction_range": [
+                0.0,
+                Infinity
+            ],
+            "absorption_range": null
+        }
+    },
+    {
+        "name": "Источник 4",
+        "type": "emitter",
+        "params": {
+            "origin": [
+                -10.0,
+                5.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "num_rays": 11,
+            "min_offset": -0.9,
+            "max_offset": 0.9,
+            "wavelength": 550.0,
+            "color": "yellow",
+            "energy": 1.0,
+            "current_n": 1.0,
+            "reflection_range": null,
+            "refraction_range": null,
+            "absorption_range": null,
+            "num_spectral_bands": 35,
+            "ray_class": "WhiteRay"
+        }
+    },
+    {
+        "name": "Линза 5",
+        "type": "lens",
+        "params": {
+            "origin": [
+                -4.97,
+                5.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "R1": 4.0,
+            "R2": 4.0,
+            "thickness": 0.3,
+            "edge_radius": 1.0,
+            "n": 1.52,
+            "reflection_range": [
+                0.0,
+                Infinity
+            ],
+            "refraction_range": [
+                0.0,
+                Infinity
+            ],
+            "absorption_range": null
+        }
+    }
+]

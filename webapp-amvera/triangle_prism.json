@@ -1,0 +1,59 @@
+[
+    {
+        "name": "Входящий свет",
+        "type": "emitter",
+        "params": {
+            "origin": [
+                -10.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "num_rays": 1,
+            "min_offset": -1.2,
+            "max_offset": 1.2,
+            "wavelength": 780.0,
+            "color": "yellow",
+            "energy": 1.0,
+            "current_n": 1.0,
+            "ray_class": "WhiteRay",
+            "num_spectral_bands": 30,
+            "reflection_range": null,
+            "refraction_range": null,
+            "absorption_range": null
+        }
+    },
+    {
+        "name": "Меш 2",
+        "type": "mesh",
+        "params": {
+            "origin": [
+                0.0,
+                -1.26,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "mesh_path": "Models/Prism.stl",
+            "n": 1.5,
+            "reflection_range": null,
+            "refraction_range": [
+                0.0,
+                Infinity
+            ],
+            "absorption_range": null,
+            "scale_uniform": true,
+            "scale_all": 1.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "scale_z": 1.0
+        }
+    }
+]

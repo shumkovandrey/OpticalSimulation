@@ -1,0 +1,109 @@
+[
+    {
+        "name": "Входящий свет",
+        "type": "emitter",
+        "params": {
+            "origin": [
+                -10.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "num_rays": 6,
+            "min_offset": -1.2,
+            "max_offset": 1.2,
+            "wavelength": 550.0,
+            "color": "yellow",
+            "energy": 1.0,
+            "current_n": 1.0,
+            "ray_class": "Ray",
+            "num_spectral_bands": 7,
+            "reflection_range": null,
+            "refraction_range": null,
+            "absorption_range": null
+        }
+    },
+    {
+        "name": "Главное зеркало (Primary)",
+        "type": "sphere_surf",
+        "params": {
+            "origin": [
+                5.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "radius": 15.0,
+            "edge_radius": 1.5,
+            "n": 1.0,
+            "reflection_range": [
+                0.0,
+                Infinity
+            ],
+            "refraction_range": null,
+            "absorption_range": null
+        }
+    },
+    {
+        "name": "Вторичное зеркало (Secondary)",
+        "type": "plane",
+        "params": {
+            "origin": [
+                -2.5,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                45.0
+            ],
+            "edge_radius": 0.05,
+            "shape_type": "circle",
+            "width": 1.0,
+            "height": 1.0,
+            "n": 1.0,
+            "reflection_range": [
+                0.0,
+                Infinity
+            ],
+            "refraction_range": null,
+            "absorption_range": null
+        }
+    },
+    {
+        "name": "Окуляр (Eyepiece)",
+        "type": "lens",
+        "params": {
+            "origin": [
+                -2.5,
+                3.17,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                90.0
+            ],
+            "R1": 4.0,
+            "R2": 2.75,
+            "thickness": 0.2,
+            "edge_radius": 0.6,
+            "n": 1.5,
+            "reflection_range": null,
+            "refraction_range": [
+                0.0,
+                Infinity
+            ],
+            "absorption_range": null
+        }
+    }
+]

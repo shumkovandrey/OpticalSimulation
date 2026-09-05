@@ -1,3 +1,4 @@
+import os
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
 
@@ -194,8 +195,7 @@ class OpticsAppController:
         if not filename:
             return
 
-        if not filename.endswith(".json"):
-            filename += ".json"
+        filename = "scenes/" + filename + ".json"
 
         import os
         if not os.path.exists(filename):
@@ -1110,7 +1110,7 @@ with SinglePageLayout(server) as layout:
                                          title="Сфокусировать камеру на объекте")
 
                     # --- Блок позиционирования ---
-                    vuetify.VListSubheader("Позиция", class_="px-0")
+                    vuetify.VCardTitle("Позиция", class_="px-0", style="text-color: white")
                     # Ось X
                     with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
@@ -1146,7 +1146,7 @@ with SinglePageLayout(server) as layout:
                                             mousedown="trigger('set_last_pos')",)
 
                     # --- Блок вращения ---
-                    vuetify.VListSubheader("Поворот (град)", class_="px-0")
+                    vuetify.VCardTitle("Поворот", class_="px-0", style="text-color: white")
                     for axis in ["x", "y", "z"]:
                         with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
@@ -1159,7 +1159,7 @@ with SinglePageLayout(server) as layout:
                     vuetify.VDivider(class_="my-4")
 
                     with vuetify.VContainer(v_if="selected_object_type == 'plane'", class_="pa-0"):
-                        vuetify.VListSubheader("Параметры плоскости", class_="px-0")
+                        vuetify.VCardTitle("Плоскость", class_="px-0", style="text-color: white")
 
                         # ИСПРАВЛЕНИЕ: v_model перенесен строго на группу, убраны пустые блоки pass
                         with vuetify.VRadioGroup(v_model="param_plane_shape", inline=True, class_="mb-2",
@@ -1204,7 +1204,7 @@ with SinglePageLayout(server) as layout:
 
                     # Параметры SphereSurface
                     with vuetify.VContainer(v_if="selected_object_type == 'sphere_surf'", class_="pa-0"):
-                        vuetify.VListSubheader("Параметры сферической поверхности", class_="px-0")
+                        vuetify.VCardTitle("Сферическая поверхность", class_="px-0", style="text-color: white")
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_radius", label="Радиус кривизны", type="number",
@@ -1229,7 +1229,7 @@ with SinglePageLayout(server) as layout:
 
                     # Параметры CylinderSurface
                     with vuetify.VContainer(v_if="selected_object_type == 'cylinder_surf'", class_="pa-0"):
-                        vuetify.VListSubheader("Параметры цилиндрической поверхности", class_="px-0")
+                        vuetify.VCardTitle("Цилиндрическая поверхность", class_="px-0", style="text-color: white")
 
                         # Тумблер включения/выключения оснований
                         vuetify.VSwitch(v_model="param_cylinder_capping", label="Включить основания (крышки)",
@@ -1259,7 +1259,7 @@ with SinglePageLayout(server) as layout:
 
                     # --- Параметры сферической линзы ---
                     with vuetify.VContainer(v_if="selected_object_type == 'lens'", class_="pa-0"):
-                        vuetify.VListSubheader("Параметры сферич. линзы", class_="px-0")
+                        vuetify.VCardTitle("Сферическая линза", class_="px-0", style="text-color: white")
                         # n
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
@@ -1298,7 +1298,7 @@ with SinglePageLayout(server) as layout:
 
                     # --- Параметры гиперболической линзы ---
                     with vuetify.VContainer(v_if="selected_object_type == 'hyperbolic_lens'", class_="pa-0"):
-                        vuetify.VListSubheader("Параметры гиперболической линзы", class_="px-0")
+                        vuetify.VCardTitle("Гиперболическая линза", class_="px-0", style="text-color: white")
                         # Толщина
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
@@ -1330,7 +1330,7 @@ with SinglePageLayout(server) as layout:
 
                     # --- Параметры источника ---
                     with vuetify.VContainer(v_if="selected_object_type == 'emitter'", class_="pa-0"):
-                        vuetify.VListSubheader("Параметры источника", class_="px-0")
+                        vuetify.VCardTitle("Источник", class_="px-0", style="text-color: white")
 
                         # Выбор типа луча
                         vuetify.VSelect(label="Тип луча", v_model="param_ray_class",
@@ -1397,7 +1397,7 @@ with SinglePageLayout(server) as layout:
 
                     # --- Параметры 3D-меша ---
                     with vuetify.VContainer(v_if="selected_object_type == 'mesh'", class_="pa-0"):
-                        vuetify.VListSubheader("Параметры 3D-модели", class_="px-0")
+                        vuetify.VCardTitle("3D-модель", class_="px-0", style="text-color: white")
                         vuetify.VTextField(v_model="param_mesh_path", label="Путь к файлу (.obj/.stl)", dense=True,
                                            class_="mb-2")
                         with vuetify.VRow(no_gutters=True, align="center", class_="mb-2"):
@@ -1434,7 +1434,7 @@ with SinglePageLayout(server) as layout:
                                                         dense=True, hide_details=True)
 
                     with vuetify.VContainer(v_if="selected_object_type != 'emitter'", class_="pa-0"):
-                        vuetify.VListSubheader("Оптические свойства (λ, нм)", class_="px-0 text-cyan-lighten-2")
+                        vuetify.VCardTitle("Оптические свойства (λ, нм)", class_="px-0", style="text-color: white")
 
                         # Шаблон для генерации трех типов взаимодействия
                         effects = [
@@ -1469,7 +1469,7 @@ with SinglePageLayout(server) as layout:
                     vuetify.VSelect(label="Режим трассировки", v_model="trace_mode", items=("trace_modes",),
                                     item_title="title", item_value="value", dense=True, class_="mt-2")
 
-                    vuetify.VListSubheader("Рендеринг 3D-сцены", class_="px-0 text-cyan-lighten-2")
+                    vuetify.VCardTitle("Режим рендеринга", class_="px-0", style="text-color: white")
                     with vuetify.VBtnToggle(v_model="render_mode", mandatory=True, block=True, class_="mb-2",
                                             color="cyan-darken-3"):
                         with vuetify.VBtn(value="remote", style="width: 50%"):
@@ -1499,5 +1499,20 @@ with SinglePageLayout(server) as layout:
 
 app.update_scene()
 
+# amvera
 if __name__ == "__main__":
-    server.start(host="127.0.0.1", port=8085)
+    # 1. Автоматически считываем порт, который Amvera выделяет внутри контейнера.
+    # Если запускаем локально на ПК — сработает ваш порт по умолчанию 8085.
+    port_env = int(os.environ.get("PORT", 8085))
+
+    # 2. Безопасно переопределяем встроенные параметры Trame без конфликтов argparse
+    server.cli.set_defaults(
+        host="0.0.0.0",     # Открываем сокет наружу, чтобы Amvera могла проксировать трафик
+        port=port_env,      # Привязываем порт к переменной окружения хостинга
+        timeout=0,          # Отключаем автовыключение сервера при отсутствии активности
+        open_browser=False  # Запрещаем открывать десктопный браузер внутри Linux-контейнера
+    )
+
+    # 3. Запускаем сервер
+    print(f"--> Запуск оптического симулятора на порту {port_env}...", flush=True)
+    server.start()

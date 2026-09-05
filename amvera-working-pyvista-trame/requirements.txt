@@ -1,4 +1,0 @@
-numpy
-pyvista
-trame
-trame_pyvista

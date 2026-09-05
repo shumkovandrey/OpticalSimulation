@@ -1,0 +1,118 @@
+[
+    {
+        "name": "Источник 3",
+        "type": "emitter",
+        "params": {
+            "origin": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "num_rays": 5,
+            "min_offset": -1.0,
+            "max_offset": 1.0,
+            "wavelength": 550.0,
+            "color": "yellow",
+            "energy": 1.0,
+            "current_n": 1.0,
+            "reflection_range": null,
+            "refraction_range": null,
+            "absorption_range": null,
+            "num_spectral_bands": 7,
+            "ray_class": "Ray"
+        }
+    },
+    {
+        "name": "Линза 2",
+        "type": "lens",
+        "params": {
+            "origin": [
+                2.37,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "R1": 3.0,
+            "R2": 3.0,
+            "thickness": 0.37,
+            "edge_radius": 1.0,
+            "n": 1.5,
+            "reflection_range": [
+                0.0,
+                Infinity
+            ],
+            "refraction_range": [
+                0.0,
+                Infinity
+            ],
+            "absorption_range": null
+        }
+    },
+    {
+        "name": "Источник 3",
+        "type": "emitter",
+        "params": {
+            "origin": [
+                0.0,
+                -5.57,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "num_rays": 5,
+            "min_offset": -1.0,
+            "max_offset": 1.0,
+            "wavelength": 550.0,
+            "color": "yellow",
+            "energy": 1.0,
+            "current_n": 1.0,
+            "reflection_range": null,
+            "refraction_range": null,
+            "absorption_range": null,
+            "num_spectral_bands": 7,
+            "ray_class": "DispersiveRay"
+        }
+    },
+    {
+        "name": "Гиперб. линза 4",
+        "type": "hyperbolic_lens",
+        "params": {
+            "origin": [
+                2.37,
+                -5.57,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                180.0
+            ],
+            "radius_of_curvature": 5.0,
+            "thickness": 0.4,
+            "edge_radius": 1.0,
+            "n": 1.5,
+            "f_target": 2.3,
+            "reflection_range": [
+                0.0,
+                Infinity
+            ],
+            "refraction_range": [
+                0.0,
+                Infinity
+            ],
+            "absorption_range": null
+        }
+    }
+]
