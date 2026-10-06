@@ -25,29 +25,6 @@ RAY_INFINITY_DISTANCE = 100
 # Утилиты для оптических расчётов
 # -------------------------------
 
-# def refract(ray_dir: np.ndarray, normal: np.ndarray, n1: float, n2: float) -> Optional[np.ndarray]:
-#     """
-#     Закон Снеллиуса с автоматической коррекцией нормали.
-#     Возвращает новый вектор направления или None, если луч поглощён.
-#     """
-#     eta = n1 / n2
-#     cos_i = np.dot(normal, ray_dir)
-#
-#     # Убеждаемся, что нормаль направлена навстречу лучу
-#     actual_normal = normal
-#     if cos_i > 0:
-#         actual_normal = -normal
-#         cos_i = np.dot(actual_normal, ray_dir)
-#
-#     cos_i = -cos_i  # теперь cos_i >= 0
-#     sin2_t = eta ** 2 * (1.0 - cos_i ** 2)
-#
-#     if sin2_t > 1.0:  # Полное внутреннее отражение
-#         return ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
-#
-#     cos_t = np.sqrt(max(0.0, 1.0 - sin2_t))
-#     return eta * ray_dir + (eta * cos_i - cos_t) * actual_normal
-
 
 def calculate_rotation_matrix(v_to):
     """

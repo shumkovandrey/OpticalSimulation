@@ -58,7 +58,7 @@ class OpticsAppController:
         self.ray_tracer.mode.energy_color_type = 0
         self.ray_tracer.mode.max_bounces = 100
 
-        self._debounce_delay = 0.01
+        self._debounce_delay = 0.033
         self._debounce_timer = None
 
         self.state.selected_object_id = None
@@ -340,6 +340,8 @@ class OpticsAppController:
     def add_object(self, obj_type, name, params):
         self.object_counter += 1
         obj_id = f"obj_{self.object_counter}"
+
+        # Создаем инстанс сразу в честных мировых координатах
         instance = self._create_instance(obj_type, params)
 
         obj_entry = {
@@ -347,36 +349,14 @@ class OpticsAppController:
         }
         self.scene_objects.append(obj_entry)
 
-        if isinstance(instance, (UniversalLens, HyperbolicLens)):
-            self.plotter.add_mesh(
-                instance.get_mesh(),
-                color="cyan",
-                opacity=0.5,
-                smooth_shading=True,
-                name=obj_id
-            )
-        elif isinstance(instance, BeamEmitter):
-            self.plotter.add_mesh(
-                instance.get_mesh(),
-                color="green",
-                name=obj_id
-            )
-        elif isinstance(instance, MeshSurface):
-            self.plotter.add_mesh(
-                instance.get_mesh(),
-                color="cyan",
-                opacity=0.6,
-                smooth_shading=True,
-                name=obj_id
-            )
-        elif obj_type in ["plane", "sphere_surf", "cylinder_surf"]:
-            self.plotter.add_mesh(
-                instance.get_mesh(),
-                color="cyan",
-                opacity=1,
-                smooth_shading=True,
-                name=obj_id
-            )
+        # Выводим честный мировой меш на сцену. Актор в нуле.
+        self.plotter.add_mesh(
+            instance.get_mesh(),
+            color="green" if obj_type == "emitter" else "cyan",
+            opacity=0.5,
+            smooth_shading=True,
+            name=obj_id
+        )
 
         if not self.initializing:
             self._update_objects_list_state()
@@ -577,34 +557,57 @@ class OpticsAppController:
                         self.ray_tracer.add_elements(surf)
                 elif isinstance(instance, MeshSurface):
                     self.ray_tracer.add_elements(instance)
-                elif isinstance(instance, (PlaneSurface, SphereSurface, CylinderSurface, MeshSurface)):
+                elif isinstance(instance, (PlaneSurface, SphereSurface, CylinderSurface)):
                     self.ray_tracer.add_elements(instance)
                 elif isinstance(instance, BeamEmitter):
                     self.ray_tracer.add_emitter(instance)
 
-
+            # Трассировка
             segments = self.ray_tracer.trace_all()
             energy_type = self.ray_tracer.mode.energy_color_type
+
             self.ray_tracer.cloud.update(segments, energy_color_type=energy_type)
             calculated_ray_mesh = self.ray_tracer.cloud.actor.mapper.dataset
 
             if "traced_rays_geometry" in self.plotter.actors:
-                self.plotter.remove_actor("traced_rays_geometry")
+                actor = self.plotter.actors["traced_rays_geometry"]
+                if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
+                    # Копируем структуру полиданных
+                    actor.mapper.dataset.copy_from(calculated_ray_mesh)
 
-            if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
-                calculated_ray_mesh.active_scalars_name = "colors"
-                self.plotter.add_mesh(
-                    calculated_ray_mesh,
-                    scalars="colors",
-                    rgba=True,
-                    opacity="linear",
-                    line_width=4,
-                    render_lines_as_tubes=False,
-                    name="traced_rays_geometry"
-                )
-            self.plotter.render()
+                    # ВОЗВРАЩАЕМ ЦВЕТА: Жестко прописываем скалярные массивы цветов в VTK
+                    actor.mapper.dataset.point_data["colors"] = calculated_ray_mesh.point_data["colors"]
+                    actor.mapper.dataset.active_scalars_name = "colors"
+
+                    # Настройки маппера для корректного подхвата RGBA массивов клиентом
+                    actor.mapper.SetColorModeToDirectScalars()
+                    actor.mapper.SetScalarModeToUsePointData()
+                    actor.mapper.ScalarVisibilityOn()
+
+                    # Обновляем внутренний кэш маппера
+                    actor.mapper.dataset.Modified()
+                    actor.mapper.Modified()
+                else:
+                    actor.mapper.dataset.copy_from(pv.PolyData())
+                    actor.mapper.dataset.Modified()
+                    actor.mapper.Modified()
+            else:
+                if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
+                    calculated_ray_mesh.active_scalars_name = "colors"
+                    self.plotter.add_mesh(
+                        calculated_ray_mesh,
+                        scalars="colors",
+                        rgba=True,
+                        opacity="linear",
+                        line_width=4,
+                        render_lines_as_tubes=False,
+                        name="traced_rays_geometry"
+                    )
+
+            # Оповещаем Trame о необходимости перерисовать WebGL контекст в браузере
             if hasattr(self.ctrl, 'view_update'):
                 self.ctrl.view_update()
+
         finally:
             self._updating = False
 
@@ -731,94 +734,23 @@ class OpticsAppController:
                 self.state[f"param_{effect}_min"] = float(r_range[0]) if r_range[0] is not None else 0.0
                 self.state[f"param_{effect}_max"] = float(r_range[1]) if r_range[1] is not None else np.inf
 
-    # ---------- Обновление выбранного объекта ----------
     def update_selected_object(self, *args, **kwargs):
         obj_id = self.state.selected_object_id
         obj_entry = self._find_object(obj_id)
         if not obj_entry: return
 
         p = obj_entry["params"]
-        # Базовые координаты из параметров
-        base_origin = np.array([float(self.state.param_pos_x),
-                                float(self.state.param_pos_y),
-                                float(self.state.param_pos_z)])
-        # Временное смещение от слайдера
-        # temp_shift = np.array([float(self.state.temp_pos_delta_x),
-        #                        float(self.state.temp_pos_delta_y),
-        #                        float(self.state.temp_pos_delta_z)])
-        # Итоговая позиция = базовая + временное смещение
-        new_origin = base_origin# + temp_shift
 
-        new_rotation = np.array([float(self.state.param_rot_x),
-                                 float(self.state.param_rot_y),
-                                 float(self.state.param_rot_z)])
+        # Считываем абсолютные значения из интерфейса Trame
+        new_origin = [float(self.state.param_pos_x),
+                      float(self.state.param_pos_y),
+                      float(self.state.param_pos_z)]
 
-        shape_changed = False
-        if obj_entry["type"] == "lens":
-            if (p["n"] != float(self.state.param_n) or
-                p["R1"] != float(self.state.param_R1) or
-                p["R2"] != float(self.state.param_R2) or
-                p["thickness"] != float(self.state.param_thickness) or
-                p["edge_radius"] != float(self.state.param_edge_radius)):
-                shape_changed = True
-        elif obj_entry["type"] == "emitter":
-            # Проверяем, изменился ли класс или количество спектральных полос
-            current_rc_name = p.get("ray_class").__name__ if p.get("ray_class") else "Ray"
-            if (p["num_rays"] != int(self.state.param_num_rays) or
-                p["min_offset"] != float(self.state.param_min_offset) or
-                p["max_offset"] != float(self.state.param_max_offset) or
-                p["wavelength"] != float(self.state.param_wavelength) or
-                p["current_n"] != float(self.state.param_current_n) or
-                current_rc_name != str(self.state.param_ray_class) or
-                p.get("num_spectral_bands", 7) != int(self.state.param_num_spectral_bands)):
-                shape_changed = True
-        elif obj_entry["type"] == "mesh":
-            if (p["n"] != float(self.state.param_n) or
-                p["mesh_path"] != str(self.state.param_mesh_path) or
-                p.get("scale_uniform") != self.state.param_scale_uniform or
-                p.get("scale_all") != float(self.state.param_scale_all) or
-                p.get("scale_x") != float(self.state.param_scale_x) or
-                p.get("scale_y") != float(self.state.param_scale_y) or
-                p.get("scale_z") != float(self.state.param_scale_z)):
-                shape_changed = True
-        elif obj_entry["type"] == "plane":
-            if (p["n"] != float(self.state.param_n) or
-                p["edge_radius"] != float(self.state.param_edge_radius) or
-                str(p.get("shape_type")) != str(self.state.param_plane_shape) or
-                p.get("width") != float(self.state.param_plane_width) or
-                p.get("height") != float(self.state.param_plane_height)):
-                shape_changed = True
-        elif obj_entry["type"] == "sphere_surf":
-            if (p["radius"] != float(self.state.param_radius) or
-                    p["edge_radius"] != float(self.state.param_edge_radius) or p["n"] != float(self.state.param_n)):
-                shape_changed = True
-        elif obj_entry["type"] == "cylinder_surf":
-            if (p["radius"] != float(self.state.param_radius) or
-                p["half_length"] != float(self.state.param_thickness) or
-                p["n"] != float(self.state.param_n) or
-                p.get("capping") != self.state.param_cylinder_capping):
-                shape_changed = True
+        new_rotation = [float(self.state.param_rot_x),
+                        float(self.state.param_rot_y),
+                        float(self.state.param_rot_z)]
 
-        for effect in ["reflection", "refraction", "absorption"]:
-            if not self.state[f"param_{effect}_enabled"]:
-                p[f"{effect}_range"] = None
-            else:
-                # Преобразуем строки/числа из полей ввода, учитывая строки "Infinity"
-                try:
-                    v_min = float(self.state[f"param_{effect}_min"])
-                except (ValueError, TypeError):
-                    v_min = 0.0
-
-                try:
-                    v_max = float(self.state[f"param_{effect}_max"])
-                except (ValueError, TypeError):
-                    v_max = np.inf
-
-                p[f"{effect}_range"] = (v_min, v_max)
-
-        # Обновляем параметры (сохраняем только базовую позицию, без temp)
-        p["origin"] = tuple(base_origin)  # сохраняем базовую, а не new_origin
-        p["rotation"] = tuple(new_rotation)
+        # Синхронизируем абсолютно все геометрические свойства в словаре объекта
         if obj_entry["type"] == "lens":
             p["n"] = float(self.state.param_n)
             p["R1"] = float(self.state.param_R1)
@@ -830,6 +762,14 @@ class OpticsAppController:
             p["f_target"] = float(self.state.param_f_target)
             p["thickness"] = float(self.state.param_thickness)
             p["edge_radius"] = float(self.state.param_edge_radius)
+        elif obj_entry["type"] == "mesh":
+            p["n"] = float(self.state.param_n)
+            p["mesh_path"] = str(self.state.param_mesh_path)
+            p["scale_uniform"] = self.state.param_scale_uniform
+            p["scale_all"] = float(self.state.param_scale_all)
+            p["scale_x"] = float(self.state.param_scale_x)
+            p["scale_y"] = float(self.state.param_scale_y)
+            p["scale_z"] = float(self.state.param_scale_z)
         elif obj_entry["type"] == "emitter":
             p["num_rays"] = int(self.state.param_num_rays)
             p["min_offset"] = float(self.state.param_min_offset)
@@ -837,97 +777,55 @@ class OpticsAppController:
             p["wavelength"] = float(self.state.param_wavelength)
             p["current_n"] = float(self.state.param_current_n)
             p["num_spectral_bands"] = int(self.state.param_num_spectral_bands)
-            # Маппинг строки из UI в реальный класс
             mapping = {"Ray": Ray, "DispersiveRay": DispersiveRay, "WhiteRay": WhiteRay}
             p["ray_class"] = mapping.get(self.state.param_ray_class, Ray)
-        elif obj_entry["type"] == "mesh":
+        elif obj_entry["type"] == "sphere_surf":
+            p["radius"] = float(self.state.param_radius)
+            p["edge_radius"] = float(self.state.param_edge_radius)
             p["n"] = float(self.state.param_n)
-            p["mesh_path"] = str(self.state.param_mesh_path)
-            # Сохраняем новые свойства масштаба
-            p["scale_uniform"] = self.state.param_scale_uniform
-            p["scale_all"] = float(self.state.param_scale_all)
-            p["scale_x"] = float(self.state.param_scale_x)
-            p["scale_y"] = float(self.state.param_scale_y)
-            p["scale_z"] = float(self.state.param_scale_z)
         elif obj_entry["type"] == "plane":
             p["n"] = float(self.state.param_n)
             p["edge_radius"] = float(self.state.param_edge_radius)
             p["shape_type"] = str(self.state.param_plane_shape)
             p["width"] = float(self.state.param_plane_width)
             p["height"] = float(self.state.param_plane_height)
-        elif obj_entry["type"] == "sphere_surf":
-            p["radius"] = float(self.state.param_radius)
-            p["edge_radius"] = float(self.state.param_edge_radius)
-            p["n"] = float(self.state.param_n)
-        elif obj_entry["type"] == "cylinder_surf":
-            p["radius"] = float(self.state.param_radius)
-            p["half_length"] = float(self.state.param_thickness)
-            p["n"] = float(self.state.param_n)
-            p["capping"] = self.state.param_cylinder_capping
 
-        # Пересоздаём инстанс с новыми параметрами (используем new_origin, т.к. это реальная позиция)
-        base_params = p.copy()
-        base_params["origin"] = (0.0, 0.0, 0.0)
-        base_params["rotation"] = (0.0, 0.0, 0.0)
-        instance = self._create_instance(obj_entry["type"], base_params)
+        p["origin"] = tuple(new_origin)
+        p["rotation"] = tuple(new_rotation)
 
-        # Применяем поворот и перенос на итоговую позицию
-        if np.any(new_rotation != 0):
-            instance.rotate(new_rotation)
-        instance.translate(new_origin)
-
+        # Пересоздаем инстанс в честных мировых координатах. Вся математика SciPy
+        # считает углы и сдвиги идеально правильно, как в objects_ex.py
+        instance = self._create_instance(obj_entry["type"], p)
         obj_entry["instance"] = instance
 
-        # Обновляем визуализацию
-        if obj_id in self.plotter.actors:
-            self.plotter.remove_actor(obj_id)
-            if obj_entry["type"] in ["lens", "hyperbolic_lens"]:
-                self.plotter.add_mesh(
-                    obj_entry["instance"].get_mesh(),
-                    color="cyan",
-                    opacity=0.5,
-                    smooth_shading=True,
-                    name=obj_id
-                )
-            elif obj_entry["type"] == "emitter":
-                self.plotter.add_mesh(
-                    obj_entry["instance"].get_mesh(),
-                    color="green",
-                    name=obj_id
-                )
-            elif obj_entry["type"] == "mesh":
-                self.plotter.add_mesh(
-                    obj_entry["instance"].get_mesh(),
-                    color="cyan",
-                    opacity=0.6,
-                    smooth_shading=True,
-                    name=obj_id
-                )
-            elif obj_entry["type"] in ["plane", "sphere_surf", "cylinder_surf"]:
-                self.plotter.add_mesh(
-                    obj_entry["instance"].get_mesh(),
-                    color="cyan",
-                    opacity=0.5,
-                    smooth_shading=True,
-                    name=obj_id
-                )
+        # ОБНОВЛЕНИЕ ГРАФИКИ НА СЦЕНЕ (Гарантия перерисовки любых изменений формы и координат)
+        # Флаг name=obj_id заставляет VTK мгновенно заменить старый меш новым в буфере WebGL
+        self.plotter.add_mesh(
+            instance.get_mesh(),
+            color="green" if obj_entry["type"] == "emitter" else "cyan",
+            opacity=0.5,
+            smooth_shading=True,
+            name=obj_id
+        )
 
+        # Запускаем трассировку лучей
         self.update_scene()
 
     # Обработчик изменения любого параметра (кроме temp)
     def on_param_change(self, *args, **kwargs):
-        # Если изменился param_pos, сбрасываем соответствующий temp, чтобы избежать двойного учёта
-        # Определяем, какой параметр изменился, через kwargs
-        # В trame при изменении состояния передаётся имя в kwargs.get('key')
         if getattr(self, '_loading_state', False):
-            return  # Если мы просто выбираем объект, ничего не делаем
+            return  # Блокируем триггеры при первичном выборе объекта
 
         key = kwargs.get('key')
         if key and key.startswith('param_pos_'):
             axis = key[-1]
             setattr(self.state, f"temp_pos_{axis}", 0.0)
+
+        # ВНЕДРЕНИЕ ОПТИМИЗАЦИИ: Сбрасываем старый таймер, если мышь еще движется
         if self._debounce_timer is not None:
             self._debounce_timer.cancel()
+
+        # Запускаем расчет только тогда, когда накопилась микро-пауза в 33 мс
         loop = asyncio.get_event_loop()
         self._debounce_timer = loop.call_later(self._debounce_delay, self.update_selected_object)
 
@@ -1492,22 +1390,18 @@ with SinglePageLayout(server) as layout:
                             "Client"
 
                 # Правая колонка с 3D окном pyvista
+                # Правая колонка с 3D окном pyvista
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
-                    # ui_view = plotter_ui(
-                    #     app.plotter,
-                    #     mode="trame",
-                    #     default_server_rendering=False,
-                    #     add_menu=False,
-                    #     image_scale=1,
-                    #     interactor_style="Terrain"
-                    # )
-                    ui_view = PyVistaRemoteLocalView(
-                        app.plotter,
-                        mode=("render_mode",)
-                    )
-                    # ui_view.set_mode(server.state.viewMode)
-                    app.ctrl.view_update = ui_view.update
+                    # Используем СТРОГО локальный виджет, он не генерирует картинки на сервере
+                    from pyvista.trame.ui import plotter_ui
 
+                    ui_view = plotter_ui(
+                        app.plotter,
+                        mode="client",  # Чистый клиентский рендеринг через WebGL
+                        add_menu=False,
+                        interactor_style="Terrain"
+                    )
+                    app.ctrl.view_update = ui_view.update
 
 app.update_scene()
 
