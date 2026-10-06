@@ -126,6 +126,7 @@ class OpticsAppController:
         self.ctrl.trigger("apply_y_delta")(self.apply_y_delta)
         self.ctrl.trigger("apply_z_delta")(self.apply_z_delta)
 
+
         self.ctrl.trigger("set_last_pos")(self.set_last_pos)
 
         self.ctrl.trigger("delete_object_event")(self.remove_object)
@@ -137,6 +138,7 @@ class OpticsAppController:
 
         self.ctrl.trigger("save_scene_to_file")(self.save_scene_to_file)
         self.ctrl.trigger("load_scene_from_file")(self.load_scene_from_file)
+        self.ctrl.trigger("export_scene")(self.export_scene)
 
         self.create_initial_objects()
         self.initializing = False
@@ -265,6 +267,9 @@ class OpticsAppController:
             self.on_object_selected(first_id)
 
         self.update_scene()
+
+    def export_scene(self):
+        self.plotter.export_gltf("my_scene.gltf")
 
     # ---------- Создание объектов ----------
     def create_initial_objects(self):
@@ -547,10 +552,12 @@ class OpticsAppController:
             self.ray_tracer.set_mode("tree")
             self.ray_tracer.mode.max_depth = 30
             self.ray_tracer.mode.total_limit = 1000
+            self.ray_tracer.mode.offset_distance = 0.001
+            self.ray_tracer.mode.use_polarization_color = False
         else:
             self.ray_tracer.set_mode("simple")
             self.ray_tracer.mode.max_bounces = 100
-            self.ray_tracer.mode.offset_distance = 0.01
+            self.ray_tracer.mode.offset_distance = 0.001
         self.update_scene()
 
     def update_scene(self):
@@ -1034,6 +1041,11 @@ with SinglePageLayout(server) as layout:
                                               click="load_dialog_visible = true"):
                                 vuetify.VIcon("mdi-folder-open", class_="mr-1")
                                 "Загрузить"
+                        with vuetify.VCol(cols=6, class_="pl-1"):
+                            with vuetify.VBtn(color="black", block=True, size="small",
+                                              click="trigger('export_scene')"):
+                                vuetify.VIcon("mdi-folder-open", class_="mr-1")
+                                "Экспорт"
 
                     # Диалоговое окно сохранения файла
                     with vuetify.VDialog(v_model="save_dialog_visible", max_width="400px"):

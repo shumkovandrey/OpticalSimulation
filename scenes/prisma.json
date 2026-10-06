@@ -42,8 +42,11 @@
                 0.0
             ],
             "mesh_path": "Models/Prism.stl",
-            "n": 1.21,
-            "reflection_range": null,
+            "n": 1.4,
+            "reflection_range": [
+                0.0,
+                Infinity
+            ],
             "refraction_range": [
                 0.0,
                 Infinity

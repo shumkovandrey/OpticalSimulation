@@ -1,0 +1,60 @@
+[
+    {
+        "name": "Источник 1",
+        "type": "emitter",
+        "params": {
+            "origin": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "num_rays": 5,
+            "min_offset": -0.8,
+            "max_offset": 0.8,
+            "wavelength": 550.0,
+            "color": "yellow",
+            "energy": 1.0,
+            "current_n": 1.0,
+            "reflection_range": null,
+            "refraction_range": null,
+            "absorption_range": null,
+            "num_spectral_bands": 7,
+            "ray_class": "WhiteRay"
+        }
+    },
+    {
+        "name": "Линза 2",
+        "type": "lens",
+        "params": {
+            "origin": [
+                1.78,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "R1": 5.0,
+            "R2": 2.5,
+            "thickness": 0.5,
+            "edge_radius": 1.0,
+            "n": 1.5,
+            "reflection_range": [
+                0.0,
+                Infinity
+            ],
+            "refraction_range": [
+                0.0,
+                Infinity
+            ],
+            "absorption_range": null
+        }
+    }
+]
