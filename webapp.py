@@ -51,7 +51,7 @@ class OpticsAppController:
             self.temp_plotter,
             mode="simple",
             pool=self.pool,
-            line_width=2.5,
+            line_width=1,
             min_alpha=0.05,
             gamma=1,
         )
@@ -276,7 +276,7 @@ class OpticsAppController:
         # 1. Входящий пучок света (параллельные лучи слева направо)
         self.add_object("emitter", "Входящий свет", {
             "origin": (-10.0, 0.0, 0.0),
-            "rotation": (0.0, 0.0, 0.0),
+            "rotation": (45.0, 45.0, 45.0),
             "num_rays": 1,
             "min_offset": -1.2,
             "max_offset": 1.2,
@@ -459,7 +459,9 @@ class OpticsAppController:
             )
         elif obj_type == "emitter":
             return BeamEmitter(
-                origin=params.get("origin", (0, 0, 0)), direction=np.array([1.0, 0.0, 0.0]),
+                origin=params.get("origin", (0, 0, 0)),
+                direction=np.array([1.0, 0.0, 0.0]),
+                rotation_degrees=params.get("rotation", (0, 0, 0)),  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
                 num_rays=params.get("num_rays", 5),
                 min_offset=params.get("min_offset", -0.5), max_offset=params.get("max_offset", 0.5),
                 color=params.get("color", "yellow"), wavelength=params.get("wavelength", 550),
@@ -572,19 +574,23 @@ class OpticsAppController:
             if "traced_rays_geometry" in self.plotter.actors:
                 actor = self.plotter.actors["traced_rays_geometry"]
                 if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
-                    # Копируем структуру полиданных
+                    # 1. Копируем структуру полиданных лучей
                     actor.mapper.dataset.copy_from(calculated_ray_mesh)
 
-                    # ВОЗВРАЩАЕМ ЦВЕТА: Жестко прописываем скалярные массивы цветов в VTK
+                    # 2. Возвращаем цвета лучам
                     actor.mapper.dataset.point_data["colors"] = calculated_ray_mesh.point_data["colors"]
                     actor.mapper.dataset.active_scalars_name = "colors"
 
-                    # Настройки маппера для корректного подхвата RGBA массивов клиентом
                     actor.mapper.SetColorModeToDirectScalars()
                     actor.mapper.SetScalarModeToUsePointData()
                     actor.mapper.ScalarVisibilityOn()
 
-                    # Обновляем внутренний кэш маппера
+                    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ ДЛЯ ТОЛЩИНЫ ЛУЧЕЙ:
+                    # Принудительно выставляем толщину линий обратно в 4 пикселя (или любое ваше значение)
+                    # Это заставит WebGL на клиенте перерисовать линии толстыми
+                    actor.GetProperty().SetLineWidth(2.5)
+
+                    # Сигналы обновления для веб-контекста
                     actor.mapper.dataset.Modified()
                     actor.mapper.Modified()
                 else:
@@ -599,7 +605,7 @@ class OpticsAppController:
                         scalars="colors",
                         rgba=True,
                         opacity="linear",
-                        line_width=4,
+                        line_width=2.5,
                         render_lines_as_tubes=False,
                         name="traced_rays_geometry"
                     )
@@ -741,7 +747,7 @@ class OpticsAppController:
 
         p = obj_entry["params"]
 
-        # Считываем абсолютные значения из интерфейса Trame
+        # Считываем абсолютные значения позиции и поворота из интерфейса Trame
         new_origin = [float(self.state.param_pos_x),
                       float(self.state.param_pos_y),
                       float(self.state.param_pos_z)]
@@ -750,7 +756,28 @@ class OpticsAppController:
                         float(self.state.param_rot_y),
                         float(self.state.param_rot_z)]
 
-        # Синхронизируем абсолютно все геометрические свойства в словаре объекта
+        # --- ИСПРАВЛЕНИЕ: Чтение оптических свойств на основе UI чекбоксов ---
+        for effect in ["reflection", "refraction", "absorption"]:
+            enabled = bool(self.state[f"param_{effect}_enabled"])
+            if enabled:
+                try:
+                    # Читаем границы. Если в поле "Infinity" или пусто — ставим np.inf
+                    v_min = float(self.state[f"param_{effect}_min"])
+
+                    raw_max = self.state[f"param_{effect}_max"]
+                    if raw_max in ["Infinity", "inf", None, ""]:
+                        v_max = np.inf
+                    else:
+                        v_max = float(raw_max)
+
+                    p[f"{effect}_range"] = (v_min, v_max)
+                except (ValueError, TypeError):
+                    p[f"{effect}_range"] = (0.0, np.inf)
+            else:
+                p[f"{effect}_range"] = None
+        # ---------------------------------------------------------------------
+
+        # Синхронизируем геометрические свойства в словаре объекта
         if obj_entry["type"] == "lens":
             p["n"] = float(self.state.param_n)
             p["R1"] = float(self.state.param_R1)
@@ -789,24 +816,30 @@ class OpticsAppController:
             p["shape_type"] = str(self.state.param_plane_shape)
             p["width"] = float(self.state.param_plane_width)
             p["height"] = float(self.state.param_plane_height)
+        elif obj_entry["type"] == "cylinder_surf":
+            p["radius"] = float(self.state.param_radius)
+            p["half_length"] = float(self.state.param_thickness)
+            p["n"] = float(self.state.param_n)
+            p["capping"] = bool(self.state.param_cylinder_capping)
 
         p["origin"] = tuple(new_origin)
         p["rotation"] = tuple(new_rotation)
 
-        # Пересоздаем инстанс в честных мировых координатах. Вся математика SciPy
-        # считает углы и сдвиги идеально правильно, как в objects_ex.py
+        # Пересоздаем инстанс с обновленными свойствами диапазонов френеля
         instance = self._create_instance(obj_entry["type"], p)
         obj_entry["instance"] = instance
 
-        # ОБНОВЛЕНИЕ ГРАФИКИ НА СЦЕНЕ (Гарантия перерисовки любых изменений формы и координат)
-        # Флаг name=obj_id заставляет VTK мгновенно заменить старый меш новым в буфере WebGL
-        self.plotter.add_mesh(
-            instance.get_mesh(),
-            color="green" if obj_entry["type"] == "emitter" else "cyan",
-            opacity=0.5,
-            smooth_shading=True,
-            name=obj_id
-        )
+        # Обновляем графику на сцене
+        if obj_id in self.plotter.actors:
+            actor = self.plotter.actors[obj_id]
+
+            # Создаем матрицу трансформации на основе новых p["origin"] и p["rotation"]
+            mat = np.eye(4)
+            mat[:3, :3] = R.from_euler('xyz', p["rotation"], degrees=True).as_matrix()
+            mat[:3, 3] = p["origin"]
+
+            # Применяем матрицу напрямую к существующему актору
+            actor.user_matrix = mat
 
         # Запускаем трассировку лучей
         self.update_scene()

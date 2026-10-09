@@ -921,6 +921,10 @@ class BeamEmitter:
 
     def emit(self) -> List[Ray]:
         rays = []
+
+        # ИСПРАВЛЕНИЕ: Вместо слепого np.cross и условий с 0.9,
+        # мы берем честный локальный вектор Y и трансформируем его матрицей поворота.
+        # Это полностью убирает скачки на 26 градусах и заставляет работать поворот по X!
         local_perp1 = np.array([0.0, 1.0, 0.0])
         perp1 = self.rotation_matrix @ local_perp1
         perp1 /= np.linalg.norm(perp1)
@@ -928,6 +932,7 @@ class BeamEmitter:
         offsets = np.linspace(self.min_offset, self.max_offset, self.num_rays)
 
         for dy in offsets:
+            # Теперь world_origin смещается строго перпендикулярно направлению выстрела
             world_origin = self.origin + dy * perp1
 
             # Если выбран класс WhiteRay и включена опция "сразу создавать пучок"
@@ -955,7 +960,7 @@ class BeamEmitter:
                                             wavelength=wl)
                     rays.append(ray)
             else:
-                # Стандартное создание одиночного луча (как у вас и было)
+                # Стандартное создание одиночного луча
                 if self.pool:
                     ray = self.pool.acquire(origin=world_origin,
                                             direction=self.direction,
