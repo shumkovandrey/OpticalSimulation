@@ -276,8 +276,8 @@ class OpticsAppController:
         # 1. Входящий пучок света (параллельные лучи слева направо)
         self.add_object("emitter", "Входящий свет", {
             "origin": (-10.0, 0.0, 0.0),
-            "rotation": (45.0, 45.0, 45.0),
-            "num_rays": 1,
+            "rotation": (0.0, 0.0, 0.0),
+            "num_rays": 10,
             "min_offset": -1.2,
             "max_offset": 1.2,
             "wavelength": 550.0,
@@ -341,22 +341,29 @@ class OpticsAppController:
         self.object_counter += 1
         obj_id = f"obj_{self.object_counter}"
 
-        # Создаем инстанс сразу в честных мировых координатах
         instance = self._create_instance(obj_type, params)
-
         obj_entry = {
             "id": obj_id, "type": obj_type, "name": name, "params": params, "instance": instance
         }
         self.scene_objects.append(obj_entry)
 
-        # Выводим честный мировой меш на сцену. Актор в нуле.
-        self.plotter.add_mesh(
-            instance.get_mesh(),
+        # Берем ЧИСТЫЙ локальный меш формы объекта
+        local_mesh = instance.get_mesh()
+
+        # Выводим на сцену
+        actor = self.plotter.add_mesh(
+            local_mesh,
             color="green" if obj_type == "emitter" else "cyan",
             opacity=0.5,
             smooth_shading=True,
             name=obj_id
         )
+
+        # Задаем начальную матрицу трансформации
+        mat = np.eye(4)
+        mat[:3, :3] = R.from_euler('xyz', params.get("rotation", (0, 0, 0)), degrees=True).as_matrix()
+        mat[:3, 3] = params.get("origin", (0, 0, 0))
+        actor.user_matrix = mat
 
         if not self.initializing:
             self._update_objects_list_state()
@@ -743,11 +750,20 @@ class OpticsAppController:
     def update_selected_object(self, *args, **kwargs):
         obj_id = self.state.selected_object_id
         obj_entry = self._find_object(obj_id)
-        if not obj_entry: return
+        if not obj_entry:
+            return
 
         p = obj_entry["params"]
+        key_changed = kwargs.get("key", "")  # узнаем, какой именно ползунок сдвинулся
 
-        # Считываем абсолютные значения позиции и поворота из интерфейса Trame
+        # Список параметров, отвечающих ТОЛЬКО за положение и поворот в пространстве
+        transform_keys = [
+            "param_pos_x", "param_pos_y", "param_pos_z",
+            "param_rot_x", "param_rot_y", "param_rot_z",
+            "temp_pos_delta_x", "temp_pos_delta_y", "temp_pos_delta_z"
+        ]
+
+        # Считываем абсолютные значения трансформации из UI
         new_origin = [float(self.state.param_pos_x),
                       float(self.state.param_pos_y),
                       float(self.state.param_pos_z)]
@@ -756,28 +772,11 @@ class OpticsAppController:
                         float(self.state.param_rot_y),
                         float(self.state.param_rot_z)]
 
-        # --- ИСПРАВЛЕНИЕ: Чтение оптических свойств на основе UI чекбоксов ---
-        for effect in ["reflection", "refraction", "absorption"]:
-            enabled = bool(self.state[f"param_{effect}_enabled"])
-            if enabled:
-                try:
-                    # Читаем границы. Если в поле "Infinity" или пусто — ставим np.inf
-                    v_min = float(self.state[f"param_{effect}_min"])
+        # Синхронизируем геометрические свойства в словаре объекта для ядра трассировки лучей
+        p["origin"] = tuple(new_origin)
+        p["rotation"] = tuple(new_rotation)
 
-                    raw_max = self.state[f"param_{effect}_max"]
-                    if raw_max in ["Infinity", "inf", None, ""]:
-                        v_max = np.inf
-                    else:
-                        v_max = float(raw_max)
-
-                    p[f"{effect}_range"] = (v_min, v_max)
-                except (ValueError, TypeError):
-                    p[f"{effect}_range"] = (0.0, np.inf)
-            else:
-                p[f"{effect}_range"] = None
-        # ---------------------------------------------------------------------
-
-        # Синхронизируем геометрические свойства в словаре объекта
+        # 1. ОБНОВЛЕНИЕ ОПТИЧЕСКИХ СВОЙСТВ ФОРМЫ (Выполняется всегда)
         if obj_entry["type"] == "lens":
             p["n"] = float(self.state.param_n)
             p["R1"] = float(self.state.param_R1)
@@ -789,14 +788,21 @@ class OpticsAppController:
             p["f_target"] = float(self.state.param_f_target)
             p["thickness"] = float(self.state.param_thickness)
             p["edge_radius"] = float(self.state.param_edge_radius)
-        elif obj_entry["type"] == "mesh":
+        elif obj_entry["type"] == "plane":
             p["n"] = float(self.state.param_n)
-            p["mesh_path"] = str(self.state.param_mesh_path)
-            p["scale_uniform"] = self.state.param_scale_uniform
-            p["scale_all"] = float(self.state.param_scale_all)
-            p["scale_x"] = float(self.state.param_scale_x)
-            p["scale_y"] = float(self.state.param_scale_y)
-            p["scale_z"] = float(self.state.param_scale_z)
+            p["edge_radius"] = float(self.state.param_edge_radius)
+            p["shape_type"] = str(self.state.param_plane_shape)
+            p["width"] = float(self.state.param_plane_width)
+            p["height"] = float(self.state.param_plane_height)
+        elif obj_entry["type"] == "sphere_surf":
+            p["radius"] = float(self.state.param_radius)
+            p["edge_radius"] = float(self.state.param_edge_radius)
+            p["n"] = float(self.state.param_n)
+        elif obj_entry["type"] == "cylinder_surf":
+            p["radius"] = float(self.state.param_radius)
+            p["half_length"] = float(self.state.param_thickness)
+            p["n"] = float(self.state.param_n)
+            p["capping"] = bool(self.state.param_cylinder_capping)
         elif obj_entry["type"] == "emitter":
             p["num_rays"] = int(self.state.param_num_rays)
             p["min_offset"] = float(self.state.param_min_offset)
@@ -806,42 +812,55 @@ class OpticsAppController:
             p["num_spectral_bands"] = int(self.state.param_num_spectral_bands)
             mapping = {"Ray": Ray, "DispersiveRay": DispersiveRay, "WhiteRay": WhiteRay}
             p["ray_class"] = mapping.get(self.state.param_ray_class, Ray)
-        elif obj_entry["type"] == "sphere_surf":
-            p["radius"] = float(self.state.param_radius)
-            p["edge_radius"] = float(self.state.param_edge_radius)
-            p["n"] = float(self.state.param_n)
-        elif obj_entry["type"] == "plane":
-            p["n"] = float(self.state.param_n)
-            p["edge_radius"] = float(self.state.param_edge_radius)
-            p["shape_type"] = str(self.state.param_plane_shape)
-            p["width"] = float(self.state.param_plane_width)
-            p["height"] = float(self.state.param_plane_height)
-        elif obj_entry["type"] == "cylinder_surf":
-            p["radius"] = float(self.state.param_radius)
-            p["half_length"] = float(self.state.param_thickness)
-            p["n"] = float(self.state.param_n)
-            p["capping"] = bool(self.state.param_cylinder_capping)
 
-        p["origin"] = tuple(new_origin)
-        p["rotation"] = tuple(new_rotation)
+        # Синхронизируем Френель-диапазоны
+        for effect in ["reflection", "refraction", "absorption"]:
+            if bool(self.state[f"param_{effect}_enabled"]):
+                raw_max = self.state[f"param_{effect}_max"]
+                v_max = np.inf if raw_max in ["Infinity", "inf", None, ""] else float(raw_max)
+                p[f"{effect}_range"] = (float(self.state[f"param_{effect}_min"]), v_max)
+            else:
+                p[f"{effect}_range"] = None
 
-        # Пересоздаем инстанс с обновленными свойствами диапазонов френеля
+        # Пересоздаем внутренний математический инстанс (он всегда нужен в мировых координатах для Numba)
         instance = self._create_instance(obj_entry["type"], p)
         obj_entry["instance"] = instance
 
-        # Обновляем графику на сцене
+        # 2. ДЕЛИМ ОТРИСОВКУ: Матрица vs Новая Геометрия формы
         if obj_id in self.plotter.actors:
             actor = self.plotter.actors[obj_id]
 
-            # Создаем матрицу трансформации на основе новых p["origin"] и p["rotation"]
-            mat = np.eye(4)
-            mat[:3, :3] = R.from_euler('xyz', p["rotation"], degrees=True).as_matrix()
-            mat[:3, 3] = p["origin"]
+            # Если изменились параметры формы (НЕ позиция), заставляем обновить саму структуру меша
+            if key_changed not in transform_keys:
+                # Получаем чистый локальный меш формы
+                local_mesh = instance.get_mesh()
+                # Копируем структуру полигонов внутрь уже существующего на сцене меша
+                actor.mapper.dataset.copy_from(local_mesh)
+                actor.mapper.dataset.Modified()
 
-            # Применяем матрицу напрямую к существующему актору
+            # Вычисляем матрицу трансформации 4х4 на GPU
+            mat = np.eye(4)
+            mat[:3, :3] = R.from_euler('xyz', new_rotation, degrees=True).as_matrix()
+            mat[:3, 3] = new_origin
+
+            # Применяем матрицу к актору. Модель встанет ровно туда, куда указывает интерфейс!
+            actor.user_matrix = mat
+        else:
+            # Первичный аппрув объекта на сцене при создании
+            local_mesh = instance.get_mesh()
+            actor = self.plotter.add_mesh(
+                local_mesh,
+                color="green" if obj_entry["type"] == "emitter" else "cyan",
+                opacity=0.5,
+                smooth_shading=True,
+                name=obj_id
+            )
+            mat = np.eye(4)
+            mat[:3, :3] = R.from_euler('xyz', new_rotation, degrees=True).as_matrix()
+            mat[:3, 3] = new_origin
             actor.user_matrix = mat
 
-        # Запускаем трассировку лучей
+        # Пересчитываем лучи света
         self.update_scene()
 
     # Обработчик изменения любого параметра (кроме temp)
@@ -849,18 +868,30 @@ class OpticsAppController:
         if getattr(self, '_loading_state', False):
             return  # Блокируем триггеры при первичном выборе объекта
 
+        # Достаем имя изменившейся переменной из состояния Trame
+        # Если Trame не передал его в kwargs, берем имя из внутренней структуры события
         key = kwargs.get('key')
+        if not key and args and isinstance(args[0], dict):
+            # В зависимости от версии Trame имя может лежать в словаре аргументов
+            key = args[0].get('key', '')
+
+        # Если имя все еще не найдено, мы временно передаем пустую строку,
+        # но ниже мы перепишем подписку, чтобы оно гарантированно было.
+
         if key and key.startswith('param_pos_'):
             axis = key[-1]
             setattr(self.state, f"temp_pos_{axis}", 0.0)
 
-        # ВНЕДРЕНИЕ ОПТИМИЗАЦИИ: Сбрасываем старый таймер, если мышь еще движется
+        # Оптимизация (Debounce)
         if self._debounce_timer is not None:
             self._debounce_timer.cancel()
 
-        # Запускаем расчет только тогда, когда накопилась микро-пауза в 33 мс
         loop = asyncio.get_event_loop()
-        self._debounce_timer = loop.call_later(self._debounce_delay, self.update_selected_object)
+        # ПЕРЕДАЕМ KEY ТАКЖЕ В ДЕБАУНС, чтобы update_selected_object знал, что поменялось
+        self._debounce_timer = loop.call_later(
+            self._debounce_delay,
+            lambda: self.update_selected_object(key=key)
+        )
 
     # Обработчик изменения временных слайдеров – обновляет объект без задержки
     def on_temp_change(self, *args, **kwargs):
@@ -921,24 +952,31 @@ server = get_server()
 server.client_type = "vue3"
 app = OpticsAppController(server)
 
-# Подписка на изменения параметров (кроме temp)
-for param in ["param_n", "param_radius", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
-              "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_current_n", "param_ray_class", "param_num_spectral_bands", "param_mesh_path",
-              "param_plane_shape", "param_plane_width", "param_plane_height", "param_cylinder_capping"]:
-    server.state.change(param)(app.on_param_change)
+params_to_subscribe = [
+    "param_n", "param_radius", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
+    "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_current_n",
+    "param_ray_class", "param_num_spectral_bands", "param_mesh_path", "param_plane_shape",
+    "param_plane_width", "param_plane_height", "param_cylinder_capping",
+    "param_pos_x", "param_pos_y", "param_pos_z", "param_rot_x", "param_rot_y", "param_rot_z",
+    "param_scale_uniform", "param_scale_all", "param_scale_x", "param_scale_y", "param_scale_z"
+]
 
-# Для позиционных координат и вращений тоже нужна подписка
-for axis in ["x", "y", "z"]:
-    server.state.change(f"param_pos_{axis}")(app.on_param_change)
-    server.state.change(f"param_rot_{axis}")(app.on_param_change)
-
-for scale_param in ["param_scale_uniform", "param_scale_all", "param_scale_x", "param_scale_y", "param_scale_z"]:
-    server.state.change(scale_param)(app.on_param_change)
+# Добавляем **_kwargs в конец каждой лямбды для перехвата служебных переменных Trame
+for param in params_to_subscribe:
+    server.state.change(param)(
+        lambda *_args, _name=param, **_kwargs: app.on_param_change(key=_name)
+    )
 
 for effect in ["reflection", "refraction", "absorption"]:
-    server.state.change(f"param_{effect}_enabled")(app.on_param_change)
-    server.state.change(f"param_{effect}_min")(app.on_param_change)
-    server.state.change(f"param_{effect}_max")(app.on_param_change)
+    server.state.change(f"param_{effect}_enabled")(
+        lambda *_args, _name=f"param_{effect}_enabled", **_kwargs: app.on_param_change(key=_name)
+    )
+    server.state.change(f"param_{effect}_min")(
+        lambda *_args, _name=f"param_{effect}_min", **_kwargs: app.on_param_change(key=_name)
+    )
+    server.state.change(f"param_{effect}_max")(
+        lambda *_args, _name=f"param_{effect}_max", **_kwargs: app.on_param_change(key=_name)
+    )
 
 # Подписка на временные переменные (для движения во время перетаскивания)
 for axis in ["x", "y", "z"]:

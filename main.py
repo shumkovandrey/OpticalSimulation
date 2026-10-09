@@ -1148,33 +1148,20 @@ class PlaneSurface:
 
     def get_mesh(self) -> pv.PolyData:
         if self.shape_type == "rectangle":
-            # ПРЯМОУГОЛЬНИК
-            t1, t2 = self.face_tangents
+            # Строим локальный прямоугольник в плоскости YZ (так как базовая нормаль)
             hu, hv = self.width / 2.0, self.height / 2.0
-            c = self.lens_origin
-
-            # Рассчитываем честные мировые координаты четырех углов
-            p0 = c - hu * t1 - hv * t2
-            p1 = c + hu * t1 - hv * t2
-            p2 = c + hu * t1 + hv * t2
-            p3 = c - hu * t1 + hv * t2
-
-            vertices = np.array([p0, p1, p2, p3], dtype=np.float32)
-
-            # ИСПРАВЛЕНИЕ: В PyVista массив граней должен начинаться с количества точек.
-            # Для одного четырехугольника: [4, индекс0, индекс1, индекс2, индекс3]
+            vertices = np.array([
+                [0.0, -hu, -hv],
+                [0.0, hu, -hv],
+                [0.0, hu, hv],
+                [0.0, -hu, hv]
+            ], dtype=np.float32)
             faces = np.array([4, 0, 1, 2, 3], dtype=np.int32)
-
             return pv.PolyData(vertices, faces)
         else:
-            # КРУГЛЫЙ ДИСК
+            # Круглый диск в нуле с нормалью (1, 0, 0)
             radius = self.edge_radius if self.edge_radius else 1.0
-            disc = pv.Disc(center=(0, 0, 0), normal=(1, 0, 0), inner=0, outer=radius, c_res=64)
-
-            transform = np.eye(4)
-            transform[:3, :3] = self.rotation_matrix
-            transform[:3, 3] = self.lens_origin
-            return disc.transform(transform, inplace=False)
+            return pv.Disc(center=(0, 0, 0), normal=(1, 0, 0), inner=0, outer=radius, c_res=64)
 
 
 class SphereSurface:
@@ -1292,24 +1279,18 @@ class SphereSurface:
         sagitta = abs_radius - np.sqrt(max(0.0, abs_radius ** 2 - self.edge_radius ** 2))
         R = self.radius
 
-        # Правильное отсечение нужной «чаши»
+        # Отсекаем чашу в локальных координатах
         if R > 0:
-            # выпуклая: оставляем x >= R - sagitta (вершина в +R)
             mesh = mesh.clip(normal=[1, 0, 0], origin=[R - sagitta, 0, 0], invert=False)
+            # Сдвигаем вершину локальной чаши в ноль координат
+            mesh.translate([- (R - sagitta), 0, 0], inplace=True)
         else:
-            # вогнутая: оставляем x <= R + sagitta (вершина в отрицательной области R)
             mesh = mesh.clip(normal=[-1, 0, 0], origin=[R + sagitta, 0, 0], invert=False)
+            # Сдвигаем вершину локальной чаши в ноль координат
+            mesh.translate([- (R + sagitta), 0, 0], inplace=True)
 
-        # Поворот: локальную ось X направляем вдоль lens_axis (без отражения!)
-        rot_matrix = calculate_rotation_matrix(self.lens_axis)
-
-        # Мировой центр: вершина (R,0,0) должна совпасть с lens_origin
-        world_center = self.lens_origin - self.radius * self.lens_axis
-
-        matrix = np.eye(4)
-        matrix[:3, :3] = rot_matrix
-        matrix[:3, 3] = world_center
-        return mesh.transform(matrix, inplace=False)
+        # Возвращаем ЧИСТЫЙ локальный меш (БЕЗ умножения на матрицу поворота и без мирового центра!)
+        return mesh
 
     def apply_transform(self, mat):
         R_mat = mat[:3, :3]
@@ -1413,8 +1394,8 @@ class CylinderSurface:
         return radial / norm
 
     def get_mesh(self) -> pv.PolyData:
-        # НАЧАЛО ИЗМЕНЕНИЙ: Включаем или выключаем capping в меше PyVista
-        cylinder = pv.Cylinder(center=self.center, direction=self.axis_dir,
+        # Строим дефолтный цилиндр вдоль оси X (1, 0, 0) в нуле координат
+        cylinder = pv.Cylinder(center=(0, 0, 0), direction=(1, 0, 0),
                                radius=self.radius, height=2 * self.half_length,
                                capping=self.capping, resolution=64)
         return cylinder
@@ -2093,10 +2074,11 @@ class UniversalLens:
 
         local_mesh = front_mesh.merge(back_mesh).merge(rim_mesh)
 
-        matrix = np.eye(4)
-        matrix[:3, :3] = self.rotation
-        matrix[:3, 3] = self.origin
-        return local_mesh.transform(matrix, inplace=False)
+        # matrix = np.eye(4)
+        # matrix[:3, :3] = self.rotation
+        # matrix[:3, 3] = self.origin
+        # return local_mesh.transform(matrix, inplace=False)
+        return local_mesh
 
     def _calc_optical_params(self):
         r1_val = self.R1 if self.R1 else 1e10
@@ -2362,10 +2344,12 @@ class HyperbolicLens:
 
         local_mesh = front_mesh.merge(back_mesh).merge(rim_mesh)
 
-        matrix = np.eye(4)
-        matrix[:3, :3] = self.rotation
-        matrix[:3, 3] = self.origin
-        return local_mesh.transform(matrix, inplace=False)
+        # matrix = np.eye(4)
+        # matrix[:3, :3] = self.rotation
+        # matrix[:3, 3] = self.origin
+        # return local_mesh.transform(matrix, inplace=False)
+
+        return local_mesh
 
     def debug_draw_analytical_cylinder(self, plot: pv.Plotter, color="red", opacity=0.4):
         actor_name = f"debug_cyl_{id(self)}"
