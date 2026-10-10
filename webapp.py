@@ -61,6 +61,8 @@ class OpticsAppController:
         self._debounce_delay = 0.033
         self._debounce_timer = None
 
+        self._last_applied_transform = {}
+
         self.state.selected_object_id = None
         self.state.selected_object_type = None
         self.state.trace_mode = "simple"
@@ -595,7 +597,7 @@ class OpticsAppController:
                     # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ ДЛЯ ТОЛЩИНЫ ЛУЧЕЙ:
                     # Принудительно выставляем толщину линий обратно в 4 пикселя (или любое ваше значение)
                     # Это заставит WebGL на клиенте перерисовать линии толстыми
-                    actor.GetProperty().SetLineWidth(2.5)
+                    actor.GetProperty().SetLineWidth(3)
 
                     # Сигналы обновления для веб-контекста
                     actor.mapper.dataset.Modified()
@@ -747,36 +749,64 @@ class OpticsAppController:
                 self.state[f"param_{effect}_min"] = float(r_range[0]) if r_range[0] is not None else 0.0
                 self.state[f"param_{effect}_max"] = float(r_range[1]) if r_range[1] is not None else np.inf
 
-    def update_selected_object(self, *args, **kwargs):
+    def update_object_transform(self):
+        """Мгновенно двигает объект на GPU через user_matrix без пересоздания геометрии."""
+        obj_id = self.state.selected_object_id
+        obj_entry = self._find_object(obj_id)
+        if not obj_entry or obj_id not in self.plotter.actors:
+            return
+
+        p = obj_entry["params"]
+
+        # Считываем только позицию и поворот
+        new_origin = (float(self.state.param_pos_x),
+                      float(self.state.param_pos_y),
+                      float(self.state.param_pos_z))
+
+        new_rotation = (float(self.state.param_rot_x),
+                        float(self.state.param_rot_y),
+                        float(self.state.param_rot_z))
+
+        # Обновляем параметры для физического движка на сервере
+        p["origin"] = new_origin
+        p["rotation"] = new_rotation
+
+        # Пересоздаем только математический инстанс для Numba
+        instance = self._create_instance(obj_entry["type"], p)
+        obj_entry["instance"] = instance
+
+        # Мгновенно двигаем 3D-актора на клиенте
+        actor = self.plotter.actors[obj_id]
+        mat = np.eye(4)
+        mat[:3, :3] = R.from_euler('xyz', new_rotation, degrees=True).as_matrix()
+        mat[:3, 3] = new_origin
+        actor.user_matrix = mat
+
+        # Пересчитываем лучи
+        self.update_scene()
+
+    def update_object_shape(self):
+        """Полностью пересоздает 3D-модель (меш) на CPU при изменении параметров формы."""
         obj_id = self.state.selected_object_id
         obj_entry = self._find_object(obj_id)
         if not obj_entry:
             return
 
         p = obj_entry["params"]
-        key_changed = kwargs.get("key", "")  # узнаем, какой именно ползунок сдвинулся
 
-        # Список параметров, отвечающих ТОЛЬКО за положение и поворот в пространстве
-        transform_keys = [
-            "param_pos_x", "param_pos_y", "param_pos_z",
-            "param_rot_x", "param_rot_y", "param_rot_z",
-            "temp_pos_delta_x", "temp_pos_delta_y", "temp_pos_delta_z"
-        ]
+        # Считываем текущую позицию/поворот, чтобы не потерять их при пересоздании
+        current_origin = (float(self.state.param_pos_x),
+                          float(self.state.param_pos_y),
+                          float(self.state.param_pos_z))
 
-        # Считываем абсолютные значения трансформации из UI
-        new_origin = [float(self.state.param_pos_x),
-                      float(self.state.param_pos_y),
-                      float(self.state.param_pos_z)]
+        current_rotation = (float(self.state.param_rot_x),
+                            float(self.state.param_rot_y),
+                            float(self.state.param_rot_z))
 
-        new_rotation = [float(self.state.param_rot_x),
-                        float(self.state.param_rot_y),
-                        float(self.state.param_rot_z)]
+        p["origin"] = current_origin
+        p["rotation"] = current_rotation
 
-        # Синхронизируем геометрические свойства в словаре объекта для ядра трассировки лучей
-        p["origin"] = tuple(new_origin)
-        p["rotation"] = tuple(new_rotation)
-
-        # 1. ОБНОВЛЕНИЕ ОПТИЧЕСКИХ СВОЙСТВ ФОРМЫ (Выполняется всегда)
+        # Считываем параметры формы
         if obj_entry["type"] == "lens":
             p["n"] = float(self.state.param_n)
             p["R1"] = float(self.state.param_R1)
@@ -803,6 +833,20 @@ class OpticsAppController:
             p["half_length"] = float(self.state.param_thickness)
             p["n"] = float(self.state.param_n)
             p["capping"] = bool(self.state.param_cylinder_capping)
+        elif obj_entry["type"] == "mesh":
+            p["n"] = float(self.state.param_n)
+            p["mesh_path"] = str(self.state.param_mesh_path)
+            p["scale_uniform"] = bool(self.state.param_scale_uniform)
+            p["scale_all"] = float(self.state.param_scale_all)
+            p["scale_x"] = float(self.state.param_scale_x)
+            p["scale_y"] = float(self.state.param_scale_y)
+            p["scale_z"] = float(self.state.param_scale_z)
+            # Формируем и передаем обновленные коэффициенты масштабирования в параметры
+            if p["scale_uniform"]:
+                s_val = p["scale_all"]
+                p["scale_factors"] = (s_val, s_val, s_val)
+            else:
+                p["scale_factors"] = (p["scale_x"], p["scale_y"], p["scale_z"])
         elif obj_entry["type"] == "emitter":
             p["num_rays"] = int(self.state.param_num_rays)
             p["min_offset"] = float(self.state.param_min_offset)
@@ -813,7 +857,6 @@ class OpticsAppController:
             mapping = {"Ray": Ray, "DispersiveRay": DispersiveRay, "WhiteRay": WhiteRay}
             p["ray_class"] = mapping.get(self.state.param_ray_class, Ray)
 
-        # Синхронизируем Френель-диапазоны
         for effect in ["reflection", "refraction", "absorption"]:
             if bool(self.state[f"param_{effect}_enabled"]):
                 raw_max = self.state[f"param_{effect}_max"]
@@ -822,46 +865,56 @@ class OpticsAppController:
             else:
                 p[f"{effect}_range"] = None
 
-        # Пересоздаем внутренний математический инстанс (он всегда нужен в мировых координатах для Numba)
+        # Пересоздаем инстанс
         instance = self._create_instance(obj_entry["type"], p)
         obj_entry["instance"] = instance
 
-        # 2. ДЕЛИМ ОТРИСОВКУ: Матрица vs Новая Геометрия формы
+        # ВАЖНО: Удаляем старого актора и создаем заново с НОВЫМ мешем (по старой схеме)
         if obj_id in self.plotter.actors:
-            actor = self.plotter.actors[obj_id]
+            self.plotter.remove_actor(obj_id)
 
-            # Если изменились параметры формы (НЕ позиция), заставляем обновить саму структуру меша
-            if key_changed not in transform_keys:
-                # Получаем чистый локальный меш формы
-                local_mesh = instance.get_mesh()
-                # Копируем структуру полигонов внутрь уже существующего на сцене меша
-                actor.mapper.dataset.copy_from(local_mesh)
-                actor.mapper.dataset.Modified()
+        # Берём локальный меш
+        local_mesh = instance.get_mesh()
 
-            # Вычисляем матрицу трансформации 4х4 на GPU
-            mat = np.eye(4)
-            mat[:3, :3] = R.from_euler('xyz', new_rotation, degrees=True).as_matrix()
-            mat[:3, 3] = new_origin
+        # Добавляем на сцену чистый меш формы
+        actor = self.plotter.add_mesh(
+            local_mesh,
+            color="green" if obj_entry["type"] == "emitter" else "cyan",
+            opacity=0.5,
+            smooth_shading=True,
+            name=obj_id
+        )
 
-            # Применяем матрицу к актору. Модель встанет ровно туда, куда указывает интерфейс!
-            actor.user_matrix = mat
-        else:
-            # Первичный аппрув объекта на сцене при создании
-            local_mesh = instance.get_mesh()
-            actor = self.plotter.add_mesh(
-                local_mesh,
-                color="green" if obj_entry["type"] == "emitter" else "cyan",
-                opacity=0.5,
-                smooth_shading=True,
-                name=obj_id
-            )
-            mat = np.eye(4)
-            mat[:3, :3] = R.from_euler('xyz', new_rotation, degrees=True).as_matrix()
-            mat[:3, 3] = new_origin
-            actor.user_matrix = mat
+        # Сразу же позиционируем его матрицей
+        mat = np.eye(4)
+        mat[:3, :3] = R.from_euler('xyz', current_rotation, degrees=True).as_matrix()
+        mat[:3, 3] = current_origin
+        actor.user_matrix = mat
 
-        # Пересчитываем лучи света
+        # Пересчитываем лучи
         self.update_scene()
+
+    # Точка входа для изменения параметров формы (с дебаунсом для хостинга)
+    def on_shape_param_change(self, *args, **kwargs):
+        if getattr(self, '_loading_state', False):
+            return
+        if self._debounce_timer is not None:
+            self._debounce_timer.cancel()
+        loop = asyncio.get_event_loop()
+        self._debounce_timer = loop.call_later(self._debounce_delay, self.update_object_shape)
+
+    # Точка входа для параметров трансформации (БЕЗ задержки для плавного скольжения)
+    def on_transform_param_change(self, *args, **kwargs):
+        if getattr(self, '_loading_state', False):
+            return
+        self.update_object_transform()
+
+    def on_temp_change(self, *args, **kwargs):
+        """Обработка движения временных слайдеров позиции."""
+        self.state.param_pos_x = float(float(self.state.temp_last_pos_x) + kwargs["temp_pos_delta_x"])
+        self.state.param_pos_y = float(float(self.state.temp_last_pos_y) + kwargs["temp_pos_delta_y"])
+        self.state.param_pos_z = float(float(self.state.temp_last_pos_z) + kwargs["temp_pos_delta_z"])
+        self.update_object_transform()
 
     # Обработчик изменения любого параметра (кроме temp)
     def on_param_change(self, *args, **kwargs):
@@ -892,26 +945,6 @@ class OpticsAppController:
             self._debounce_delay,
             lambda: self.update_selected_object(key=key)
         )
-
-    # Обработчик изменения временных слайдеров – обновляет объект без задержки
-    def on_temp_change(self, *args, **kwargs):
-        key = kwargs.get('key')
-
-        setattr(self.state, f"param_pos_x", float(float(getattr(self.state, f"temp_last_pos_x")) + kwargs["temp_pos_delta_x"]))
-        setattr(self.state, f"param_pos_y", float(float(getattr(self.state, f"temp_last_pos_y")) + kwargs["temp_pos_delta_y"]))
-        setattr(self.state, f"param_pos_z", float(float(getattr(self.state, f"temp_last_pos_z")) + kwargs["temp_pos_delta_z"]))
-
-        # if key and key.startswith('temp_pos_delta_'):
-        #     print(2222)
-        #     axis = key[-1]
-        #     temp = getattr(self.state, f"temp_pos_delta_{axis}")
-        #     if temp == 0.0:
-        #         return
-        #
-        #     current = getattr(self.state, f"param_pos_{axis}")
-        #     new_val = current + temp
-        #     setattr(self.state, f"param_pos_{axis}", new_val)
-        self.update_selected_object()
 
     # Применение дельты при отпускании слайдера
     def apply_delta(self, axis):
@@ -952,35 +985,38 @@ server = get_server()
 server.client_type = "vue3"
 app = OpticsAppController(server)
 
-params_to_subscribe = [
+# --- РАЗДЕЛЬНЫЕ ПОДПИСКИ TRAME ---
+
+# 1. Параметры трансформации (Мгновенный отклик матрицы)
+transform_params = [
+    "param_pos_x", "param_pos_y", "param_pos_z",
+    "param_rot_x", "param_rot_y", "param_rot_z"
+]
+for param in transform_params:
+    server.state.change(param)(app.on_transform_param_change)
+
+# Подписка на временные слайдеры позиции (активное перетаскивание мышью)
+for axis in ["x", "y", "z"]:
+    server.state.change(f"temp_pos_delta_{axis}")(app.on_temp_change)
+
+
+# 2. Параметры формы (Пересоздание 3D-модели с Debounce)
+shape_params = [
     "param_n", "param_radius", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
     "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_current_n",
     "param_ray_class", "param_num_spectral_bands", "param_mesh_path", "param_plane_shape",
     "param_plane_width", "param_plane_height", "param_cylinder_capping",
-    "param_pos_x", "param_pos_y", "param_pos_z", "param_rot_x", "param_rot_y", "param_rot_z",
     "param_scale_uniform", "param_scale_all", "param_scale_x", "param_scale_y", "param_scale_z"
 ]
+for param in shape_params:
+    server.state.change(param)(app.on_shape_param_change)
 
-# Добавляем **_kwargs в конец каждой лямбды для перехвата служебных переменных Trame
-for param in params_to_subscribe:
-    server.state.change(param)(
-        lambda *_args, _name=param, **_kwargs: app.on_param_change(key=_name)
-    )
-
+# Свойства Френеля тоже относятся к форме объекта
 for effect in ["reflection", "refraction", "absorption"]:
-    server.state.change(f"param_{effect}_enabled")(
-        lambda *_args, _name=f"param_{effect}_enabled", **_kwargs: app.on_param_change(key=_name)
-    )
-    server.state.change(f"param_{effect}_min")(
-        lambda *_args, _name=f"param_{effect}_min", **_kwargs: app.on_param_change(key=_name)
-    )
-    server.state.change(f"param_{effect}_max")(
-        lambda *_args, _name=f"param_{effect}_max", **_kwargs: app.on_param_change(key=_name)
-    )
+    server.state.change(f"param_{effect}_enabled")(app.on_shape_param_change)
+    server.state.change(f"param_{effect}_min")(app.on_shape_param_change)
+    server.state.change(f"param_{effect}_max")(app.on_shape_param_change)
 
-# Подписка на временные переменные (для движения во время перетаскивания)
-for axis in ["x", "y", "z"]:
-    server.state.change(f"temp_pos_delta_{axis}")(app.on_temp_change)
 
 
 

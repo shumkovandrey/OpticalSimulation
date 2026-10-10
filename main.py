@@ -1274,22 +1274,33 @@ class SphereSurface:
 
     def get_mesh(self) -> pv.PolyData:
         abs_radius = abs(self.radius)
+
+        # 1. Создаем сферу. ВНИМАНИЕ: Для PyVista центр в (0,0,0) - это центр кривизны!
         mesh = pv.Sphere(radius=abs_radius, center=(0, 0, 0),
                          phi_resolution=80, theta_resolution=80)
+
+        # 2. Вычисляем стрелку прогиба (высоту сегмента чаши)
         sagitta = abs_radius - np.sqrt(max(0.0, abs_radius ** 2 - self.edge_radius ** 2))
-        R = self.radius
 
-        # Отсекаем чашу в локальных координатах
-        if R > 0:
-            mesh = mesh.clip(normal=[1, 0, 0], origin=[R - sagitta, 0, 0], invert=False)
-            # Сдвигаем вершину локальной чаши в ноль координат
-            mesh.translate([- (R - sagitta), 0, 0], inplace=True)
+        # 3. Обрезаем нужную чашу в локальных координатах PyVista
+        if self.radius > 0:
+            # Выпуклая: вершина сферы находится на её правом краю в точке (+R, 0, 0)
+            mesh = mesh.clip(normal=[1, 0, 0], origin=[abs_radius - sagitta, 0, 0], invert=False)
+
+            # СДВИГ К ВЕРШИНЕ: Чтобы локальный ноль меша (0,0,0) стал ВЕРШИНОЙ чаши,
+            # мы должны сместить всю геометрию влево на величину радиуса R!
+            mesh.translate([-abs_radius, 0, 0], inplace=True)
         else:
-            mesh = mesh.clip(normal=[-1, 0, 0], origin=[R + sagitta, 0, 0], invert=False)
-            # Сдвигаем вершину локальной чаши в ноль координат
-            mesh.translate([- (R + sagitta), 0, 0], inplace=True)
+            # Вогнутая: вершина сферы находится на её левом краю в точке (-R, 0, 0)
+            mesh = mesh.clip(normal=[-1, 0, 0], origin=[-abs_radius + sagitta, 0, 0], invert=False)
 
-        # Возвращаем ЧИСТЫЙ локальный меш (БЕЗ умножения на матрицу поворота и без мирового центра!)
+            # СДВИГ К ВЕРШИНЕ: Смещаем геометрию вправо на величину радиуса R,
+            # чтобы вершина вогнутой чаши оказалась точно в локальном нуле (0,0,0)
+            mesh.translate([abs_radius, 0, 0], inplace=True)
+
+        # Теперь локальный ноль (0,0,0) меша — это ВЕРШИНА поверхности.
+        # Когда Траме применит user_matrix(param_pos), вершина меша встанет точно в координаты ползунков,
+        # идеально совпав с физическим self.lens_origin на сервере!
         return mesh
 
     def apply_transform(self, mat):
@@ -1314,6 +1325,7 @@ class SphereSurface:
         in_abs = self.absorption_range is not None and self.absorption_range[0] is not None and self.absorption_range[
             1] is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
         return in_ref or in_refr or in_abs
+
 
 
 class CylinderSurface:
@@ -1427,14 +1439,16 @@ class CylinderSurface:
 
 class MeshSurface:
     """
-    Произвольная треугольная поверхность, загружаемая из файла или создаваемая из меша.
-    Может быть зеркальной, преломляющей или поглощающей.
+    Произвольная треугольная поверхность.
+    Математика пересечений работает в мировых координатах,
+    а get_mesh() возвращает локальную модель для GPU-рендеринга через user_matrix.
     """
 
     def __init__(self, mesh, rotation_degrees=(0, 0, 0), translation=(0, 0, 0),
                  n_inside=1.0, reflection_range=None, refraction_range=None,
                  absorption_range=None, scale_factors=(1.0, 1.0, 1.0)):
-        # Загрузка тримеша
+
+        # 1. Первичная загрузка меша
         if isinstance(mesh, str):
             self.trimesh_obj = trimesh.load(mesh)
             if isinstance(self.trimesh_obj, trimesh.Scene):
@@ -1443,109 +1457,55 @@ class MeshSurface:
             if not isinstance(self.trimesh_obj, trimesh.Trimesh):
                 raise TypeError("Файл не содержит треугольной сетки")
         elif isinstance(mesh, trimesh.Trimesh):
-            self.trimesh_obj = mesh.copy()  # Копируем, чтобы не портить исходник
+            self.trimesh_obj = mesh.copy()
         elif isinstance(mesh, pv.PolyData):
             verts, faces = mesh.points, mesh.faces.reshape(-1, 4)[:, 1:4]
             self.trimesh_obj = trimesh.Trimesh(vertices=verts, faces=faces)
         else:
             raise TypeError("mesh должен быть str, trimesh.Trimesh или pv.PolyData")
 
-        # СОХРАНЯЕМ ИСХОДНЫЕ ЭТАЛОННЫЕ НОРМАЛИ (до любых деформаций)
-        # Они нужны, чтобы при изменении ползунков не накапливалась ошибка
-        self._base_face_normals = self.trimesh_obj.face_normals.copy()
+        # 2. Центрируем меш в локальный ноль СТРОГО до масштабирования
+        center_mass = self.trimesh_obj.bounding_box.center_mass
+        self.trimesh_obj.apply_translation(-center_mass)
 
-        # Применяем масштаб ДО поворотов и переносов
+        # 3. Применяем масштабирование в локальном нуле
         if scale_factors is not None and not np.allclose(scale_factors, 1.0):
-            # ВНИМАНИЕ: Нам нужно построить правильную диагональную матрицу 4x4
             scale_mat = np.eye(4)
             scale_mat[0, 0] = scale_factors[0]
             scale_mat[1, 1] = scale_factors[1]
             scale_mat[2, 2] = scale_factors[2]
             self.trimesh_obj.apply_transform(scale_mat)
 
-            # Корректируем нормали под этот масштаб
-            self._apply_optical_normals_scale(scale_factors)
+        # СОХРАНЯЕМ ЭТУ ЛОКАЛЬНУЮ СТРУКТУРУ для графического движка WebGL
+        self._local_trimesh = self.trimesh_obj.copy()
 
-        # Применяем поворот и перенос
+        # 4. А теперь строим МИРОВУЮ структуру на сервере для физического движка лучей
+        # Применяем поворот и сдвиг в пространстве к физической копии
         rot_4x4 = np.eye(4)
         rot_4x4[:3, :3] = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
         self.trimesh_obj.apply_transform(rot_4x4)
 
-        # Корректируем нормали под поворот (просто умножаем на матрицу вращения)
-        if 'face_normals' in self.trimesh_obj._cache:
-            current_normals = self.trimesh_obj._cache['face_normals']
-            rotated_normals = current_normals @ rot_4x4[:3, :3].T
-            self.trimesh_obj._cache['face_normals'] = rotated_normals
-
         if translation is not None:
             self.trimesh_obj.apply_translation(translation)
 
+        # Физический движок использует мировую структуру
         self.mesh = self.trimesh_obj
         self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
+
         self.n = n_inside
         self.reflection_range = reflection_range
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
         self._last_hit_triangle_idx = None
 
-    def _apply_optical_normals_scale(self, scale_factors):
-        """Внутренний метод пересчета нормалей по законам оптики."""
-        # Для нормалей используется транспонированная обратная матрица масштабных коэффициентов
-        inv_scale = 1.0 / np.array(scale_factors, dtype=float)
-
-        # Модифицируем базовые нормали
-        scaled_normals = self._base_face_normals * inv_scale
-
-        # Нормализуем каждый вектор нормали (приводим к длине 1)
-        norms = np.linalg.norm(scaled_normals, axis=1, keepdims=True)
-        # Защита от деления на 0
-        norms = np.where(norms < 1e-12, 1.0, norms)
-        correct_normals = scaled_normals / norms
-
-        # Принудительно жестко записываем их в кэш trimesh.
-        # Теперь trimesh будет брать их отсюда, а не считать геометрически!
-        self.trimesh_obj._cache['face_normals'] = correct_normals
-
-    def scale(self, scale_factors):
-        """Применяет оптически корректное масштабирование к мешу относительно его центра."""
-        # Строим правильную матрицу масштаба 4x4
-        scale_mat = np.eye(4)
-        scale_mat[0, 0] = scale_factors[0]
-        scale_mat[1, 1] = scale_factors[1]
-        scale_mat[2, 2] = scale_factors[2]
-
-        center = self.mesh.bounding_box.center_mass
-        T1 = np.eye(4)
-        T1[:3, 3] = -center
-        T2 = np.eye(4)
-        T2[:3, 3] = center
-
-        # Очищаем старый кэш, чтобы trimesh не сопротивлялся изменениям
-        self.mesh._cache.clear()
-
-        # Смещаем, скейлим вершины, возвращаем
-        self.mesh.apply_transform(T2 @ scale_mat @ T1)
-
-        # Накатываем корректные нормали, рассчитанные через инверсию масштаба
-        self._apply_optical_normals_scale(scale_factors)
-
-        # Перестраиваем BVH-дерево пересечений для лучей
-        self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
-
-    def is_active(self, wavelength):
-        if wavelength is None:
-            return True
-        if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
-            return False
-        in_ref = self.reflection_range is not None and self.reflection_range[0] is not None and self.reflection_range[
-            1] is not None and (self.reflection_range[0] <= wavelength <= self.reflection_range[1])
-        in_refr = self.refraction_range is not None and self.refraction_range[0] is not None and self.refraction_range[
-            1] is not None and (self.refraction_range[0] <= wavelength <= self.refraction_range[1])
-        in_abs = self.absorption_range is not None and self.absorption_range[0] is not None and self.absorption_range[
-            1] is not None and (self.absorption_range[0] <= wavelength <= self.absorption_range[1])
-        return in_ref or in_refr or in_abs
+    def get_mesh(self):
+        """Возвращает ЧИСТЫЙ локальный меш в нуле. WebGL сам подвинет его через user_matrix."""
+        verts = self._local_trimesh.vertices
+        faces = np.hstack([np.full((len(self._local_trimesh.faces), 1), 3), self._local_trimesh.faces])
+        return pv.PolyData(verts, faces)
 
     def intersect(self, ray: Ray) -> Optional[float]:
+        # Математика пересечений выполняется в честных мировых координатах сцены
         origins = np.array([ray.origin])
         directions = np.array([ray.direction])
         locations, _, tri_indices = self.intersector.intersects_location(
@@ -1560,39 +1520,15 @@ class MeshSurface:
         return t
 
     def get_normal(self, point):
-        """Возвращает строго нормализованный вектор нормали из кэша."""
         if self._last_hit_triangle_idx is not None:
             raw_normal = self.mesh.face_normals[self._last_hit_triangle_idx]
         else:
             _, _, tri_idx = trimesh.proximity.closest_point(self.mesh, [point])
             raw_normal = self.mesh.face_normals[tri_idx[0]]
-
         norm = np.linalg.norm(raw_normal)
         if norm < 1e-12:
             return raw_normal
         return raw_normal / norm
-
-    def get_mesh(self):
-        verts = self.mesh.vertices
-        faces = np.hstack([np.full((len(self.mesh.faces), 1), 3), self.mesh.faces])
-        return pv.PolyData(verts, faces)
-
-    def rotate(self, angles_deg):
-        rot_4x4 = np.eye(4)
-        rot_4x4[:3, :3] = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
-        # Вращение вокруг локального центра (bounding box center)
-        center = self.mesh.bounding_box.center_mass
-        # Перенос в нуль, поворот, возврат
-        T1 = np.eye(4)
-        T1[:3, 3] = -center
-        T2 = np.eye(4)
-        T2[:3, 3] = center
-        self.mesh.apply_transform(T2 @ rot_4x4 @ T1)
-        self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
-
-    def translate(self, vec):
-        self.mesh.apply_translation(vec)
-        self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
 
 
 class AsphericSurface:
