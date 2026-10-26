@@ -251,7 +251,7 @@ for name, ray_list in rays_dict.items():
             'direction': np.copy(ray.direction),
             'energy': 1.0,
             'color': ray.color,
-            'wavelength': ray.wavelength,
+            # 'wavelength': ray.wavelength,
             'energy_color_type': ray.energy_color_type
         })
     initial_ray_params[name] = params
@@ -266,7 +266,7 @@ for name, ray_list in rays_dict.items():
             'direction': np.copy(ray.direction),
             'energy': 1.0,
             'color': ray.color,
-            'wavelength': ray.wavelength,
+            # 'wavelength': ray.wavelength,
             'energy_color_type': ray.energy_color_type
         })
     initial_ray_params[name] = params

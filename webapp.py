@@ -34,7 +34,7 @@ class OpticsAppController:
         self.ctrl = server.controller
 
         self.plotter = pv.Plotter(off_screen=True)
-        self.plotter.set_background("#1a1a2e")
+        self.plotter.set_background("black")
         self.plotter.add_axes(color="white")
         self.plotter.enable_terrain_style()
         self.plotter.camera.roll = 0
@@ -52,7 +52,7 @@ class OpticsAppController:
             mode="simple",
             pool=self.pool,
             line_width=1,
-            min_alpha=0.05,
+            min_alpha=0.00000005,
             gamma=1,
         )
         self.ray_tracer.mode.energy_color_type = 0
@@ -542,13 +542,18 @@ class OpticsAppController:
         if mode == "tree":
             self.ray_tracer.set_mode("tree")
             self.ray_tracer.mode.max_depth = 30
-            self.ray_tracer.mode.total_limit = 1000
-            self.ray_tracer.mode.offset_distance = 0.001
+            self.ray_tracer.mode.total_limit = 2000
+            self.ray_tracer.mode.offset_distance = 0.005
+            self.ray_tracer.cloud.gamma = 0.9
             self.ray_tracer.mode.use_polarization_color = False
         else:
             self.ray_tracer.set_mode("simple")
             self.ray_tracer.mode.max_bounces = 100
-            self.ray_tracer.mode.offset_distance = 0.001
+            self.ray_tracer.mode.offset_distance = 0.005
+            self.ray_tracer.cloud.gamma = 1
+
+        # СТРОГО ВЫСТАВЛЯЕМ ЕДИНЫЙ РЕЖИМ ДЛЯ ОБОИХ АЛГОРИТМОВ
+        self.ray_tracer.mode.energy_color_type = 2
         self.update_scene()
 
     def update_scene(self):
@@ -598,6 +603,7 @@ class OpticsAppController:
                     # Принудительно выставляем толщину линий обратно в 4 пикселя (или любое ваше значение)
                     # Это заставит WebGL на клиенте перерисовать линии толстыми
                     actor.GetProperty().SetLineWidth(3)
+                    actor.GetProperty().SetRenderLinesAsTubes(True)
 
                     # Сигналы обновления для веб-контекста
                     actor.mapper.dataset.Modified()
@@ -615,7 +621,7 @@ class OpticsAppController:
                         rgba=True,
                         opacity="linear",
                         line_width=2.5,
-                        render_lines_as_tubes=False,
+                        render_lines_as_tubes=True,
                         name="traced_rays_geometry"
                     )
 

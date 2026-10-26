@@ -121,7 +121,49 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
 
     n1, n2 = ray.current_n, n_next
 
-    # Локальный базис плоскости падения
+    # Получаем комплексные амплитуды Френеля из fast_math.py
+    r_s, r_p, t_s, t_p = fresnel_amplitudes(n1, n2, cos_i)
+
+    # Вычисляем честный коэффициент отражения по энергии R
+    # (квадрат модуля комплексной амплитуды отражения)
+    R_s = abs(r_s) ** 2
+    R_p = abs(r_p) ** 2
+    R_coeff = 0.5 * (R_s + R_p)
+
+    # Проверка на полное внутреннее отражение (ПВО) или явный запрет преломления
+    eta = n1 / n2
+    sin2_t = (eta ** 2) * (1.0 - cos_i ** 2)
+    is_tir = (sin2_t >= 1.0)
+
+    if is_tir:
+        R_coeff = 1.0
+        T_coeff = 0.0
+        cos_t = 0.0
+        allow_refraction = False
+    else:
+        cos_t = np.sqrt(1.0 - sin2_t)
+        # Строгий закон сохранения энергии волнового фронта:
+        T_coeff = 1.0 - R_coeff
+
+    # Корректировка флагами объектов сцены
+    if not allow_reflection and not allow_refraction:
+        return []
+    if allow_reflection and not allow_refraction:
+        R_coeff, T_coeff = 1.0, 0.0
+    elif not allow_reflection and allow_refraction:
+        R_coeff, T_coeff = 0.0, 1.0
+
+    # Направления дочерних лучей
+    reflected_dir = ray.direction - 2 * np.dot(ray.direction, normal) * normal
+    reflected_dir /= np.linalg.norm(reflected_dir)
+
+    if not is_tir:
+        refracted_dir = eta * ray.direction + (eta * cos_i - cos_t) * normal
+        refracted_dir /= np.linalg.norm(refracted_dir)
+    else:
+        refracted_dir = reflected_dir.copy()
+
+    # Локальный базис для поляризации
     s_dir = np.cross(normal, ray.direction)
     if np.linalg.norm(s_dir) < 1e-10:
         s_dir = np.array([0.0, 1.0, 0.0])
@@ -129,105 +171,58 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
     p_dir = np.cross(ray.direction, s_dir)
     p_dir /= np.linalg.norm(p_dir)
 
-    if ray.polarization is not None:
-        E_s = np.dot(ray.polarization, s_dir)
-        E_p = np.dot(ray.polarization, p_dir)
-    else:
-        E_s = complex(1.0, 0.0)
-        E_p = complex(0.0, 0.0)
-
-    r_s, r_p, t_s, t_p = fresnel_amplitudes(n1, n2, cos_i)
-
-    if not allow_reflection and not allow_refraction:
-        return []
-    if allow_reflection and not allow_refraction:
-        r_s, r_p = -1.0 + 0j, 1.0 + 0j
-        t_s, t_p = 0j, 0j
-    elif not allow_reflection and allow_refraction:
-        t_s, t_p = 1.0 + 0j, 1.0 + 0j
-        r_s, r_p = 0j, 0j
+    # if ray.polarization is not None:
+    #     E_s = np.dot(ray.polarization, s_dir)
+    #     E_p = np.dot(ray.polarization, p_dir)
+    # else:
+    #     E_s = complex(1.0, 0.0)
+    #     E_p = complex(0.0, 0.0)
 
     new_rays = []
 
-    # Отражённый луч
-    if allow_reflection and (abs(r_s) > 1e-9 or abs(r_p) > 1e-9):
-        new_E_s = r_s * E_s
-        new_E_p = r_p * E_p
-        energy = abs(new_E_s) ** 2 + abs(new_E_p) ** 2
-        if energy > 1e-9:
-            reflected_dir = ray.direction - 2 * np.dot(ray.direction, normal) * normal
-            new_pol = new_E_s * s_dir + new_E_p * p_dir
-
-            # ИСПРАВЛЕНИЕ: Передаем параметры ИМЕНОВАННО во избежание сдвига позиций в пуле
+    # 1. ОТРАЖЁННЫЙ ЛУЧ
+    if allow_reflection and R_coeff > 1e-6:
+        reflected_energy = ray.energy * R_coeff
+        if reflected_energy > 1e-6:
             if pool:
                 new_ray = pool.acquire(
-                    origin=start_point + EPS * reflected_dir,
-                    direction=reflected_dir,
-                    energy=energy,
-                    current_n=n1,
-                    color=ray.color,
-                    energy_color_type=ray.energy_color_type,
-                    wavelength=ray.wavelength,
-                    polarization=new_pol,
-                    ray_class=type(ray)
+                    origin=start_point + EPS * reflected_dir, direction=reflected_dir,
+                    energy=reflected_energy, current_n=n1, color=ray.color,
+                    energy_color_type=ray.energy_color_type, wavelength=ray.wavelength,
                 )
             else:
                 new_ray = type(ray)(
-                    origin=start_point + EPS * reflected_dir,
-                    direction=reflected_dir,
-                    energy=energy,
-                    current_n=n1,
-                    color=ray.color,
-                    wavelength=ray.wavelength,
-                    energy_color_type=ray.energy_color_type,
-                    polarization=new_pol
+                    origin=start_point + EPS * reflected_dir, direction=reflected_dir,
+                    energy=reflected_energy, current_n=n1, color=ray.color,
+                    wavelength=ray.wavelength, energy_color_type=ray.energy_color_type,
                 )
             if use_polarization_color:
                 new_ray.update_color_from_polarization()
             new_rays.append(new_ray)
 
-    # Преломлённый луч
-    if allow_refraction and (abs(t_s) > 1e-9 or abs(t_p) > 1e-9):
-        new_E_s = t_s * E_s
-        new_E_p = t_p * E_p
-        energy = abs(new_E_s) ** 2 + abs(new_E_p) ** 2
-        if energy > 1e-9:
-            eta = n1 / n2
-            cos_t = np.sqrt(max(0.0, 1.0 - (eta ** 2) * (1.0 - cos_i ** 2)))
-            refracted_dir = eta * ray.direction + (eta * cos_i - cos_t) * normal
-            refracted_dir /= np.linalg.norm(refracted_dir)
-            new_pol = new_E_s * s_dir + new_E_p * p_dir
-
-            # ИСПРАВЛЕНИЕ: Передаем параметры ИМЕНОВАННО во избежание сдвига позиций в пуле
+    # 2. ПРЕЛОМЛЕННЫЙ ЛУЧ
+    if allow_refraction and T_coeff > 1e-6:
+        refracted_energy = ray.energy * T_coeff
+        if refracted_energy > 1e-6:
             if pool:
                 new_ray = pool.acquire(
-                    origin=start_point + EPS * refracted_dir,
-                    direction=refracted_dir,
-                    energy=energy,
-                    current_n=n2,
-                    color=ray.color,
-                    energy_color_type=ray.energy_color_type,
-                    wavelength=ray.wavelength,
-                    polarization=new_pol,
+                    origin=start_point + EPS * refracted_dir, direction=refracted_dir,
+                    energy=refracted_energy, current_n=n2, color=ray.color,
+                    energy_color_type=ray.energy_color_type, wavelength=ray.wavelength,
                     ray_class=type(ray)
                 )
             else:
                 new_ray = type(ray)(
-                    origin=start_point + EPS * refracted_dir,
-                    direction=refracted_dir,
-                    energy=energy,
-                    current_n=n2,
-                    color=ray.color,
-                    wavelength=ray.wavelength,
-                    energy_color_type=ray.energy_color_type,
-                    polarization=new_pol
+                    origin=start_point + EPS * refracted_dir, direction=refracted_dir,
+                    energy=refracted_energy, current_n=n2, color=ray.color,
+                    wavelength=ray.wavelength, energy_color_type=ray.energy_color_type,
                 )
-
             if use_polarization_color:
                 new_ray.update_color_from_polarization()
             new_rays.append(new_ray)
 
     return new_rays
+
 
 
 def trace_ray_tree(ray: Ray, elements: List, max_depth: int,
@@ -392,7 +387,7 @@ class TreeMode(TraceMode):
     """
     def __init__(self,
                  max_depth: int = 20,
-                 min_energy: float = 0.01,
+                 min_energy: float = 0,
                  offset_distance: float = 0.001,
                  use_polarization_color: bool = False,
                  total_limit: int = 5000,
@@ -444,8 +439,7 @@ class Ray:
                  energy=1.0, current_n=1.0,
                  color="yellow",
                  energy_color_type=2,
-                 wavelength=None,
-                 polarization=None):          # ← теперь трёхмерный комплексный вектор
+                 wavelength=None):          # ← теперь трёхмерный комплексный вектор
         self.origin = np.array(origin, dtype=float)
         self.direction = np.array(direction, dtype=float)
 
@@ -459,30 +453,6 @@ class Ray:
         self.color = color
         self.energy_color_type = energy_color_type
         self.wavelength = wavelength
-        if polarization is not None:
-            self.polarization = np.array(polarization, dtype=complex)
-        else:
-            self.polarization = None
-
-    def update_color_from_polarization(self):
-        # Если это дисперсионный луч, поляризация НЕ ДОЛЖНА перекрашивать его в белый!
-        if isinstance(self, DispersiveRay):
-            if self.wavelength is not None:
-                self.color = self.wavelength_to_rgb(self.wavelength)
-                return
-
-        if self.polarization is None:
-            return
-        E = self.polarization
-        I_y = abs(E[1]) ** 2
-        I_z = abs(E[2]) ** 2
-        total = I_y + I_z
-        if total < 1e-9:
-            self.color = (1.0, 1.0, 1.0)
-        else:
-            r = I_y / total
-            b = I_z / total
-            self.color = (r, 0.0, b)
 
 
 class DispersiveRay(Ray):
@@ -535,49 +505,50 @@ class DispersiveRay(Ray):
         return (R * factor, G * factor, B * factor)
 
 
-class WhiteRay(Ray):
+class WhiteRay:
     """
-    Класс луча белого света, полностью интегрированный в систему RayPool.
-    До первого взаимодействия ведет себя как один луч белого цвета.
+    Чистый контейнер для пучка спектральных лучей.
+    Сам не участвует в трассировке, а сразу разворачивается в список DispersiveRay.
     """
-
-    def __init__(self, origin, direction, num_spectral_bands=7, pool=None, **kwargs):
-        kwargs['color'] = (1.0, 1.0, 1.0)
-        super().__init__(origin, direction, **kwargs)
+    def __init__(self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, energy_color_type=2, **kwargs):
+        self.origin = np.array(origin, dtype=float)
+        self.direction = np.array(direction, dtype=float)
+        self.direction /= np.linalg.norm(self.direction)
+        self.energy = energy
+        self.current_n = current_n
+        self.energy_color_type = energy_color_type
+        self.num_spectral_bands = num_spectral_bands
         self.spectral_rays = []
 
-        # Если при самом первом создании передан пул, сразу готовим спектр
-        if pool:
-            self.reinit_spectral_rays(num_spectral_bands, pool)
-
-    def reinit_spectral_rays(self, num_spectral_bands: int, pool: RayPool):
-        """Пересобирает или обновляет массив спектральных лучей, забирая их из пула."""
-        # На всякий случай очищаем старые (хотя release() делает это автоматически)
-        self.spectral_rays.clear()
-
-        wavelengths = np.linspace(400.0, 700.0, num_spectral_bands)
-        sub_energy = self.energy / num_spectral_bands
+    def generate_rays(self, pool=None) -> List[DispersiveRay]:
+        """Генерирует спектральные составляющие."""
+        rays = []
+        wavelengths = np.linspace(400.0, 700.0, self.num_spectral_bands)
+        sub_energy = self.energy / self.num_spectral_bands
 
         for wl in wavelengths:
-            # Запрашиваем DispersiveRay напрямую из пула
-            sub_ray = pool.acquire(
-                origin=self.origin,
-                direction=self.direction,
-                energy=sub_energy,
-                current_n=self.current_n,
-                energy_color_type=self.energy_color_type,
-                wavelength=wl,
-                ray_class=DispersiveRay
-            )
-            self.spectral_rays.append(sub_ray)
+            if pool:
+                sub_ray = pool.acquire(
+                    origin=self.origin.copy(),
+                    direction=self.direction.copy(),
+                    energy=sub_energy,
+                    current_n=self.current_n,
+                    energy_color_type=self.energy_color_type,
+                    wavelength=wl,
+                    ray_class=DispersiveRay
+                )
+            else:
+                sub_ray = DispersiveRay(
+                    origin=self.origin.copy(),
+                    direction=self.direction.copy(),
+                    energy=sub_energy,
+                    current_n=self.current_n,
+                    energy_color_type=self.energy_color_type,
+                    wavelength=wl
+                )
+            rays.append(sub_ray)
+        return rays
 
-    def update_position(self, origin, direction):
-        """Синхронизация положений, если луч перемещается до удара."""
-        self.origin[:] = origin
-        self.direction[:] = direction
-        for r in self.spectral_rays:
-            r.origin[:] = origin
-            r.direction[:] = direction
 
 
 class RayPool:
@@ -645,17 +616,14 @@ class RayPool:
         return ray
 
     def release(self, ray: Ray):
-        """Определяет тип луча и возвращает его (и его под-лучи) в нужную корзину пула."""
+        """Определяет тип луча и возвращает его в нужную корзину пула."""
         if ray is None:
             return
 
         ray_class = type(ray)
-
-        # Если возвращаем белый луч — сначала рекурсивно освобождаем его спектральные составляющие
-        if ray_class is WhiteRay and hasattr(ray, 'spectral_rays'):
-            for sub_ray in ray.spectral_rays:
-                self.release(sub_ray)
-            ray.spectral_rays.clear()
+        # Если это контейнер WhiteRay, его под-лучи уже освобождены в trace_all/render
+        if ray_class is WhiteRay:
+            return
 
         if ray_class not in self.pools:
             self.pools[ray_class] = []
@@ -671,7 +639,7 @@ class RayCloud:
     def __init__(self, plotter: pv.Plotter,
                  default_color="yellow",
                  line_width: float = 2.0,
-                 min_alpha: float = 0.05,
+                 min_alpha: float = 0,
                  gamma: float = 0.3):
         self.plotter = plotter
         self.default_color = default_color
@@ -705,6 +673,7 @@ class RayCloud:
             return np.clip(energy, 0.0, 1.0)
         elif etype == 2:
             return max(self.min_alpha, energy ** self.gamma)
+            # return 0.05
         else:
             return 1.0
 
@@ -826,14 +795,25 @@ class RayTracer:
     # -----------------------------------------------------------------
     def trace_all(self) -> List[Segment]:
         """
-        Прогоняет все зарегистрированные лучи (включая лучи от эмиттеров)
-        через текущий режим трассировки.
-        Возвращает плоский список Segment, готовый к визуализации.
+        Прогоняет все зарегистрированные лучи через текущий режим трассировки.
         """
-        # Сначала собираем лучи от эмиттеров (если есть)
+        # Сначала собираем лучи от эмиттеров
         for emitter in self.emitters:
             for ray in emitter.emit():
                 self.rays.append(ray)
+
+        # Распаковываем контейнеры белого света на отдельные DispersiveRay до симуляции
+        unpacked_rays = []
+        for ray in self.rays:
+            if isinstance(ray, WhiteRay):
+                # Энергия честно поделится внутри generate_rays по спектру!
+                spectral = ray.generate_rays(pool=self.pool)
+                unpacked_rays.extend(spectral)
+            else:
+                unpacked_rays.append(ray)
+
+        # Перезаписываем список лучей симуляции
+        self.rays = unpacked_rays
 
         all_segments = []
         for ray in self.rays:
@@ -844,9 +824,9 @@ class RayTracer:
 
     def render(self):
         segments = self.trace_all()
-        energy_type = self._mode.energy_color_type
-        self.cloud.update(segments, energy_color_type=energy_type)
+        self.cloud.update(segments, energy_color_type=self._mode.energy_color_type)
 
+        # Возвращаем все лучи (включая распакованные спектральные) обратно в пул
         if self.pool:
             for ray in self.rays:
                 self.pool.release(ray)
@@ -1151,10 +1131,10 @@ class PlaneSurface:
             # Строим локальный прямоугольник в плоскости YZ (так как базовая нормаль)
             hu, hv = self.width / 2.0, self.height / 2.0
             vertices = np.array([
-                [0.0, -hu, -hv],
-                [0.0, hu, -hv],
-                [0.0, hu, hv],
-                [0.0, -hu, hv]
+                [0.0, -hv, -hu],
+                [0.0, hv, -hu],
+                [0.0, hv, hu],
+                [0.0, -hv, hu]
             ], dtype=np.float32)
             faces = np.array([4, 0, 1, 2, 3], dtype=np.int32)
             return pv.PolyData(vertices, faces)
@@ -2367,45 +2347,6 @@ def find_best_hit(ray: 'Ray', elements: List) -> Optional[HitInfo]:
     return best_hit
 
 
-def run_simulation(start_ray: Ray, elements: List, max_bounces: int = 20) -> np.ndarray:
-    EPS = 1e-4  # малое смещение
-
-    path = [start_ray.origin]
-    current_ray = start_ray
-    current_n = 1.0
-
-    for _ in range(max_bounces):
-        best_t = float('inf')
-        hit_obj = None
-
-        for obj in elements:
-            t = obj.intersect(current_ray)
-            if t and t < best_t:
-                best_t = t
-                hit_obj = obj
-
-        if hit_obj is None:
-            path.append(current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE)
-            break
-
-        hit_point = current_ray.origin + current_ray.direction * best_t
-        path.append(hit_point)
-
-        normal = hit_obj.get_normal(hit_point)
-        next_n = hit_obj.n if abs(current_n - 1.0) < 1e-6 else 1.0
-        new_dir = hit_obj.interact(current_ray.direction, normal, current_n, next_n)
-
-        if new_dir is None:
-            break
-
-        # Смещаем точку вдоль нового направления, чтобы не задеть ту же поверхность
-        hit_point_safe = hit_point + EPS * new_dir
-        current_ray = Ray(hit_point_safe, new_dir)
-        current_n = next_n
-
-    return np.array(path)
-
-
 def _trace_simple(ray: 'Ray',
                   elements: List,
                   max_bounces: int = 10,
@@ -2418,56 +2359,56 @@ def _trace_simple(ray: 'Ray',
     """
     segments: List[Segment] = []
 
-    if isinstance(ray, WhiteRay) and hasattr(ray, 'spectral_rays'):
-        hit = find_best_hit(ray, elements)
+    # if isinstance(ray, WhiteRay) and hasattr(ray, 'spectral_rays'):
+    #     hit = find_best_hit(ray, elements)
+    #
+    #     if hit is None:
+    #         end_point = ray.origin + ray.direction * RAY_INFINITY_DISTANCE
+    #         segments.append(Segment(ray.origin.copy(), end_point.copy(), ray.energy, ray.color))
+    #         return segments
+    #
+    #     segments.append(Segment(ray.origin.copy(), hit.point.copy(), ray.energy, ray.color))
+    #
+    #     if hit.absorbed:
+    #         return segments
+    #
+    #     allow_reflection = hit.allow_reflection
+    #     allow_refraction = hit.allow_refraction
+    #     if prioritize_refraction and allow_refraction:
+    #         allow_reflection = False
+    #
+    #     # Трассируем спектральные лучи
+    #     for disp_ray in ray.spectral_rays:
+    #         disp_ray.origin[:] = hit.point.copy()
+    #         resolved_n_inside = get_dispersion_n(hit.n_inside, disp_ray)
+    #         n_next = resolved_n_inside if abs(disp_ray.current_n - 1.0) < 1e-6 else 1.0
+    #
+    #         # Используем split_ray для честного расчета энергии даже в simple-режиме
+    #         spawned = split_ray(
+    #             ray=disp_ray, normal=hit.normal, n_next=n_next, start_point=hit.point,
+    #             allow_reflection=allow_reflection, allow_refraction=allow_refraction,
+    #             offset_distance=offset_distance, use_polarization_color=False, pool=pool
+    #         )
+    #
+    #         # В simple режиме берем только один дочерний луч (преломленный имеет приоритет)
+    #         if spawned:
+    #             # Если их два, выберем преломленный (он обычно идет вторым в split_ray, проверим по направлению)
+    #             target_ray = spawned[-1] if len(spawned) > 1 and allow_refraction else spawned[0]
+    #
+    #             # Передаем урезанную по энергии компоненту дальше по цепочке шагов
+    #             sub_segments = _trace_simple(
+    #                 ray=target_ray, elements=elements, max_bounces=max_bounces - 1,
+    #                 offset_distance=offset_distance, prioritize_refraction=prioritize_refraction, pool=pool
+    #             )
+    #             segments.extend(sub_segments)
+    #
+    #             if pool:
+    #                 # ИСПРАВЛЕНИЕ: Освобождаем только те лучи, которые мы НЕ пустили дальше в рекурсию!
+    #                 for r in spawned:
+    #                     if r is not target_ray:
+    #                         pool.release(r)
+    #     return segments
 
-        if hit is None:
-            end_point = ray.origin + ray.direction * RAY_INFINITY_DISTANCE
-            segments.append(Segment(ray.origin.copy(), end_point.copy(), ray.energy, ray.color))
-            return segments
-
-        segments.append(Segment(ray.origin.copy(), hit.point.copy(), ray.energy, ray.color))
-
-        if hit.absorbed:
-            return segments
-
-        allow_reflection = hit.allow_reflection
-        allow_refraction = hit.allow_refraction
-        if prioritize_refraction and allow_refraction:
-            allow_reflection = False
-
-        # Трассируем спектральные лучи
-        for disp_ray in ray.spectral_rays:
-            disp_ray.origin[:] = hit.point.copy()
-            resolved_n_inside = get_dispersion_n(hit.n_inside, disp_ray)
-            n_next = resolved_n_inside if abs(disp_ray.current_n - 1.0) < 1e-6 else 1.0
-
-            # Используем split_ray для честного расчета энергии даже в simple-режиме
-            spawned = split_ray(
-                ray=disp_ray, normal=hit.normal, n_next=n_next, start_point=hit.point,
-                allow_reflection=allow_reflection, allow_refraction=allow_refraction,
-                offset_distance=offset_distance, use_polarization_color=False, pool=pool
-            )
-
-            # В simple режиме берем только один дочерний луч (преломленный имеет приоритет)
-            if spawned:
-                # Если их два, выберем преломленный (он обычно идет вторым в split_ray, проверим по направлению)
-                target_ray = spawned[-1] if len(spawned) > 1 and allow_refraction else spawned[0]
-
-                # Передаем урезанную по энергии компоненту дальше по цепочке шагов
-                sub_segments = _trace_simple(
-                    ray=target_ray, elements=elements, max_bounces=max_bounces - 1,
-                    offset_distance=offset_distance, prioritize_refraction=prioritize_refraction, pool=pool
-                )
-                segments.extend(sub_segments)
-
-                if pool:
-                    # Освобождаем неиспользованные ветви из split_ray
-                    for r in spawned:
-                        pool.release(r)
-        return segments
-
-    # ОСТАЛЬНОЙ ВАШ НЕИЗМЕНЕННЫЙ КОД ДЛЯ ОБЫЧНЫХ ЛУЧЕЙ (Ray и DispersiveRay)
     current_ray = ray
     current_n = ray.current_n
     current_from_pool = False
@@ -2573,6 +2514,7 @@ def _trace_simple(ray: 'Ray',
 
     return segments
 
+
 def _trace_recursive(ray: 'Ray',
                      elements: List,
                      depth: int,
@@ -2582,8 +2524,7 @@ def _trace_recursive(ray: 'Ray',
                      total_limit: int = 5000,
                      pool: Optional[RayPool] = None) -> List[Segment]:
     """
-    Рекурсивная трассировка с ветвлением (дерево лучей).
-    Возвращает плоский список отрезков Segment.
+    Рекурсивная трассировка дерева лучей без геометрических наложений отрезков.
     """
     segments = []
 
@@ -2593,153 +2534,97 @@ def _trace_recursive(ray: 'Ray',
         if len(segments) >= total_limit or d <= 0 or current_ray.energy < min_energy:
             return
 
+        # 1. ОБРАБОТКА КОНТЕЙНЕРА WHITE_RAY ВНУТРИ ДЕРЕВА
         if isinstance(current_ray, WhiteRay):
-            hit = find_best_hit(current_ray, elements)
-            if hit is None:
-                end = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
-                segments.append(Segment(current_ray.origin.copy(), end.copy(),
-                                        current_ray.energy, current_ray.color))
-                return
-
-            # Добавляем общий белый отрезок до геометрии
-            segments.append(Segment(current_ray.origin.copy(), hit.point.copy(),
-                                    current_ray.energy, current_ray.color))
-
-            if hit.absorbed:
-                return
-
-            allow_reflection = hit.allow_reflection
-            allow_refraction = hit.allow_refraction
-
-            # ИСПРАВЛЕНИЕ БАГА ЭНЕРГИИ:
-            # Вместо ручного перемещения подлучей без потери энергии, мы пропускаем каждый
-            # спектральный компонент через физический split_ray, который честно разделит
-            # энергию между отражением и преломлением на этой поверхности.
-            for disp_ray in current_ray.spectral_rays:
-                # Шаг 1. Синхронизируем позицию спектрального луча с точкой удара белого луча
-                disp_ray.origin[:] = hit.point.copy()
-
-                # Шаг 2. Вычисляем показатель преломления внутри объекта для конкретной длины волны
-                resolved_n_inside = get_dispersion_n(hit.n_inside, disp_ray)
-                n_next = resolved_n_inside if abs(disp_ray.current_n - 1.0) < 1e-6 else 1.0
-
-                # Шаг 3. Физически расщепляем спектральный луч на отраженную и преломленную ветви
-                # Функция split_ray сама уменьшит энергию лучей согласно формулам Френеля!
-                spawned_spectral_rays = split_ray(
-                    ray=disp_ray,
-                    normal=hit.normal,
-                    n_next=n_next,
-                    start_point=hit.point,
-                    allow_reflection=allow_reflection,
-                    allow_refraction=allow_refraction,
-                    offset_distance=offset_distance,
-                    use_polarization_color=use_polarization_color,
-                    pool=pool
-                )
-
-                # Шаг 4. Пускаем каждый получившийся дочерний луч (с урезанной энергией) дальше в рекурсию
-                for sr in spawned_spectral_rays:
-                    # Добавляем маленький соединительный отрезок в визуализацию
-                    segments.append(Segment(hit.point.copy(), sr.origin.copy(), sr.energy, sr.color))
-
-                    # Рекурсивно трассируем этот спектральный луч дальше по дереву
-                    recurse(sr, d - 1, from_pool=pool is not None)
-
-                    if pool:
-                        pool.release(sr)
+            spectral_components = current_ray.generate_rays(pool=pool)
+            for comp in spectral_components:
+                recurse(comp, d, from_pool=(pool is not None))
+                if pool:
+                    pool.release(comp)
             return
 
+        # Находим точку пересечения
         hit = find_best_hit(current_ray, elements)
-        if hit is None:
-            end = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
-            ray_color = current_ray.color
-            if isinstance(current_ray, DispersiveRay) and current_ray.wavelength is not None:
-                ray_color = current_ray.wavelength_to_rgb(current_ray.wavelength)
-            segments.append(Segment(current_ray.origin.copy(), end.copy(),
-                                    current_ray.energy, ray_color))
-            return
+
+        # Определяем цвет текущего луча для отрисовки его входящего отрезка
         ray_color = current_ray.color
         if isinstance(current_ray, DispersiveRay) and current_ray.wavelength is not None:
             ray_color = current_ray.wavelength_to_rgb(current_ray.wavelength)
-        segments.append(Segment(current_ray.origin.copy(), hit.point.copy(),
-                                current_ray.energy, ray_color))
 
+        # 2. ОТРИСОВКА ВХОДЯЩЕГО ОТРЕЗКА (СТРОГО ОДИН РАЗ НА ШАГ РЕКУРСИИ)
+        if hit is None:
+            # Луч улетает в бесконечность — рисуем финальный отрезок с текущей энергией
+            end = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
+            segments.append(Segment(current_ray.origin.copy(), end.copy(), current_ray.energy, ray_color))
+            return
+        else:
+            # Луч долетел до объекта — рисуем отрезок пути ДО точки удара с текущей энергией
+            segments.append(Segment(current_ray.origin.copy(), hit.point.copy(), current_ray.energy, ray_color))
+
+        # Если объект поглотил луч, на этом шаг рекурсии для него завершен
         if hit.absorbed:
             return
 
+        # 3. ОБРАБОТКА ТОНКОЙ ЛИНЗЫ
         if hit.is_thin_lens:
             new_dir = hit.obj.thin_lens_deflection(current_ray.direction, hit.point)
             start = hit.point + offset_distance * new_dir
+
             if pool:
-                new_ray = pool.acquire(start, new_dir,
-                                       energy=current_ray.energy,
-                                       current_n=current_ray.current_n,
-                                       color=current_ray.color,
+                new_ray = pool.acquire(start, new_dir, energy=current_ray.energy,
+                                       current_n=current_ray.current_n, color=current_ray.color,
                                        wavelength=current_ray.wavelength,
                                        energy_color_type=current_ray.energy_color_type)
             else:
-                new_ray = Ray(start, new_dir,
-                              energy=current_ray.energy,
-                              current_n=current_ray.current_n,
-                              color=current_ray.color,
-                              wavelength=current_ray.wavelength,
-                              energy_color_type=current_ray.energy_color_type)
-            ray_color = current_ray.color
-            if isinstance(current_ray, DispersiveRay) and current_ray.wavelength is not None:
-                ray_color = current_ray.wavelength_to_rgb(current_ray.wavelength)
-            segments.append(Segment(hit.point.copy(), start.copy(), current_ray.energy, ray_color))
-            recurse(new_ray, d - 1, from_pool=pool is not None)
-            if pool:  # новый луч больше не нужен
+                new_ray = Ray(start, new_dir, energy=current_ray.energy,
+                              current_n=current_ray.current_n, color=current_ray.color,
+                              wavelength=current_ray.wavelength, energy_color_type=current_ray.energy_color_type)
+
+            recurse(new_ray, d - 1, from_pool=(pool is not None))
+            if pool:
                 pool.release(new_ray)
             return
 
-        # Прозрачный проход или отражение/преломление
+        # 4. ВЗАИМОДЕЙСТВИЕ С ОПТИЧЕСКОЙ ПОВЕРХНОСТЬЮ (ФРЕНЕЛЬ / ПРОХОД)
         resolved_n_inside = get_dispersion_n(hit.n_inside, current_ray)
         n_next = resolved_n_inside if abs(current_ray.current_n - 1.0) < 1e-6 else 1.0
 
         if not hit.allow_reflection and not hit.allow_refraction:
+            # Прозрачный проход (без изменения направления и энергии)
             start = hit.point + offset_distance * current_ray.direction
             if pool:
-                new_ray = pool.acquire(start, current_ray.direction,
-                                       energy=current_ray.energy,
-                                       current_n=current_ray.current_n,
-                                       color=current_ray.color,
+                new_ray = pool.acquire(start, current_ray.direction, energy=current_ray.energy,
+                                       current_n=current_ray.current_n, color=current_ray.color,
                                        wavelength=current_ray.wavelength,
                                        energy_color_type=current_ray.energy_color_type)
             else:
-                new_ray = Ray(start, current_ray.direction,
-                              energy=current_ray.energy,
-                              current_n=current_ray.current_n,
-                              color=current_ray.color,
-                              wavelength=current_ray.wavelength,
-                              energy_color_type=current_ray.energy_color_type)
-            ray_color = current_ray.color
-            if isinstance(current_ray, DispersiveRay) and current_ray.wavelength is not None:
-                ray_color = current_ray.wavelength_to_rgb(current_ray.wavelength)
-            segments.append(Segment(hit.point.copy(), start.copy(), current_ray.energy, ray_color))
-            recurse(new_ray, d - 1, from_pool=pool is not None)
+                new_ray = Ray(start, current_ray.direction, energy=current_ray.energy,
+                              current_n=current_ray.current_n, color=current_ray.color,
+                              wavelength=current_ray.wavelength, energy_color_type=current_ray.energy_color_type)
+
+            recurse(new_ray, d - 1, from_pool=(pool is not None))
             if pool:
                 pool.release(new_ray)
             return
 
-        # Вызов split_ray с пулом
+        # Расщепляем луч на отраженный и преломленный
         new_rays = split_ray(current_ray, hit.normal, n_next, hit.point,
                              allow_reflection=hit.allow_reflection,
                              allow_refraction=hit.allow_refraction,
                              offset_distance=offset_distance,
                              use_polarization_color=use_polarization_color,
                              pool=pool)
+
+        # 5.ЗАПУСК ПОДЛУЧЕЙ В РЕКУРСИЮ
+        # Теперь мы НЕ добавляем здесь отрезки (они добавятся на следующем уровне рекурсии в начале шага #2)
         for nr in new_rays:
-            ray_color = nr.color
-            if isinstance(current_ray, DispersiveRay) and current_ray.wavelength is not None:
-                ray_color = current_ray.wavelength_to_rgb(current_ray.wavelength)
-            segments.append(Segment(hit.point.copy(), nr.origin.copy(), nr.energy, ray_color))
-            recurse(nr, d - 1, from_pool=pool is not None)
+            recurse(nr, d - 1, from_pool=(pool is not None))
             if pool:
-                pool.release(nr)  # после обработки каждого порождённого луча
+                pool.release(nr)
 
     recurse(ray, depth, from_pool=False)
     return segments
+
 
 def trace_ray(ray: Ray, elements: List, mode: str = 'tree',
               max_depth: int = 10, min_energy: float = 0.01,
