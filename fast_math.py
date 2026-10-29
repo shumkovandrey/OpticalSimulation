@@ -52,45 +52,84 @@ def fresnel_amplitudes(n1, n2, cos_i):
 # ---------- Преломление (Снеллиус) ----------
 @njit
 def refract(ray_dir, normal, n1, n2):
+    # Относительный показатель преломления
     eta = n1 / n2
+
+    # Находим скалярное произведение падающего луча и базовой нормали
     cos_i = dot(normal, ray_dir)
     actual_normal = normal.copy()
+
+    # Корректировка нормали:
     if cos_i > 0.0:
+        # Если скалярное произведение положительно, луч выходит из объекта
+        # В этом случае разворачиваем нормаль навстречу лучу
         actual_normal = -actual_normal
         cos_i = dot(actual_normal, ray_dir)
+
     cos_i = -cos_i
-    sin2_t = eta*eta * (1.0 - cos_i*cos_i)
+
+    # sin^2(t) = eta^2 * sin^2(i) = eta^2 * (1 - cos^2(i))
+    sin2_t = eta * eta * (1.0 - cos_i * cos_i)
+
+    # Проверка на Полное Внутреннее Отражение:
     if sin2_t > 1.0:
-        # Полное внутреннее отражение
+        # Возвращаем вектор идеального зеркального отражения от поверхности
         return ray_dir - 2.0 * dot(ray_dir, actual_normal) * actual_normal
+
+    # Находим косинус угла преломления по формуле: cos(t) = sqrt(1 - sin^2(t))
     cos_t = np.sqrt(max(0.0, 1.0 - sin2_t))
+
+    # Векторное уравнение преломления света
     return eta * ray_dir + (eta * cos_i - cos_t) * actual_normal
 
 # ---------- Пересечение с плоскостью ----------
 @njit
-def plane_intersect(ray_origin, ray_dir, point, normal, lens_origin, lens_axis,
+def plane_intersect(ray_origin, ray_dir, point, normal, origin, axis,
                     edge_radius, half_sizes, tangents, use_rectangular):
+
+    # 1. Проверка на параллельность луча и плоскости
     dot_dn = dot(ray_dir, normal)
     if abs(dot_dn) < 1e-6:
+        # Луч идет параллельно плоскости, пересечения нет
         return -1.0
+
+    # 2. Вычисление параметра t (расстояния до плоскости)
     t = dot(point - ray_origin, normal) / dot_dn
     if t <= 1e-6:
+        # Пересечение находится позади луча или слишком близко к источнику
         return -1.0
+
+    # 3. Нахождение точных координат точки пересечения на плоскости
     p = ray_origin + t * ray_dir
 
+    # 4. Проверка попадания точки пересечения в границы апертуры
     if use_rectangular:
-        # tangents – массив 2x3
-        u = dot(p - lens_origin, tangents[0])
-        v = dot(p - lens_origin, tangents[1])
+        # Если апертура прямоугольная
+        # Проецируем вектор от центра объекта до точки пересечения на локальные оси u и v
+        u = dot(p - origin, tangents[0])
+        v = dot(p - origin, tangents[1])
+
+        # Проверяем, не выходят ли координаты за рамки полуразмеров (с учетом погрешности 1e-6)
         if abs(u) <= half_sizes[0] + 1e-6 and abs(v) <= half_sizes[1] + 1e-6:
+            # Точка внутри прямоугольника, возвращаем расстояние
             return t
+        # Точка снаружи прямоугольника
         return -1.0
     else:
-        vec = p - lens_origin
-        proj = dot(vec, lens_axis)
+        # Иначе апертура круглая
+        vec = p - origin
+
+        # Проецируем вектор на ось направления объекта
+        proj = dot(vec, axis)
+
+        # Вычисляем расстояние от центра объекта до точки p по теореме Пифагора
         dist = np.sqrt(dot(vec, vec) - proj*proj)
+
+        # Проверяем, входит ли расстояние в радиус линзы
         if dist <= edge_radius + 1e-6:
+            # Точка внутри круга, возвращаем расстояние
             return t
+        # Точка снаружи круга
         return -1.0
 
 # ---------- Пересечение со сферой ----------
