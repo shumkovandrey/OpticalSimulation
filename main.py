@@ -18,83 +18,13 @@ from constants import (
     CAUCHY_B,
 )
 
+from utils.geometry import (
+    get_tangents,
+    calculate_rotation_matrix,
+)
+
 
 pv.global_theme.allow_empty_mesh = True
-
-
-def calculate_rotation_matrix(v_to):
-    """
-    Создает матрицу поворота, которая переводит вектор
-    """
-    v_to = np.array(v_to, dtype=float)
-    # Нормализация входного вектора (приведение к длине 1)
-    norm = np.linalg.norm(v_to)
-    if norm < 1e-10:
-        return np.eye(3)
-    v_to /= norm
-
-    v_from = np.array([1.0, 0.0, 0.0])  # Базовая ось симуляции (X)
-
-    # 1. Если векторы уже совпадают
-    if np.allclose(v_from, v_to):
-        return np.eye(3)
-
-    # 2. Если векторы противоположны (разворот на 180 градусов)
-    if np.allclose(v_from, -v_to):
-        # Поворот на 180 вокруг оси Y
-        return np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]])
-
-    # 3. Общий случай: находим ось поворота (векторное произведение)
-    # и косинус угла (скалярное произведение)
-    v = np.cross(v_from, v_to)  # Вектор оси поворота
-    c = np.dot(v_from, v_to)  # Косинус угла между векторами
-
-    # Кососимметричная матрица K
-    K = np.array([
-        [0, -v[2], v[1]],
-        [v[2], 0, -v[0]],
-        [-v[1], v[0], 0]
-    ])
-
-    # Формула Родрига для поворота вектора к вектору
-    R = np.eye(3) + K + (K @ K) * (1 / (1 + c))
-    return R
-
-
-def calculate_radius(target_f, n, thickness=0):
-    """
-    Рассчитывает радиус R для двояковыпуклой линзы.
-    Если thickness=0, используется формула тонкой линзы.
-    """
-    if thickness == 0:
-        return 2 * target_f * (n - 1)
-
-    # Коэффициенты квадратного уравнения Ax^2 + Bx + C = 0, где x = 1/R
-    A = ((n - 1) * thickness) / n
-    B = 2
-    C = -1 / (target_f * (n - 1))
-
-    # Решаем через дискриминант
-    D = B ** 2 - 4 * A * C
-    if D < 0:
-        return None  # Решения нет для такой толщины
-
-    x = (-B + np.sqrt(D)) / (2 * A)
-    return 1 / x
-
-
-def get_tangents(normal):
-    normal = np.array(normal, dtype=float)  # <-- гарантирует float
-    normal /= np.linalg.norm(normal)
-    if abs(normal[0]) < MIN_DOT_FOR_TANGENT:
-        arbitrary = np.array([1.0, 0.0, 0.0])
-    else:
-        arbitrary = np.array([0.0, 1.0, 0.0])
-    t1 = np.cross(normal, arbitrary)
-    t1 = t1.astype(float) / np.linalg.norm(t1)  # явное преобразование
-    t2 = np.cross(normal, t1)
-    t2 = t2.astype(float) / np.linalg.norm(t2)
-    return t1, t2
 
 
 def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray,
