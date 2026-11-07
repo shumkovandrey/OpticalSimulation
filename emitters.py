@@ -141,5 +141,5 @@ class BeamEmitter:
 
     def get_mesh(self) -> pv.PolyData:
         """Маленькая стрелка для визуализации излучателя."""
-        arrow = pv.Arrow(start=self.origin, direction=self.direction, scale=0.5)
+        arrow = pv.Arrow(start=(0.0, 0.0, 0.0), direction=(1.0, 0.0, 0.0), scale=0.5)
         return arrow

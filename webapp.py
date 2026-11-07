@@ -240,10 +240,8 @@ class OpticsAppController:
 
                 # Восстанавливаем классы лучей
                 if "ray_class" in params:
-                    if params["ray_class"] == "WhiteRay":
-                        params["ray_class"] = WhiteRay
-                    else:
-                        params["ray_class"] = Ray
+                    mapping = {"Ray": Ray, "DispersiveRay": DispersiveRay, "WhiteRay": WhiteRay}
+                    params["ray_class"] = mapping.get(params["ray_class"], Ray)
 
                 # Восстанавливаем оптические диапазоны (строку "Infinity" преобразуем обратно в np.inf)
                 for effect in ["reflection", "refraction", "absorption"]:
@@ -923,48 +921,6 @@ class OpticsAppController:
         self.state.param_pos_y = float(float(self.state.temp_last_pos_y) + kwargs["temp_pos_delta_y"])
         self.state.param_pos_z = float(float(self.state.temp_last_pos_z) + kwargs["temp_pos_delta_z"])
         self.update_object_transform()
-
-    # Обработчик изменения любого параметра (кроме temp)
-    def on_param_change(self, *args, **kwargs):
-        if getattr(self, '_loading_state', False):
-            return  # Блокируем триггеры при первичном выборе объекта
-
-        # Достаем имя изменившейся переменной из состояния Trame
-        # Если Trame не передал его в kwargs, берем имя из внутренней структуры события
-        key = kwargs.get('key')
-        if not key and args and isinstance(args[0], dict):
-            # В зависимости от версии Trame имя может лежать в словаре аргументов
-            key = args[0].get('key', '')
-
-        # Если имя все еще не найдено, мы временно передаем пустую строку,
-        # но ниже мы перепишем подписку, чтобы оно гарантированно было.
-
-        if key and key.startswith('param_pos_'):
-            axis = key[-1]
-            setattr(self.state, f"temp_pos_{axis}", 0.0)
-
-        # Оптимизация (Debounce)
-        if self._debounce_timer is not None:
-            self._debounce_timer.cancel()
-
-        loop = asyncio.get_event_loop()
-        # ПЕРЕДАЕМ KEY ТАКЖЕ В ДЕБАУНС, чтобы update_selected_object знал, что поменялось
-        self._debounce_timer = loop.call_later(
-            self._debounce_delay,
-            lambda: self.update_selected_object(key=key)
-        )
-
-    # Применение дельты при отпускании слайдера
-    def apply_delta(self, axis):
-        temp = getattr(self.state, f"temp_pos_{axis}")
-        if temp == 0.0:
-            return
-        current = getattr(self.state, f"param_pos_{axis}")
-        new_val = current + temp
-        setattr(self.state, f"param_pos_{axis}", new_val)
-        setattr(self.state, f"temp_pos_{axis}", 0.0)
-        # Обновляем объект (он уже обновился при движении, но теперь базовая позиция изменилась)
-        self.update_selected_object()
 
     def apply_x_delta(self):
         self.state.temp_last_pos_x = self.state.param_pos_x

@@ -1,4 +1,3 @@
-# fast_math.py
 import numpy as np
 from numba import njit
 
