@@ -9,9 +9,17 @@ from scipy.spatial.transform import Rotation as R
 
 from fast_math import plane_intersect, cylinder_intersect, refract, fresnel_amplitudes
 
+from constants import (
+    RAY_INFINITY_DISTANCE,
+    MIN_DOT_FOR_TANGENT,
+    DEFAULT_OFFSET_DISTANCE,
+    DEFAULT_MIN_ENERGY,
+    CAUCHY_A_OFFSET,
+    CAUCHY_B,
+)
+
 
 pv.global_theme.allow_empty_mesh = True
-RAY_INFINITY_DISTANCE = 100
 
 
 def calculate_rotation_matrix(v_to):
@@ -78,7 +86,7 @@ def calculate_radius(target_f, n, thickness=0):
 def get_tangents(normal):
     normal = np.array(normal, dtype=float)  # <-- гарантирует float
     normal /= np.linalg.norm(normal)
-    if abs(normal[0]) < 0.9:
+    if abs(normal[0]) < MIN_DOT_FOR_TANGENT:
         arbitrary = np.array([1.0, 0.0, 0.0])
     else:
         arbitrary = np.array([0.0, 1.0, 0.0])
@@ -91,7 +99,7 @@ def get_tangents(normal):
 
 def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray,
               allow_reflection: bool = True, allow_refraction: bool = True,
-              offset_distance: float = 0.01,
+              offset_distance: float = DEFAULT_OFFSET_DISTANCE,
               pool: Optional[RayPool] = None) -> List[Ray]:
     EPS = offset_distance
 
@@ -238,8 +246,8 @@ def get_dispersion_n(base_n: float, ray: Ray) -> float:
     lambda_mkm = ray.wavelength / 1000.0
 
     # Эмпирические коэффициенты Коши для стекла типа К8 (BK7)
-    A = base_n - 0.01  # Смещение, чтобы в центре спектра получался примерно base_n
-    B = 0.005  # Коэффициент дисперсии
+    A = base_n - CAUCHY_A_OFFSET  # Смещение, чтобы в центре спектра получался примерно base_n
+    B = CAUCHY_B  # Коэффициент дисперсии
 
     return A + B / (lambda_mkm ** 2)
 
@@ -357,7 +365,7 @@ class TreeMode(TraceMode):
     def __init__(self,
                  max_depth: int = 20,
                  min_energy: float = 0,
-                 offset_distance: float = 0.001,
+                 offset_distance: float = DEFAULT_OFFSET_DISTANCE,
                  total_limit: int = 5000,
                  energy_color_type: int = 1,
                  pool=None):
@@ -2283,7 +2291,7 @@ def find_best_hit(ray: 'Ray', elements: List) -> Optional[HitInfo]:
 def _trace_simple(ray: 'Ray',
                   elements: List,
                   max_bounces: int = 10,
-                  offset_distance: float = 0.01,
+                  offset_distance: float = DEFAULT_OFFSET_DISTANCE,
                   prioritize_refraction: bool = True,
                   pool: Optional['RayPool'] = None) -> List[Segment]:
     """
@@ -2401,8 +2409,8 @@ def _trace_simple(ray: 'Ray',
 def _trace_recursive(ray: 'Ray',
                      elements: List,
                      depth: int,
-                     min_energy: float = 0.01,
-                     offset_distance: float = 0.01,
+                     min_energy: float = DEFAULT_MIN_ENERGY,
+                     offset_distance: float = DEFAULT_OFFSET_DISTANCE,
                      total_limit: int = 5000,
                      pool: Optional[RayPool] = None) -> List[Segment]:
     """
