@@ -6,6 +6,8 @@ from typing import List, Optional, TYPE_CHECKING
 import numpy as np
 import pyvista as pv
 
+pv.global_theme.allow_empty_mesh = True
+
 from core.rays import Ray, WhiteRay, RayPool
 from core.segments import Segment
 from tracing.modes import TraceMode, SimpleMode, TreeMode

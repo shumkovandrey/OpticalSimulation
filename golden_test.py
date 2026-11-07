@@ -41,12 +41,17 @@ pv.global_theme.allow_empty_mesh = True
 
 import trimesh
 
-from main import (
-    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray,
-    SimpleMode, TreeMode, MeshSurface, HyperbolicLens,
-    PlaneSurface, SphereSurface, CylinderSurface,
-    DispersiveRay, WhiteRay, ThinLens,
-)
+from core.rays import Ray, DispersiveRay, WhiteRay, RayPool
+from surfaces.plane import PlaneSurface
+from surfaces.sphere import SphereSurface
+from surfaces.cylinder import CylinderSurface
+from surfaces.mesh import MeshSurface
+from surfaces.thin_lens import ThinLens
+from surfaces.universal_lens import UniversalLens
+from surfaces.hyperbolic_lens import HyperbolicLens
+from tracing.modes import SimpleMode, TreeMode
+from emitters import BeamEmitter
+from visualization import RayTracer
 
 
 GOLDEN_PATH = Path(__file__).resolve().parent / "golden.json"

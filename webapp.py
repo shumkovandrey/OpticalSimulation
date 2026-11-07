@@ -16,10 +16,15 @@ from scipy.spatial.transform import Rotation as R
 from pyvista.trame.ui import plotter_ui
 
 
-from main import (
-    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, MeshSurface, HyperbolicLens,
-    PlaneSurface, SphereSurface, CylinderSurface, DispersiveRay, WhiteRay
-)
+from core.rays import Ray, DispersiveRay, WhiteRay, RayPool
+from surfaces.plane import PlaneSurface
+from surfaces.sphere import SphereSurface
+from surfaces.cylinder import CylinderSurface
+from surfaces.mesh import MeshSurface
+from surfaces.universal_lens import UniversalLens
+from surfaces.hyperbolic_lens import HyperbolicLens
+from emitters import BeamEmitter
+from visualization import RayTracer
 
 # Режим отрисовки: "client" или "server"
 RENDER_MODE = "client"   # или "client"
