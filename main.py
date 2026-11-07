@@ -2,20 +2,16 @@ import trimesh
 import numpy as np
 import pyvista as pv
 from numba import njit
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple, Any
+from typing import List, Optional
 from scipy.spatial.transform import Rotation as R
 
 from fast_math import plane_intersect, cylinder_intersect, refract, fresnel_amplitudes
 
 from constants import (
     RAY_INFINITY_DISTANCE,
-    MIN_DOT_FOR_TANGENT,
     DEFAULT_OFFSET_DISTANCE,
     DEFAULT_MIN_ENERGY,
-    CAUCHY_A_OFFSET,
-    CAUCHY_B,
 )
 
 from utils.geometry import (
@@ -25,9 +21,12 @@ from utils.geometry import (
 
 from utils.color import (
     to_rgb as _to_rgb_utils,
-    wavelength_to_rgb as _wavelength_to_rgb_utils,
     energy_to_alpha,
 )
+
+from core.rays import Ray, DispersiveRay, WhiteRay, RayPool
+from core.segments import Segment, HitInfo
+from core.dispersion import get_dispersion_n
 
 
 pv.global_theme.allow_empty_mesh = True
@@ -168,64 +167,6 @@ def _sag_numba(r, R, k, coeffs):
     return sag
 
 
-def get_dispersion_n(base_n: float, ray: Ray) -> float:
-    """
-    Вычисляет показатель преломления.
-    Если луч является экземпляром DispersiveRay, применяется формула Коши.
-    Если это обычный Ray, возвращается неизменный базовый base_n.
-    """
-    # Если это НЕ DispersiveRay или у него нет длины волны — возвращаем базовый n объекта
-    if not isinstance(ray, DispersiveRay) or ray.wavelength is None:
-        return base_n
-
-    # Переводим нанометры в микрометры для формулы Коши
-    lambda_mkm = ray.wavelength / 1000.0
-
-    # Эмпирические коэффициенты Коши для стекла типа К8 (BK7)
-    A = base_n - CAUCHY_A_OFFSET  # Смещение, чтобы в центре спектра получался примерно base_n
-    B = CAUCHY_B  # Коэффициент дисперсии
-
-    return A + B / (lambda_mkm ** 2)
-
-
-# ------------------------------------------------
-# Единый контейнер для отрезка луча (результат трассировки)
-# ------------------------------------------------
-@dataclass(slots=True)
-class Segment:
-    """Один отрезок трассированного луча."""
-    start: np.ndarray          # 3-вектор начала
-    end: np.ndarray            # 3-вектор конца
-    energy: float              # энергия (0..1)
-    color: tuple               # RGB-цвет в диапазоне 0..1
-
-    # Для удобства распаковки в старом стиле (опционально)
-    def __iter__(self):
-        return iter((self.start, self.end, self.energy, self.color))
-
-
-# ------------------------------------------------
-# Результат поиска пересечения луча с элементами сцены
-# ------------------------------------------------
-@dataclass(slots=True)
-class HitInfo:
-    """Информация о пересечении луча с объектом."""
-    obj: Any                   # элемент сцены, с которым произошло пересечение
-    t: float                   # расстояние от начала луча до точки удара
-    point: np.ndarray          # точка удара (3D)
-    normal: np.ndarray         # нормаль в точке удара
-    allow_reflection: bool     # разрешено ли отражение на этой поверхности
-    allow_refraction: bool     # разрешено ли преломление на этой поверхности
-    absorbed: bool             # поглощается ли луч (полное поглощение)
-    n_inside: float            # показатель преломления материала внутри объекта (1.0 если нет)
-    is_thin_lens: bool = False # специальный флаг для тонкой линзы
-
-    def __post_init__(self):
-        # Гарантируем, что векторы имеют тип float64
-        self.point = np.asarray(self.point, dtype=np.float64)
-        self.normal = np.asarray(self.normal, dtype=np.float64)
-
-
 # ------------------------------------------------------------
 # Абстрактный базовый класс для всех режимов трассировки
 # ------------------------------------------------------------
@@ -335,187 +276,6 @@ class TreeMode(TraceMode):
             total_limit=self.total_limit,
             pool=self.pool
         )
-
-
-# ---------------------
-# Классы элементов сцены
-# ---------------------
-
-
-class Ray:
-    def __init__(
-        self,
-        origin,
-        direction,
-        energy=1.0,
-        current_n=1.0,
-        color="yellow",
-        energy_color_type=2,
-        wavelength=None,
-    ):
-
-        self.origin = np.array(origin, dtype=float)
-
-        self.direction = np.array(direction, dtype=float)
-        if np.linalg.norm(self.direction) < 1e-12:
-            # Если длина вектора близка к нулю, то заменяем его на [1.0, 0.0, 0.0]
-            self.direction = np.array([1.0, 0.0, 0.0])
-        else:
-            # Нормализация вектора направления луча
-            self.direction /= np.linalg.norm(self.direction)
-
-        self.energy = energy
-        self.current_n = current_n
-        self.color = color
-        self.energy_color_type = energy_color_type
-        self.wavelength = wavelength
-
-
-class DispersiveRay(Ray):
-    """
-    Класс луча, поддерживающий дисперсию (зависимость показателя преломления от длины волны).
-    Wavelength передается в нанометрах (например, 550).
-    """
-
-    def __init__(self, origin, direction, wavelength=550.0, **kwargs):
-        # Если в kwargs передан current_n, используем его, иначе рассчитываем для вакуума/воздуха (1.0)
-        current_n = kwargs.pop('current_n', 1.0)
-
-        super().__init__(
-            origin=origin,
-            direction=direction,
-            wavelength=wavelength,
-            current_n=current_n,
-            **kwargs
-        )
-
-        if wavelength is not None:
-            self.color = self.wavelength_to_rgb(wavelength)
-
-    @staticmethod
-    def wavelength_to_rgb(wavelength_nm: float) -> Tuple[float, float, float]:
-        """Перевод длины волны света в цвет формата RGB (делегат utils.color)."""
-        return _wavelength_to_rgb_utils(wavelength_nm)
-
-
-class WhiteRay:
-    """
-    Чистый контейнер для пучка спектральных лучей.
-    Сам не участвует в трассировке, а сразу разворачивается в список DispersiveRay.
-    """
-    def __init__(self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, energy_color_type=2, **kwargs):
-        self.origin = np.array(origin, dtype=float)
-        self.direction = np.array(direction, dtype=float)
-        self.direction /= np.linalg.norm(self.direction)
-        self.energy = energy
-        self.current_n = current_n
-        self.energy_color_type = energy_color_type
-        self.num_spectral_bands = num_spectral_bands
-        self.spectral_rays = []
-
-    def generate_rays(self, pool=None) -> List[DispersiveRay]:
-        """Генерирует спектральные составляющие."""
-        rays = []
-        wavelengths = np.linspace(400.0, 700.0, self.num_spectral_bands)
-        sub_energy = self.energy / self.num_spectral_bands
-
-        for wl in wavelengths:
-            if pool:
-                sub_ray = pool.acquire(
-                    origin=self.origin.copy(),
-                    direction=self.direction.copy(),
-                    energy=sub_energy,
-                    current_n=self.current_n,
-                    energy_color_type=self.energy_color_type,
-                    wavelength=wl,
-                    ray_class=DispersiveRay
-                )
-            else:
-                sub_ray = DispersiveRay(
-                    origin=self.origin.copy(),
-                    direction=self.direction.copy(),
-                    energy=sub_energy,
-                    current_n=self.current_n,
-                    energy_color_type=self.energy_color_type,
-                    wavelength=wl
-                )
-            rays.append(sub_ray)
-        return rays
-
-
-
-class RayPool:
-    """Пул переиспользуемых лучей для снижения аллокаций (с поддержкой спектрального белого света)."""
-
-    def __init__(self, initial_size=100):
-        self.pools = {}
-        self.initial_size = initial_size
-        self._ensure_pool_exists(Ray)
-
-    def _ensure_pool_exists(self, ray_class):
-        """Создает внутреннюю корзину для нового типа луча, если её нет."""
-        if ray_class not in self.pools:
-            # Для базовых типов создаем пустые заготовки
-            self.pools[ray_class] = []
-            # Заполняем дефолтными объектами (для WhiteRay это делать не нужно заранее,
-            # так как количество диапазонов num_spectral_bands инициализируется динамически)
-            if ray_class is not WhiteRay:
-                for _ in range(self.initial_size):
-                    self.pools[ray_class].append(ray_class(np.zeros(3), np.array([1.0, 0.0, 0.0])))
-
-    def acquire(self, origin, direction, energy=1.0, current_n=1.0,
-                color="yellow", energy_color_type=2, wavelength=None,
-                ray_class=Ray, num_spectral_bands=7):
-        """
-        Взять луч определенного класса из пула и инициализировать его поля.
-        """
-        self._ensure_pool_exists(ray_class)
-
-        # Вытаскиваем из пула или создаем новый экземпляр
-        if self.pools[ray_class]:
-            ray = self.pools[ray_class].pop()
-        else:
-            if ray_class is WhiteRay:
-                ray = WhiteRay(np.zeros(3), np.array([1.0, 0.0, 0.0]), num_spectral_bands=num_spectral_bands, pool=self)
-            else:
-                ray = ray_class(np.zeros(3), np.array([1.0, 0.0, 0.0]))
-
-        # Инициализируем базовые атрибуты
-        ray.origin[:] = origin
-        ray.direction[:] = direction
-        ray.direction /= np.linalg.norm(ray.direction)
-        ray.energy = energy
-        ray.current_n = current_n
-        ray.energy_color_type = energy_color_type
-        ray.wavelength = wavelength
-
-        # Специфичная сборка для DispersiveRay
-        if ray_class is DispersiveRay and wavelength is not None:
-            # Игнорируем переданный аргумент color, так как для дисперсионного луча
-            # цвет строго и монопольно диктуется его длиной волны (wavelength)
-            ray.color = ray.wavelength_to_rgb(wavelength)
-        elif ray_class is WhiteRay:
-            ray.color = (1.0, 1.0, 1.0)  # Всегда белый до первого преломления
-            ray.reinit_spectral_rays(num_spectral_bands, self)
-        else:
-            # Для обычных лучей оставляем переданный цвет
-            ray.color = color
-
-        return ray
-
-    def release(self, ray: Ray):
-        """Определяет тип луча и возвращает его в нужную корзину пула."""
-        if ray is None:
-            return
-
-        ray_class = type(ray)
-        # Если это контейнер WhiteRay, его под-лучи уже освобождены в trace_all/render
-        if ray_class is WhiteRay:
-            return
-
-        if ray_class not in self.pools:
-            self.pools[ray_class] = []
-        self.pools[ray_class].append(ray)
 
 
 class RayCloud:
