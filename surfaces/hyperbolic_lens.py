@@ -13,18 +13,16 @@ class HyperbolicLens(LensAssembly):
     """
     Плоско-гиперболическая (асферическая) линза в произвольной ориентации.
     Параметры:
-        radius_of_curvature (R) - радиус кривизны при вершине
         n - показатель преломления
         f_target - фокусное расстояние
     Коническая константа k рассчитывается автоматически на основе геометрических параметров.
     """
 
-    def __init__(self, origin, radius_of_curvature=None, rotation_degrees=(0, 0, 0),
+    def __init__(self, origin, rotation_degrees=(0, 0, 0),
                  thickness=2.0, edge_radius=3.0, n=1.5, f_target=10.0,
                  reflection_range=None, refraction_range=(0, np.inf),
                  absorption_range=None):
         self.origin = np.array(origin, dtype=float)
-        self.rotation_degrees = rotation_degrees
         self.rotation = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
         self.axis_dir = self.rotation @ np.array([1.0, 0.0, 0.0])
         self.thickness = thickness
@@ -41,7 +39,6 @@ class HyperbolicLens(LensAssembly):
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
         self._last_hit_surface = None
-        self.debug_cylinder_actor = None
 
         self._create_surfaces()
 
@@ -80,19 +77,6 @@ class HyperbolicLens(LensAssembly):
             lens_origin=[-half, 0, 0], lens_axis=[-1.0, 0.0, 0.0]
         )
 
-        # Динамический аффинный трансформ для ядра асферики
-        def front_apply_transform(m):
-            R_mat = m[:3, :3]
-            t_mat = m[:3, 3]
-            self.front.lens_origin = R_mat @ self.front.lens_origin + t_mat
-            self.front.lens_axis = R_mat @ self.front.lens_axis
-            self.front.center = R_mat @ self.front.center + t_mat
-            self.front._t1, self.front._t2 = get_tangents(self.front.lens_axis)
-            self.front._rot_local_to_world = np.column_stack([self.front.lens_axis, self.front._t1, self.front._t2])
-            self.front._rot_world_to_local = self.front._rot_local_to_world.T
-
-        self.front.apply_transform = front_apply_transform
-
         # 2. Задняя поверхность — Плоская
         self.back = PlaneSurface(
             point=[half, 0, 0], normal=[1.0, 0.0, 0.0],
@@ -117,7 +101,6 @@ class HyperbolicLens(LensAssembly):
         self.cylinder.axis_dir = mat[:3, :3] @ self.cylinder.axis_dir
 
     def rotate(self, angles_deg):
-        self.rotation_degrees = tuple(np.array(self.rotation_degrees) + np.array(angles_deg))
         rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
         self.axis_dir = rot @ self.axis_dir
         self.axis_dir /= np.linalg.norm(self.axis_dir)
@@ -155,10 +138,5 @@ class HyperbolicLens(LensAssembly):
         rim_mesh = pv.StructuredGrid(rim_x, rim_y, rim_z).extract_surface(algorithm='dataset_surface')
 
         local_mesh = front_mesh.merge(back_mesh).merge(rim_mesh)
-
-        # matrix = np.eye(4)
-        # matrix[:3, :3] = self.rotation
-        # matrix[:3, 3] = self.origin
-        # return local_mesh.transform(matrix, inplace=False)
 
         return local_mesh

@@ -147,3 +147,15 @@ class AsphericSurface(BaseSurface):
     def translate(self, vec):
         self.center += np.asarray(vec)
         self.lens_origin += np.asarray(vec)
+
+    def apply_transform(self, mat):
+        """Применяет аффинную матрицу 4x4 к вершине и оптической оси."""
+        R_mat = mat[:3, :3]
+        t_mat = mat[:3, 3]
+        self.lens_origin = R_mat @ self.lens_origin + t_mat
+        self.lens_axis = R_mat @ self.lens_axis
+        self.lens_axis /= np.linalg.norm(self.lens_axis)
+        self.center = R_mat @ self.center + t_mat
+        self._t1, self._t2 = get_tangents(self.lens_axis)
+        self._rot_local_to_world = np.column_stack([self.lens_axis, self._t1, self._t2])
+        self._rot_world_to_local = self._rot_local_to_world.T

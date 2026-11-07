@@ -2,7 +2,6 @@ import os
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
 
-import io
 import json
 import asyncio
 import numpy as np
@@ -26,8 +25,6 @@ from surfaces.hyperbolic_lens import HyperbolicLens
 from emitters import BeamEmitter
 from visualization import RayTracer
 
-# Режим отрисовки: "client" или "server"
-RENDER_MODE = "client"   # или "client"
 pv.OFF_SCREEN = True
 
 class OpticsAppController:
@@ -333,11 +330,6 @@ class OpticsAppController:
             "refraction_range": (0.0, np.inf),
             "absorption_range": None
         })
-
-        # if self.scene_objects:
-        #     first_id = self.scene_objects[0]["id"]
-        #     self.state.selected_object_id = first_id
-        #     self.on_object_selected(first_id)
         self._update_objects_list_state()
 
     def add_object(self, obj_type, name, params):
@@ -1449,16 +1441,6 @@ with SinglePageLayout(server) as layout:
                     vuetify.VDivider(class_="my-4")
                     vuetify.VSelect(label="Режим трассировки", v_model="trace_mode", items=("trace_modes",),
                                     item_title="title", item_value="value", dense=True, class_="mt-2")
-
-                    vuetify.VCardTitle("Режим рендеринга", class_="px-0", style="text-color: white")
-                    with vuetify.VBtnToggle(v_model="render_mode", mandatory=True, block=True, class_="mb-2",
-                                            color="cyan-darken-3"):
-                        with vuetify.VBtn(value="remote", style="width: 50%"):
-                            vuetify.VIcon("mdi-server", class_="mr-1")
-                            "Server"
-                        with vuetify.VBtn(value="local", style="width: 50%"):
-                            vuetify.VIcon("mdi-monitor", class_="mr-1")
-                            "Client"
 
                 # Правая колонка с 3D окном pyvista
                 # Правая колонка с 3D окном pyvista

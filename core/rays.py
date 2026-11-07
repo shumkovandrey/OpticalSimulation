@@ -69,7 +69,6 @@ class WhiteRay:
         self.current_n = current_n
         self.energy_color_type = energy_color_type
         self.num_spectral_bands = num_spectral_bands
-        self.spectral_rays = []
 
     def generate_rays(self, pool=None) -> List[DispersiveRay]:
         """Разворачивает белый луч в набор спектральных составляющих."""

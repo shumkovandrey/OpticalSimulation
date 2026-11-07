@@ -120,20 +120,16 @@ def _trace_simple(ray: 'Ray',
             sin2_t = eta * eta * (1.0 - cos_i_tir * cos_i_tir)
 
             if sin2_t >= 1.0:
-                # ТИР: остаёмся в текущей среде, отражаемся.
+                # TIR: остаёмся в текущей среде, отражаемся.
                 allow_reflection = True
                 allow_refraction = False
                 # current_n не трогаем!
             else:
                 refracted_dir = refract(current_ray.direction, hit.normal, current_n, n_next)
-                # По построению refract() возвращает не-None вне ТИР;
-                # но оставляем защиту на случай будущих правок.
-                if refracted_dir is not None:
-                    current_n = n_next
-                    new_dir = refracted_dir
-                    allow_reflection = False
-                else:
-                    allow_reflection = True
+                # По построению refract() вне TIR возвращает не-None
+                current_n = n_next
+                new_dir = refracted_dir
+                allow_reflection = False
 
         if allow_reflection:
             normal = hit.normal

@@ -37,13 +37,9 @@ class UniversalLens(LensAssembly):
         self.absorption_range = absorption_range
 
         self._create_surfaces()
-        self._calc_optical_params()
 
     def _create_surfaces(self):
         r = float(self.edge_radius)
-
-        # Минимальная технологическая толщина бокового ободка (чтобы линза не схлопывалась в ноль на краях)
-        MIN_RIM_THICKNESS = 0.5  # или self.thickness * 0.1
 
         # 1. Вычисляем стрелки прогиба (sagitta) для передней и задней поверхностей
         sag1 = 0.0
@@ -65,11 +61,11 @@ class UniversalLens(LensAssembly):
 
         # Пересчитываем параметры на основе скорректированной внутренней толщины
         half = self.internal_thickness / 2
-        edge_thickness = self.internal_thickness - (sag1 if self.R1 else 0.0) - (sag2 if self.R2 else 0.0)
+        edge_thickness = self.internal_thickness - (sag1 if self.R1 is not None else 0.0) - (sag2 if self.R2 is not None else 0.0)
         half_rim_length = edge_thickness / 2.0
 
         # Корректируем смещение центра ободка (для несимметричных крутых линз)
-        rim_center_x = (sag1 - sag2) / 2.0 if (self.R1 and self.R2) else 0.0
+        rim_center_x = (sag1 - sag2) / 2.0 if (self.R1 is not None and self.R2 is not None) else 0.0
         local_cylinder_center = np.array([rim_center_x, 0.0, 0.0])
 
         # Строим мировую матрицу трансформации 4x4
@@ -155,18 +151,7 @@ class UniversalLens(LensAssembly):
 
         local_mesh = front_mesh.merge(back_mesh).merge(rim_mesh)
 
-        # matrix = np.eye(4)
-        # matrix[:3, :3] = self.rotation
-        # matrix[:3, 3] = self.origin
-        # return local_mesh.transform(matrix, inplace=False)
         return local_mesh
-
-    def _calc_optical_params(self):
-        r1_val = self.R1 if self.R1 else 1e10
-        r2_val = -self.R2 if self.R2 else -1e10
-        inv_f = (self.n - 1) * (1 / r1_val - 1 / r2_val +
-                                ((self.n - 1) * self.thickness) / (self.n * r1_val * r2_val))
-        self.f_dist = 1 / inv_f if abs(inv_f) > 1e-10 else float('inf')
 
     def rotate(self, angles_deg):
         rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
