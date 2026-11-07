@@ -75,10 +75,6 @@ def calculate_radius(target_f, n, thickness=0):
     return 1 / x
 
 
-def normalize(vec):
-    return vec / np.linalg.norm(vec)
-
-
 def get_tangents(normal):
     normal = np.array(normal, dtype=float)  # <-- гарантирует float
     normal /= np.linalg.norm(normal)
@@ -96,7 +92,6 @@ def get_tangents(normal):
 def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray,
               allow_reflection: bool = True, allow_refraction: bool = True,
               offset_distance: float = 0.01,
-              use_polarization_color: bool = False,
               pool: Optional[RayPool] = None) -> List[Ray]:
     EPS = offset_distance
 
@@ -158,13 +153,6 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
     p_dir = np.cross(ray.direction, s_dir)
     p_dir /= np.linalg.norm(p_dir)
 
-    # if ray.polarization is not None:
-    #     E_s = np.dot(ray.polarization, s_dir)
-    #     E_p = np.dot(ray.polarization, p_dir)
-    # else:
-    #     E_s = complex(1.0, 0.0)
-    #     E_p = complex(0.0, 0.0)
-
     new_rays = []
 
     # 1. ОТРАЖЁННЫЙ ЛУЧ
@@ -183,8 +171,6 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
                     energy=reflected_energy, current_n=n1, color=ray.color,
                     wavelength=ray.wavelength, energy_color_type=ray.energy_color_type,
                 )
-            if use_polarization_color:
-                new_ray.update_color_from_polarization()
             new_rays.append(new_ray)
 
     # 2. ПРЕЛОМЛЕННЫЙ ЛУЧ
@@ -204,23 +190,9 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
                     energy=refracted_energy, current_n=n2, color=ray.color,
                     wavelength=ray.wavelength, energy_color_type=ray.energy_color_type,
                 )
-            if use_polarization_color:
-                new_ray.update_color_from_polarization()
             new_rays.append(new_ray)
 
     return new_rays
-
-
-
-def trace_ray_tree(ray: Ray, elements: List, max_depth: int,
-                   min_energy: float = 0.01, use_polarization_color=False) -> List[Tuple[np.ndarray, np.ndarray, float]]:
-    """
-    Возвращает список отрезков в виде (p1, p2, energy).
-    Глубина ограничена max_depth, лучи с энергией < min_energy отбрасываются.
-    """
-    segments = []
-    _trace_recursive(ray, elements, max_depth, min_energy, segments, use_polarization_color=use_polarization_color)
-    return segments
 
 
 @njit
@@ -282,7 +254,6 @@ class Segment:
     end: np.ndarray            # 3-вектор конца
     energy: float              # энергия (0..1)
     color: tuple               # RGB-цвет в диапазоне 0..1
-    # energy_color_type: int     # режим привязки прозрачности к энергии (0/1/2)
 
     # Для удобства распаковки в старом стиле (опционально)
     def __iter__(self):
@@ -387,7 +358,6 @@ class TreeMode(TraceMode):
                  max_depth: int = 20,
                  min_energy: float = 0,
                  offset_distance: float = 0.001,
-                 use_polarization_color: bool = False,
                  total_limit: int = 5000,
                  energy_color_type: int = 1,
                  pool=None):
@@ -400,8 +370,6 @@ class TreeMode(TraceMode):
             Порог энергии, ниже которого лучи не обрабатываются.
         offset_distance : float
             Смещение для избежания самопересечений.
-        use_polarization_color : bool
-            Если True, цвет луча вычисляется по состоянию поляризации.
         total_limit : int
             Аварийное ограничение на общее количество отрезков во всех
             рекурсивных ветвях (защита от бесконечного роста).
@@ -411,7 +379,6 @@ class TreeMode(TraceMode):
         self.max_depth = max_depth
         self.min_energy = min_energy
         self.offset_distance = offset_distance
-        self.use_polarization_color = use_polarization_color
         self.total_limit = total_limit
 
     def trace(self, ray: 'Ray', elements: List) -> List[Segment]:
@@ -421,7 +388,6 @@ class TreeMode(TraceMode):
             depth=self.max_depth,
             min_energy=self.min_energy,
             offset_distance=self.offset_distance,
-            use_polarization_color=self.use_polarization_color,
             total_limit=self.total_limit,
             pool=self.pool
         )
@@ -576,7 +542,7 @@ class RayPool:
 
     def acquire(self, origin, direction, energy=1.0, current_n=1.0,
                 color="yellow", energy_color_type=2, wavelength=None,
-                polarization=None, ray_class=Ray, num_spectral_bands=7):
+                ray_class=Ray, num_spectral_bands=7):
         """
         Взять луч определенного класса из пула и инициализировать его поля.
         """
@@ -599,11 +565,6 @@ class RayPool:
         ray.current_n = current_n
         ray.energy_color_type = energy_color_type
         ray.wavelength = wavelength
-
-        if polarization is not None:
-            ray.polarization = np.array(polarization, dtype=complex)
-        else:
-            ray.polarization = None
 
         # Специфичная сборка для DispersiveRay
         if ray_class is DispersiveRay and wavelength is not None:
@@ -933,7 +894,6 @@ class BeamEmitter:
                                                 color=self.color,
                                                 wavelength=wl,
                                                 energy_color_type=self.energy_color_type,
-                                                polarization=None,
                                                 ray_class=DispersiveRay)
                     else:
                         ray = DispersiveRay(origin=world_origin,
@@ -953,7 +913,6 @@ class BeamEmitter:
                                             color=self.color,
                                             wavelength=self.wavelength,
                                             energy_color_type=self.energy_color_type,
-                                            polarization=None,
                                             ray_class=self.ray_class,
                                             num_spectral_bands=self.num_spectral_bands)
                 else:
@@ -1057,35 +1016,6 @@ class PlaneSurface:
         self.rotation_matrix = R_part @ self.rotation_matrix
         self._apply_current_rotation()
         self.lens_axis = self.normal.copy()
-
-    def _slow_intersect(self, ray: Ray) -> Optional[float]:
-        dot_dn = np.dot(ray.direction, self.normal)
-        if abs(dot_dn) < 1e-6:
-            return None
-        t = np.dot(self.point - ray.origin, self.normal) / dot_dn
-        if t <= 1e-6:
-            return None
-
-        hit_p = ray.origin + ray.direction * t
-
-        # Прямоугольная проверка (если заданы параметры)
-        if self.half_sizes is not None and self.face_tangents is not None:
-            vec = hit_p - self.lens_origin
-            u = np.dot(vec, self.face_tangents[0])
-            v = np.dot(vec, self.face_tangents[1])
-
-            if abs(u) <= self.half_sizes[0] + 1e-6 and abs(v) <= self.half_sizes[1] + 1e-6:
-                return t
-            return None
-
-        # Круговая проверка (если прямоугольные параметры не заданы)
-        vec_to_hit = hit_p - self.lens_origin
-        projection = np.dot(vec_to_hit, self.lens_axis)
-        dist_to_axis = np.linalg.norm(vec_to_hit - projection * self.lens_axis)
-
-        if dist_to_axis <= self.edge_radius + 1e-6:
-            return t
-        return None
 
     def intersect(self, ray: Ray) -> Optional[float]:
         use_rect = (self.shape_type == "rectangle")
@@ -1917,8 +1847,6 @@ class UniversalLens:
         self.refraction_range = refraction_range
         self.absorption_range = absorption_range
 
-        self.debug_cylinder_actor = None
-
         self._create_surfaces()
         self._calc_optical_params()
 
@@ -2096,34 +2024,6 @@ class UniversalLens:
 
     def get_surfaces(self) -> List:
         return [self.front, self.back, self.cylinder]
-
-    def debug_draw_analytical_cylinder(self, plot: pv.Plotter, color="red", opacity=0.4):
-        """
-        Метод отладки. Добавляет на сцену реальный аналитический цилиндр
-        из CylinderSurface, используемый в расчете трассировки лучей.
-        """
-
-        if self.debug_cylinder_actor:
-            print("Clear")
-            plot.remove_actor(self.debug_cylinder_actor)
-
-        # Запрашиваем меш напрямую у объекта CylinderSurface
-        cylinder_mesh = self.cylinder.get_mesh()
-
-        # Добавляем на сцену как каркас (wireframe) или полупрозрачный объект
-        self.debug_cylinder_actor = plot.add_mesh(
-            cylinder_mesh,
-            color=color,
-            opacity=opacity,
-            style="wireframe",
-            line_width=2,
-            name=f"debug_cyl"
-        )
-
-        # Отрисуем ребра-границы цилиндра для наглядности длины half_rim_length
-        half_l = self.cylinder.half_length
-        c = self.cylinder.center
-        d = self.cylinder.axis_dir
 
 
 class HyperbolicLens:
@@ -2315,21 +2215,6 @@ class HyperbolicLens:
 
         return local_mesh
 
-    def debug_draw_analytical_cylinder(self, plot: pv.Plotter, color="red", opacity=0.4):
-        actor_name = f"debug_cyl_{id(self)}"
-        if actor_name in plot.actors:
-            plot.remove_actor(actor_name)
-
-        cylinder_mesh = self.cylinder.get_mesh()
-        self.debug_cylinder_actor = plot.add_mesh(
-            cylinder_mesh,
-            color=color,
-            opacity=opacity,
-            style="wireframe",
-            line_width=2,
-            name=actor_name
-        )
-
 
 # --------------------------------
 # Трассировка лучей и визуализация
@@ -2406,56 +2291,6 @@ def _trace_simple(ray: 'Ray',
     При встрече с WhiteRay автоматически разветвляет симуляцию для спектра.
     """
     segments: List[Segment] = []
-
-    # if isinstance(ray, WhiteRay) and hasattr(ray, 'spectral_rays'):
-    #     hit = find_best_hit(ray, elements)
-    #
-    #     if hit is None:
-    #         end_point = ray.origin + ray.direction * RAY_INFINITY_DISTANCE
-    #         segments.append(Segment(ray.origin.copy(), end_point.copy(), ray.energy, ray.color))
-    #         return segments
-    #
-    #     segments.append(Segment(ray.origin.copy(), hit.point.copy(), ray.energy, ray.color))
-    #
-    #     if hit.absorbed:
-    #         return segments
-    #
-    #     allow_reflection = hit.allow_reflection
-    #     allow_refraction = hit.allow_refraction
-    #     if prioritize_refraction and allow_refraction:
-    #         allow_reflection = False
-    #
-    #     # Трассируем спектральные лучи
-    #     for disp_ray in ray.spectral_rays:
-    #         disp_ray.origin[:] = hit.point.copy()
-    #         resolved_n_inside = get_dispersion_n(hit.n_inside, disp_ray)
-    #         n_next = resolved_n_inside if abs(disp_ray.current_n - 1.0) < 1e-6 else 1.0
-    #
-    #         # Используем split_ray для честного расчета энергии даже в simple-режиме
-    #         spawned = split_ray(
-    #             ray=disp_ray, normal=hit.normal, n_next=n_next, start_point=hit.point,
-    #             allow_reflection=allow_reflection, allow_refraction=allow_refraction,
-    #             offset_distance=offset_distance, use_polarization_color=False, pool=pool
-    #         )
-    #
-    #         # В simple режиме берем только один дочерний луч (преломленный имеет приоритет)
-    #         if spawned:
-    #             # Если их два, выберем преломленный (он обычно идет вторым в split_ray, проверим по направлению)
-    #             target_ray = spawned[-1] if len(spawned) > 1 and allow_refraction else spawned[0]
-    #
-    #             # Передаем урезанную по энергии компоненту дальше по цепочке шагов
-    #             sub_segments = _trace_simple(
-    #                 ray=target_ray, elements=elements, max_bounces=max_bounces - 1,
-    #                 offset_distance=offset_distance, prioritize_refraction=prioritize_refraction, pool=pool
-    #             )
-    #             segments.extend(sub_segments)
-    #
-    #             if pool:
-    #                 # ИСПРАВЛЕНИЕ: Освобождаем только те лучи, которые мы НЕ пустили дальше в рекурсию!
-    #                 for r in spawned:
-    #                     if r is not target_ray:
-    #                         pool.release(r)
-    #     return segments
 
     current_ray = ray
     current_n = ray.current_n
@@ -2568,7 +2403,6 @@ def _trace_recursive(ray: 'Ray',
                      depth: int,
                      min_energy: float = 0.01,
                      offset_distance: float = 0.01,
-                     use_polarization_color: bool = False,
                      total_limit: int = 5000,
                      pool: Optional[RayPool] = None) -> List[Segment]:
     """
@@ -2660,7 +2494,6 @@ def _trace_recursive(ray: 'Ray',
                              allow_reflection=hit.allow_reflection,
                              allow_refraction=hit.allow_refraction,
                              offset_distance=offset_distance,
-                             use_polarization_color=use_polarization_color,
                              pool=pool)
 
         # 5.ЗАПУСК ПОДЛУЧЕЙ В РЕКУРСИЮ
@@ -2672,22 +2505,6 @@ def _trace_recursive(ray: 'Ray',
 
     recurse(ray, depth, from_pool=False)
     return segments
-
-
-def trace_ray(ray: Ray, elements: List, mode: str = 'tree',
-              max_depth: int = 10, min_energy: float = 0.01,
-              offset_distance: float = 0.5, use_polarization_color=False):
-    if mode == 'simple':
-        return _trace_simple(ray, elements, max_depth, offset_distance,
-                             prioritize_refraction=True)
-    elif mode == 'tree':
-        segments = []
-        _trace_recursive(ray, elements, max_depth, min_energy, segments,
-                         total_limit=5000, offset_distance=offset_distance,
-                         use_polarization_color=use_polarization_color)
-        return segments
-    else:
-        raise ValueError("mode must be 'simple' or 'tree'")
 
 
 def visualize_scene(plotter: pv.Plotter, trajectory_list: List[np.ndarray],

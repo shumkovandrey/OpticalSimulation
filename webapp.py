@@ -10,16 +10,14 @@ import pyvista as pv
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as vuetify
-from trame.widgets import vtk as trame_vtk
 from scipy.spatial.transform import Rotation as R
 
 # Для холста
 from pyvista.trame.ui import plotter_ui
-from trame_pyvista.widgets import PyVistaRemoteLocalView
 
 
 from main import (
-    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, SimpleMode, TreeMode, MeshSurface, HyperbolicLens,
+    RayTracer, RayPool, UniversalLens, BeamEmitter, Ray, MeshSurface, HyperbolicLens,
     PlaneSurface, SphereSurface, CylinderSurface, DispersiveRay, WhiteRay
 )
 
@@ -545,7 +543,6 @@ class OpticsAppController:
             self.ray_tracer.mode.total_limit = 2000
             self.ray_tracer.mode.offset_distance = 0.005
             self.ray_tracer.cloud.gamma = 0.9
-            self.ray_tracer.mode.use_polarization_color = False
         else:
             self.ray_tracer.set_mode("simple")
             self.ray_tracer.mode.max_bounces = 100
@@ -1506,7 +1503,6 @@ with SinglePageLayout(server) as layout:
                 # Правая колонка с 3D окном pyvista
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
                     # Используем СТРОГО локальный виджет, он не генерирует картинки на сервере
-                    from pyvista.trame.ui import plotter_ui
 
                     ui_view = plotter_ui(
                         app.plotter,
