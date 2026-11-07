@@ -23,6 +23,12 @@ from utils.geometry import (
     calculate_rotation_matrix,
 )
 
+from utils.color import (
+    to_rgb as _to_rgb_utils,
+    wavelength_to_rgb as _wavelength_to_rgb_utils,
+    energy_to_alpha,
+)
+
 
 pv.global_theme.allow_empty_mesh = True
 
@@ -388,29 +394,8 @@ class DispersiveRay(Ray):
 
     @staticmethod
     def wavelength_to_rgb(wavelength_nm: float) -> Tuple[float, float, float]:
-        """Перевод длины волны света в цвет формата RGB для визуализации."""
-        if 380 <= wavelength_nm < 440:
-            R, G, B = -(wavelength_nm - 440) / (440 - 380), 0.0, 1.0
-        elif 440 <= wavelength_nm < 490:
-            R, G, B = 0.0, (wavelength_nm - 440) / (490 - 440), 1.0
-        elif 490 <= wavelength_nm < 510:
-            R, G, B = 0.0, 1.0, -(wavelength_nm - 510) / (510 - 490)
-        elif 510 <= wavelength_nm < 580:
-            R, G, B = (wavelength_nm - 510) / (580 - 510), 1.0, 0.0
-        elif 580 <= wavelength_nm < 645:
-            R, G, B = 1.0, -(wavelength_nm - 645) / (645 - 580), 0.0
-        elif 645 <= wavelength_nm <= 780:
-            R, G, B = 1.0, 0.0, 0.0
-        else:
-            R, G, B = 1.0, 1.0, 1.0
-
-        factor = 1.0
-        if 380 <= wavelength_nm < 420:
-            factor = 0.3 + 0.7 * (wavelength_nm - 380) / (420 - 380)
-        elif 700 < wavelength_nm <= 780:
-            factor = 0.3 + 0.7 * (780 - wavelength_nm) / (780 - 700)
-
-        return (R * factor, G * factor, B * factor)
+        """Перевод длины волны света в цвет формата RGB (делегат utils.color)."""
+        return _wavelength_to_rgb_utils(wavelength_nm)
 
 
 class WhiteRay:
@@ -563,25 +548,8 @@ class RayCloud:
         )
         self.actor.mapper.dataset.copy_from(pv.PolyData())  # очищаем
 
-    # ---------- вспомогательные методы ----------
-    @staticmethod
-    def _to_rgb(color):
-        from matplotlib.colors import to_rgb
-        return np.array(to_rgb(color), dtype=np.float32)
-
-    def _energy_to_alpha(self, energy: float, etype: int) -> float:
-        if etype == 0:
-            return 1.0
-        elif etype == 1:
-            return np.clip(energy, 0.0, 1.0)
-        elif etype == 2:
-            return max(self.min_alpha, energy ** self.gamma)
-            # return 0.05
-        else:
-            return 1.0
-
     def _build_rgba(self, color, alpha: float) -> np.ndarray:
-        rgb = self._to_rgb(color)
+        rgb = _to_rgb_utils(color)
         return np.array([*rgb, alpha], dtype=np.float32)
 
     # ---------- основной метод обновления ----------
@@ -602,7 +570,10 @@ class RayCloud:
             points.append(p2)
             lines.append([2, offset, offset + 1])
 
-            alpha = self._energy_to_alpha(seg.energy, energy_color_type)
+            alpha = energy_to_alpha(
+                seg.energy, energy_color_type,
+                self.min_alpha, self.gamma
+            )
             rgba = self._build_rgba(seg.color, alpha)
             rgba_list.extend([rgba, rgba])
             offset += 2
