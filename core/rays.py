@@ -146,10 +146,7 @@ class RayPool:
             ray.color = ray.wavelength_to_rgb(wavelength)
         elif ray_class is WhiteRay:
             ray.color = (1.0, 1.0, 1.0)
-            # ВНИМАНИЕ: здесь в текущем коде вызывается ray.reinit_spectral_rays(...),
-            # которого в WhiteRay нет. См. примечание в шапке шага 4.
-            # Этот путь не активируется в webapp/golden — сохраняем поведение как есть.
-            ray.reinit_spectral_rays(num_spectral_bands, self)
+            ray.num_spectral_bands = num_spectral_bands
         else:
             ray.color = color
 

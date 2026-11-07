@@ -431,6 +431,30 @@ def scenario_fresnel_energy_tree():
                        max_depth=2, min_energy=0.0)
 
 
+def scenario_plane_tir_multi_surface():
+    """
+    Многослойный ТИР в SimpleMode.
+
+    Луч стартует внутри материала (current_n=1.5), ТИРится на плоскости A,
+    отражается к плоскости B, выходит в вакуум. Проверяет, что после ТИР
+    current_n остаётся 1.5 (а не становится 1.0) — иначе на B преломление
+    будет неверным.
+    """
+    surf_A = PlaneSurface(
+        point=(1, 0, 0), normal=(1, 0, 0), n_inside=1.0,
+        edge_radius=20.0, reflection_range=None,
+        refraction_range=(0, np.inf), absorption_range=None,
+    )
+    surf_B = PlaneSurface(
+        point=(0, 5, 0), normal=(0, -1, 0), n_inside=1.0,
+        edge_radius=20.0, reflection_range=None,
+        refraction_range=(0, np.inf), absorption_range=None,
+    )
+    ray = Ray(origin=(0, 0, 0), direction=(1, 2, 0), current_n=1.5)
+    return trace_scene([surf_A, surf_B], [ray], mode="simple",
+                       max_bounces=5, prioritize_refraction=True)
+
+
 ALL_SCENARIOS = {
     "plane_refraction": scenario_plane_refraction,
     "plane_rectangle": scenario_plane_rectangle,
@@ -452,6 +476,7 @@ ALL_SCENARIOS = {
     "beam_emitter": scenario_beam_emitter,
     "tree_mode_reflections": scenario_tree_mode_reflections,
     "fresnel_energy_tree": scenario_fresnel_energy_tree,
+    "plane_tir_multi_surface": scenario_plane_tir_multi_surface,
 }
 
 

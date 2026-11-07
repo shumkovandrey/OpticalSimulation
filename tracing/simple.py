@@ -107,13 +107,33 @@ def _trace_simple(ray: 'Ray',
         if allow_refraction:
             resolved_n_inside = get_dispersion_n(hit.n_inside, current_ray)
             n_next = resolved_n_inside if abs(current_n - 1.0) < 1e-6 else 1.0
-            refracted_dir = refract(current_ray.direction, hit.normal, current_n, n_next)
-            if refracted_dir is not None:
-                current_n = n_next
-                new_dir = refracted_dir
-                allow_reflection = False
-            else:
+
+            # Явная проверка полного внутреннего отражения.
+            # На ТИР луч не может преломиться, значит current_n НЕ меняется,
+            # и мы принудительно включаем отражение (даже если prioritize_refraction
+            # его подавил).
+            normal_tir = hit.normal
+            if np.dot(normal_tir, current_ray.direction) > 0:
+                normal_tir = -normal_tir
+            cos_i_tir = -np.dot(normal_tir, current_ray.direction)
+            eta = current_n / n_next
+            sin2_t = eta * eta * (1.0 - cos_i_tir * cos_i_tir)
+
+            if sin2_t >= 1.0:
+                # ТИР: остаёмся в текущей среде, отражаемся.
                 allow_reflection = True
+                allow_refraction = False
+                # current_n не трогаем!
+            else:
+                refracted_dir = refract(current_ray.direction, hit.normal, current_n, n_next)
+                # По построению refract() возвращает не-None вне ТИР;
+                # но оставляем защиту на случай будущих правок.
+                if refracted_dir is not None:
+                    current_n = n_next
+                    new_dir = refracted_dir
+                    allow_reflection = False
+                else:
+                    allow_reflection = True
 
         if allow_reflection:
             normal = hit.normal
