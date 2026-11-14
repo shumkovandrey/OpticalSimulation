@@ -1,5 +1,8 @@
 import os
 import warnings
+
+from trame_vuetify.ui.vuetify3 import VAppLayout
+
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
 
 import json
@@ -976,10 +979,10 @@ for effect in ["reflection", "refraction", "absorption"]:
 
 
 
-with SinglePageLayout(server) as layout:
+with VAppLayout(server) as layout:
     # Заголовок убран
     # layout.title.set_text("Оптический симулятор")
-    with layout.content:
+    with vuetify.VMain():
         with vuetify.VContainer(fluid=True, classes="pa-0", style="height: 100vh; overflow: hidden;"):
             with vuetify.VRow(no_gutters=True, style="height: 100%;"):
                 # Левая колонка управления
