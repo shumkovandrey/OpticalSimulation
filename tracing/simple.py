@@ -18,11 +18,6 @@ def _trace_simple(ray: 'Ray',
                   offset_distance: float = DEFAULT_OFFSET_DISTANCE,
                   prioritize_refraction: bool = True,
                   pool: Optional['RayPool'] = None) -> List[Segment]:
-    """Однолучевая последовательная трассировка.
-
-    Полностью эквивалентна _trace_simple из main.py (шаг 5).
-    НЕ ИСПРАВЛЯЕТ известный баг обработки ТИР — это будет на шаге 8.
-    """
     segments: List[Segment] = []
 
     current_ray = ray

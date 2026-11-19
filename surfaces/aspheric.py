@@ -87,12 +87,6 @@ class AsphericSurface(BaseSurface):
 
         sag_max = self.sag(self.edge_radius) if self.edge_radius > 0 else 0.0
 
-        # Проверка: если луч почти параллелен плоскости и не попадает в апертуру
-        # (быстрый отсев для производительности)
-        if abs(dir_loc[0]) < 1e-9:
-            # Луч перпендикулярен оси, может пересечь только край, но это редко
-            # Пропускаем, чтобы не застревать
-            pass
 
         t = aspheric_intersect_numba(
             origin_loc.astype(np.float64),

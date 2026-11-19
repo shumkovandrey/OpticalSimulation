@@ -10,7 +10,6 @@ import asyncio
 import numpy as np
 import pyvista as pv
 from trame.app import get_server
-from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as vuetify
 from scipy.spatial.transform import Rotation as R
 
@@ -61,7 +60,7 @@ class OpticsAppController:
         self.ray_tracer.mode.energy_color_type = 0
         self.ray_tracer.mode.max_bounces = 100
 
-        self._debounce_delay = 0.033
+        self._debounce_delay = 0.1
         self._debounce_timer = None
 
         self._last_applied_transform = {}
@@ -145,7 +144,7 @@ class OpticsAppController:
         self.ctrl.trigger("load_scene_from_file")(self.load_scene_from_file)
         self.ctrl.trigger("export_scene")(self.export_scene)
 
-        self.create_initial_objects()
+        # self.create_initial_objects()
         self.initializing = False
 
     # ---------- Вспомогательные методы ----------
@@ -204,7 +203,6 @@ class OpticsAppController:
 
         filename = "scenes/" + filename + ".json"
 
-        import os
         if not os.path.exists(filename):
             print(f"Файл {filename} не найден.")
             return
@@ -843,11 +841,11 @@ class OpticsAppController:
             p["scale_y"] = float(self.state.param_scale_y)
             p["scale_z"] = float(self.state.param_scale_z)
             # Формируем и передаем обновленные коэффициенты масштабирования в параметры
-            if p["scale_uniform"]:
-                s_val = p["scale_all"]
-                p["scale_factors"] = (s_val, s_val, s_val)
-            else:
-                p["scale_factors"] = (p["scale_x"], p["scale_y"], p["scale_z"])
+            # if p["scale_uniform"]:
+            #     s_val = p["scale_all"]
+            #     p["scale_factors"] = (s_val, s_val, s_val)
+            # else:
+            #     p["scale_factors"] = (p["scale_x"], p["scale_y"], p["scale_z"])
         elif obj_entry["type"] == "emitter":
             p["num_rays"] = int(self.state.param_num_rays)
             p["min_offset"] = float(self.state.param_min_offset)
@@ -908,14 +906,28 @@ class OpticsAppController:
     def on_transform_param_change(self, *args, **kwargs):
         if getattr(self, '_loading_state', False):
             return
-        self.update_object_transform()
+        if self._debounce_timer is not None:
+            self._debounce_timer.cancel()
+        loop = asyncio.get_event_loop()
+        self._debounce_timer = loop.call_later(self._debounce_delay, self.update_object_transform)
+
+        # if getattr(self, '_loading_state', False):
+        #     return
+        # self.update_object_transform()
 
     def on_temp_change(self, *args, **kwargs):
         """Обработка движения временных слайдеров позиции."""
+        print(1111)
         self.state.param_pos_x = float(float(self.state.temp_last_pos_x) + kwargs["temp_pos_delta_x"])
         self.state.param_pos_y = float(float(self.state.temp_last_pos_y) + kwargs["temp_pos_delta_y"])
         self.state.param_pos_z = float(float(self.state.temp_last_pos_z) + kwargs["temp_pos_delta_z"])
-        self.update_object_transform()
+        # self.update_object_transform()
+        if getattr(self, '_loading_state', False):
+            return
+        if self._debounce_timer is not None:
+            self._debounce_timer.cancel()
+        loop = asyncio.get_event_loop()
+        self._debounce_timer = loop.call_later(self._debounce_delay, self.update_object_transform)
 
     def apply_x_delta(self):
         self.state.temp_last_pos_x = self.state.param_pos_x
@@ -995,20 +1007,20 @@ with VAppLayout(server) as layout:
                     server.state.setdefault("file_to_load", "scene_1")
 
                     with vuetify.VRow(class_="mb-2", no_gutters=True):
-                        with vuetify.VCol(cols=6, class_="pr-1"):
+                        with vuetify.VCol(cols=4, class_="pr-1"):
                             with vuetify.VBtn(color="success", block=True, size="small",
                                               click="save_dialog_visible = true"):
                                 vuetify.VIcon("mdi-content-save", class_="mr-1")
                                 "Сохранить"
-                        with vuetify.VCol(cols=6, class_="pl-1"):
+                        with vuetify.VCol(cols=4, class_="pl-1"):
                             with vuetify.VBtn(color="warning", block=True, size="small",
                                               click="load_dialog_visible = true"):
                                 vuetify.VIcon("mdi-folder-open", class_="mr-1")
                                 "Загрузить"
-                        with vuetify.VCol(cols=6, class_="pl-1"):
-                            with vuetify.VBtn(color="black", block=True, size="small",
+                        with vuetify.VCol(cols=4, class_="pl-1"):
+                            with vuetify.VBtn(color="blue", block=True, size="small",
                                               click="trigger('export_scene')"):
-                                vuetify.VIcon("mdi-folder-open", class_="mr-1")
+                                vuetify.VLabel("Экспорт", class_="mr-1")
                                 "Экспорт"
 
                     # Диалоговое окно сохранения файла
