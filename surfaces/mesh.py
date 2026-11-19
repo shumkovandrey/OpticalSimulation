@@ -5,10 +5,12 @@ import pyvista as pv
 import trimesh
 from scipy.spatial.transform import Rotation as R
 
+from surfaces.base import BaseSurface
+
 from core.rays import Ray
 
 
-class MeshSurface:
+class MeshSurface(BaseSurface):
     """
     Произвольная треугольная поверхность.
     Математика пересечений работает в мировых координатах,

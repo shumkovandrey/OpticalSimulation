@@ -917,7 +917,6 @@ class OpticsAppController:
 
     def on_temp_change(self, *args, **kwargs):
         """Обработка движения временных слайдеров позиции."""
-        print(1111)
         self.state.param_pos_x = float(float(self.state.temp_last_pos_x) + kwargs["temp_pos_delta_x"])
         self.state.param_pos_y = float(float(self.state.temp_last_pos_y) + kwargs["temp_pos_delta_y"])
         self.state.param_pos_z = float(float(self.state.temp_last_pos_z) + kwargs["temp_pos_delta_z"])
