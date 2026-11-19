@@ -12,7 +12,7 @@ from fast_math import refract
 from tracing.hit_finder import find_best_hit
 
 
-def _trace_simple(ray: 'Ray',
+def trace_simple(ray: 'Ray',
                   elements: List,
                   max_bounces: int = 10,
                   offset_distance: float = DEFAULT_OFFSET_DISTANCE,

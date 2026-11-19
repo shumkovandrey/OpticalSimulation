@@ -5,7 +5,7 @@ import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
 from core.rays import Ray
-from fast_math import cylinder_intersect
+from fast_math import cylinder_side_intersect
 from surfaces.plane import PlaneSurface
 from surfaces.base import BaseSurface
 
@@ -49,9 +49,8 @@ class CylinderSurface(BaseSurface):
 
     def intersect(self, ray: Ray) -> Optional[float]:
         # Проверяем боковую поверхность
-        t_side = cylinder_intersect(ray.origin, ray.direction,
-                                    self.center, self.axis_dir,
-                                    self.radius, self.half_length)
+        t_side = cylinder_side_intersect(ray.origin, ray.direction, self.center, self.axis_dir, self.radius,
+                                         self.half_length)
         best_t = float('inf') if t_side < 0.0 else float(t_side)
 
         # НАЧАЛО ИЗМЕНЕНИЙ: Математика пересечения с крышками

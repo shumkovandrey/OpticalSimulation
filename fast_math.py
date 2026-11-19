@@ -90,7 +90,7 @@ def plane_intersect_rectangular(ray_origin, ray_dir, point, normal, origin, tang
 
 
 @njit
-def cylinder_intersect(ray_origin, ray_dir, center, axis, radius, half_length):
+def cylinder_side_intersect(ray_origin, ray_dir, center, axis, radius, half_length):
     """
     Пересечение луча с боковой поверхностью цилиндра.
     Цилиндр задан центром основания на оси, направлением оси, радиусом и полудлиной.

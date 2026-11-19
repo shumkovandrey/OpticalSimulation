@@ -12,7 +12,7 @@ from tracing.hit_finder import find_best_hit
 from tracing.interaction import split_ray
 
 
-def _trace_recursive(ray: 'Ray',
+def trace_recursive(ray: 'Ray',
                      elements: List,
                      depth: int,
                      min_energy: float = DEFAULT_MIN_ENERGY,

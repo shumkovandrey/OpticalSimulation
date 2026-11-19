@@ -33,15 +33,9 @@ class SimpleMode(TraceMode):
 
     def trace(self, ray: 'Ray', elements: List) -> List[Segment]:
         # Импорт внутри метода, чтобы избежать цикла modes ← simple ← modes
-        from tracing.simple import _trace_simple
-        return _trace_simple(
-            ray,
-            elements,
-            max_bounces=self.max_bounces,
-            offset_distance=self.offset_distance,
-            prioritize_refraction=self.prioritize_refraction,
-            pool=self.pool,
-        )
+        from tracing.simple import trace_simple
+        return trace_simple(ray, elements, max_bounces=self.max_bounces, offset_distance=self.offset_distance,
+                            prioritize_refraction=self.prioritize_refraction, pool=self.pool)
 
 
 class TreeMode(TraceMode):
@@ -60,13 +54,6 @@ class TreeMode(TraceMode):
         self.total_limit = total_limit
 
     def trace(self, ray: 'Ray', elements: List) -> List[Segment]:
-        from tracing.recursive import _trace_recursive
-        return _trace_recursive(
-            ray,
-            elements,
-            depth=self.max_depth,
-            min_energy=self.min_energy,
-            offset_distance=self.offset_distance,
-            total_limit=self.total_limit,
-            pool=self.pool,
-        )
+        from tracing.recursive import trace_recursive
+        return trace_recursive(ray, elements, depth=self.max_depth, min_energy=self.min_energy,
+                               offset_distance=self.offset_distance, total_limit=self.total_limit, pool=self.pool)
