@@ -5,9 +5,8 @@ import pyvista as pv
 import trimesh
 from scipy.spatial.transform import Rotation as R
 
-from surfaces.base import BaseSurface
-
 from core.rays import Ray
+from surfaces.base import BaseSurface
 
 
 class MeshSurface(BaseSurface):
@@ -17,16 +16,25 @@ class MeshSurface(BaseSurface):
     а get_mesh() возвращает локальную модель для GPU-рендеринга через user_matrix.
     """
 
-    def __init__(self, mesh, rotation_degrees=(0, 0, 0), translation=(0, 0, 0),
-                 n_inside=1.0, reflection_range=None, refraction_range=None,
-                 absorption_range=None, scale_factors=(1.0, 1.0, 1.0)):
+    def __init__(
+        self,
+        mesh,
+        rotation_degrees=(0, 0, 0),
+        translation=(0, 0, 0),
+        n_inside=1.0,
+        reflection_range=None,
+        refraction_range=None,
+        absorption_range=None,
+        scale_factors=(1.0, 1.0, 1.0),
+    ):
 
         # 1. Первичная загрузка меша
         if isinstance(mesh, str):
             self.trimesh_obj = trimesh.load(mesh)
             if isinstance(self.trimesh_obj, trimesh.Scene):
                 self.trimesh_obj = trimesh.util.concatenate(
-                    [g for g in self.trimesh_obj.geometry.values() if isinstance(g, trimesh.Trimesh)])
+                    [g for g in self.trimesh_obj.geometry.values() if isinstance(g, trimesh.Trimesh)]
+                )
             if not isinstance(self.trimesh_obj, trimesh.Trimesh):
                 raise TypeError("Файл не содержит треугольной сетки")
         elif isinstance(mesh, trimesh.Trimesh):
@@ -55,7 +63,7 @@ class MeshSurface(BaseSurface):
         # 4. А теперь строим МИРОВУЮ структуру на сервере для физического движка лучей
         # Применяем поворот и сдвиг в пространстве к физической копии
         rot_4x4 = np.eye(4)
-        rot_4x4[:3, :3] = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        rot_4x4[:3, :3] = R.from_euler("xyz", rotation_degrees, degrees=True).as_matrix()
         self.trimesh_obj.apply_transform(rot_4x4)
 
         if translation is not None:
@@ -81,8 +89,7 @@ class MeshSurface(BaseSurface):
         # Математика пересечений выполняется в честных мировых координатах сцены
         origins = np.array([ray.origin])
         directions = np.array([ray.direction])
-        locations, _, tri_indices = self.intersector.intersects_location(
-            origins, directions, multiple_hits=False)
+        locations, _, tri_indices = self.intersector.intersects_location(origins, directions, multiple_hits=False)
         if len(locations) == 0:
             return None
         hit_point = locations[0]

@@ -5,25 +5,35 @@ import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
 from core.rays import Ray
-from utils.geometry import get_tangents
 from fast_math import aspheric_intersect_numba
 from surfaces.base import BaseSurface
+from utils.geometry import get_tangents
 
 
 class AsphericSurface(BaseSurface):
-    def __init__(self, center, radius, conic_constant=0.0, aspheric_coeffs=None,
-                 rotation_degrees=(0,0,0), n_inside=1.0,
-                 edge_radius=None, thickness=0.0,
-                 reflection_range=None, refraction_range=None,
-                 absorption_range=None,
-                 lens_origin=None, lens_axis=None):
+    def __init__(
+        self,
+        center,
+        radius,
+        conic_constant=0.0,
+        aspheric_coeffs=None,
+        rotation_degrees=(0, 0, 0),
+        n_inside=1.0,
+        edge_radius=None,
+        thickness=0.0,
+        reflection_range=None,
+        refraction_range=None,
+        absorption_range=None,
+        lens_origin=None,
+        lens_axis=None,
+    ):
         self.center = np.array(center, dtype=float)
         self.radius = radius
         self.k = conic_constant
         self.aspheric_coeffs = aspheric_coeffs if aspheric_coeffs else []
 
         base_axis = np.array([1.0, 0.0, 0.0])
-        rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        rot = R.from_euler("xyz", rotation_degrees, degrees=True).as_matrix()
         default_axis = rot @ base_axis
 
         self.lens_origin = np.array(lens_origin, dtype=float) if lens_origin is not None else self.center.copy()
@@ -54,12 +64,10 @@ class AsphericSurface(BaseSurface):
         else:
             discr = 1.0 - (1.0 + self.k) * c**2 * r**2
             safe_discr = np.maximum(0.0, discr)
-            sag0 = np.where(discr >= 0,
-                            (c * r**2) / (1.0 + np.sqrt(safe_discr)),
-                            np.inf)
+            sag0 = np.where(discr >= 0, (c * r**2) / (1.0 + np.sqrt(safe_discr)), np.inf)
         sag_asp = np.zeros_like(r)
         for i, A in enumerate(self.aspheric_coeffs):
-            sag_asp += A * r**(2 * (i + 1))
+            sag_asp += A * r ** (2 * (i + 1))
         return sag0 + sag_asp
 
     def sag_derivative(self, r):
@@ -69,13 +77,11 @@ class AsphericSurface(BaseSurface):
         else:
             discr = 1.0 - (1.0 + self.k) * c**2 * r**2
             safe_discr = np.maximum(0.0, discr)
-            dsag0 = np.where(discr >= 0,
-                             (c * r) / np.sqrt(safe_discr),
-                             0.0)
+            dsag0 = np.where(discr >= 0, (c * r) / np.sqrt(safe_discr), 0.0)
         dsag_asp = np.zeros_like(r)
         for i, A in enumerate(self.aspheric_coeffs):
             power = 2 * (i + 1)
-            dsag_asp += A * power * r**(power - 1)
+            dsag_asp += A * power * r ** (power - 1)
         return dsag0 + dsag_asp
 
     def intersect(self, ray: Ray) -> Optional[float]:
@@ -87,7 +93,6 @@ class AsphericSurface(BaseSurface):
 
         sag_max = self.sag(self.edge_radius) if self.edge_radius > 0 else 0.0
 
-
         t = aspheric_intersect_numba(
             origin_loc.astype(np.float64),
             dir_loc.astype(np.float64),
@@ -95,7 +100,7 @@ class AsphericSurface(BaseSurface):
             self.k,
             np.array(self.aspheric_coeffs, dtype=np.float64),
             self.edge_radius,
-            sag_max
+            sag_max,
         )
         if t < 0.0:
             return None
@@ -103,7 +108,7 @@ class AsphericSurface(BaseSurface):
 
     def get_normal(self, point: np.ndarray) -> np.ndarray:
         p_loc = self._world_to_local(point)
-        r = np.sqrt(p_loc[1]**2 + p_loc[2]**2)
+        r = np.sqrt(p_loc[1] ** 2 + p_loc[2] ** 2)
         if r < 1e-12:
             normal_loc = np.array([1.0, 0.0, 0.0])
         else:
@@ -114,7 +119,7 @@ class AsphericSurface(BaseSurface):
 
     def get_mesh(self, n_radial=40, n_azimuth=80):
         rs = np.linspace(0, self.edge_radius, n_radial)
-        phis = np.linspace(0, 2*np.pi, n_azimuth)
+        phis = np.linspace(0, 2 * np.pi, n_azimuth)
         r_grid, phi_grid = np.meshgrid(rs, phis)
         y_loc = r_grid * np.cos(phi_grid)
         z_loc = r_grid * np.sin(phi_grid)
@@ -122,7 +127,7 @@ class AsphericSurface(BaseSurface):
         x_loc = self.sag(r)
         x_loc = np.where(np.isfinite(x_loc), x_loc, 0.0)
         grid = pv.StructuredGrid(x_loc, y_loc, z_loc)
-        poly = grid.extract_surface(algorithm='dataset_surface')
+        poly = grid.extract_surface(algorithm="dataset_surface")
         matrix = np.eye(4)
         matrix[:3, :3] = self._rot_local_to_world
         matrix[:3, 3] = self.lens_origin
@@ -130,7 +135,7 @@ class AsphericSurface(BaseSurface):
         return poly
 
     def rotate(self, angles_deg):
-        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        rot = R.from_euler("xyz", angles_deg, degrees=True).as_matrix()
         v = self.center - self.lens_origin
         self.center = self.lens_origin + rot @ v
         self.lens_axis = rot @ self.lens_axis

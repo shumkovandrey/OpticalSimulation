@@ -4,20 +4,22 @@ from typing import List, Optional
 
 import numpy as np
 
-from constants import RAY_INFINITY_DISTANCE, DEFAULT_OFFSET_DISTANCE
-from core.rays import Ray, RayPool, DispersiveRay
-from core.segments import Segment
+from constants import DEFAULT_OFFSET_DISTANCE, RAY_INFINITY_DISTANCE
 from core.dispersion import get_dispersion_n
+from core.rays import DispersiveRay, Ray, RayPool
+from core.segments import Segment
 from fast_math import refract
 from tracing.hit_finder import find_best_hit
 
 
-def trace_simple(ray: 'Ray',
-                  elements: List,
-                  max_bounces: int = 10,
-                  offset_distance: float = DEFAULT_OFFSET_DISTANCE,
-                  prioritize_refraction: bool = True,
-                  pool: Optional['RayPool'] = None) -> List[Segment]:
+def trace_simple(
+    ray: "Ray",
+    elements: List,
+    max_bounces: int = 10,
+    offset_distance: float = DEFAULT_OFFSET_DISTANCE,
+    prioritize_refraction: bool = True,
+    pool: Optional["RayPool"] = None,
+) -> List[Segment]:
     segments: List[Segment] = []
 
     current_ray = ray
@@ -29,16 +31,24 @@ def trace_simple(ray: 'Ray',
 
         if hit is None:
             end_point = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
-            segments.append(Segment(
-                current_ray.origin.copy(), end_point.copy(),
-                current_ray.energy, current_ray.color,
-            ))
+            segments.append(
+                Segment(
+                    current_ray.origin.copy(),
+                    end_point.copy(),
+                    current_ray.energy,
+                    current_ray.color,
+                )
+            )
             break
 
-        segments.append(Segment(
-            current_ray.origin.copy(), hit.point.copy(),
-            current_ray.energy, current_ray.color,
-        ))
+        segments.append(
+            Segment(
+                current_ray.origin.copy(),
+                hit.point.copy(),
+                current_ray.energy,
+                current_ray.color,
+            )
+        )
 
         if hit.absorbed:
             break
@@ -51,18 +61,24 @@ def trace_simple(ray: 'Ray',
                 if current_from_pool:
                     pool.release(current_ray)
                 next_ray = pool.acquire(
-                    origin=start, direction=new_dir,
-                    energy=current_ray.energy, current_n=current_n,
-                    color=current_ray.color, wavelength=current_ray.wavelength,
+                    origin=start,
+                    direction=new_dir,
+                    energy=current_ray.energy,
+                    current_n=current_n,
+                    color=current_ray.color,
+                    wavelength=current_ray.wavelength,
                     energy_color_type=current_ray.energy_color_type,
                     ray_class=type(current_ray),
                 )
                 current_from_pool = True
             else:
                 next_ray = type(current_ray)(
-                    start, new_dir,
-                    energy=current_ray.energy, current_n=current_n,
-                    color=current_ray.color, wavelength=current_ray.wavelength,
+                    start,
+                    new_dir,
+                    energy=current_ray.energy,
+                    current_n=current_n,
+                    color=current_ray.color,
+                    wavelength=current_ray.wavelength,
                     energy_color_type=current_ray.energy_color_type,
                 )
                 current_from_pool = False
@@ -81,18 +97,24 @@ def trace_simple(ray: 'Ray',
                 if current_from_pool:
                     pool.release(current_ray)
                 next_ray = pool.acquire(
-                    origin=start, direction=current_ray.direction,
-                    energy=current_ray.energy, current_n=current_n,
-                    color=current_ray.color, wavelength=current_ray.wavelength,
+                    origin=start,
+                    direction=current_ray.direction,
+                    energy=current_ray.energy,
+                    current_n=current_n,
+                    color=current_ray.color,
+                    wavelength=current_ray.wavelength,
                     energy_color_type=current_ray.energy_color_type,
                     ray_class=type(current_ray),
                 )
                 current_from_pool = True
             else:
                 next_ray = type(current_ray)(
-                    start, current_ray.direction,
-                    energy=current_ray.energy, current_n=current_n,
-                    color=current_ray.color, wavelength=current_ray.wavelength,
+                    start,
+                    current_ray.direction,
+                    energy=current_ray.energy,
+                    current_n=current_n,
+                    color=current_ray.color,
+                    wavelength=current_ray.wavelength,
                     energy_color_type=current_ray.energy_color_type,
                 )
                 current_from_pool = False
@@ -138,18 +160,24 @@ def trace_simple(ray: 'Ray',
             if current_from_pool:
                 pool.release(current_ray)
             next_ray = pool.acquire(
-                origin=start, direction=new_dir,
-                energy=current_ray.energy, current_n=current_n,
-                color=current_ray.color, wavelength=current_ray.wavelength,
+                origin=start,
+                direction=new_dir,
+                energy=current_ray.energy,
+                current_n=current_n,
+                color=current_ray.color,
+                wavelength=current_ray.wavelength,
                 energy_color_type=current_ray.energy_color_type,
                 ray_class=type(current_ray),
             )
             current_from_pool = True
         else:
             next_ray = type(current_ray)(
-                start, new_dir,
-                energy=current_ray.energy, current_n=current_n,
-                color=current_ray.color, wavelength=current_ray.wavelength,
+                start,
+                new_dir,
+                energy=current_ray.energy,
+                current_n=current_n,
+                color=current_ray.color,
+                wavelength=current_ray.wavelength,
                 energy_color_type=current_ray.energy_color_type,
             )
             current_from_pool = False

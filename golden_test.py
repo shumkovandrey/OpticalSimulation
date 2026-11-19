@@ -1,4 +1,4 @@
-# tests/golden_test.py
+# fmt: off
 """
 Golden-тест для проверки поведения трассировщика лучей после рефакторинга.
 
@@ -27,32 +27,33 @@ Golden-тест для проверки поведения трассировщ�
     через --generate и сравнить diff вручную.
 """
 
-import sys
-import json
 import argparse
-import numpy as np
+import json
+import sys
 from pathlib import Path
+
+import numpy as np
 
 # ВАЖНО: выставляем флаги ДО импорта main.py,
 # потому что main.py создаёт глобальный Plotter на уровне модуля.
 import pyvista as pv
+
 pv.OFF_SCREEN = True
 pv.global_theme.allow_empty_mesh = True
 
 import trimesh
 
-from core.rays import Ray, DispersiveRay, WhiteRay, RayPool
+from core.rays import DispersiveRay, Ray, RayPool, WhiteRay
+from emitters import BeamEmitter
+from surfaces.cylinder import CylinderSurface
+from surfaces.hyperbolic_lens import HyperbolicLens
+from surfaces.mesh import MeshSurface
 from surfaces.plane import PlaneSurface
 from surfaces.sphere import SphereSurface
-from surfaces.cylinder import CylinderSurface
-from surfaces.mesh import MeshSurface
 from surfaces.thin_lens import ThinLens
 from surfaces.universal_lens import UniversalLens
-from surfaces.hyperbolic_lens import HyperbolicLens
 from tracing.modes import SimpleMode, TreeMode
-from emitters import BeamEmitter
 from visualization import RayTracer
-
 
 GOLDEN_PATH = Path(__file__).resolve().parent / "golden.json"
 

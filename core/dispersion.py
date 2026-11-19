@@ -12,4 +12,4 @@ def get_dispersion_n(base_n: float, ray: Ray) -> float:
     lambda_mkm = ray.wavelength / 1000.0
     A = base_n - CAUCHY_A_OFFSET
     B = CAUCHY_B
-    return A + B / (lambda_mkm ** 2)
+    return A + B / (lambda_mkm**2)

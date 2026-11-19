@@ -1,10 +1,12 @@
 import random
+
 import pyvista as pv
 
 plotter = pv.Plotter()
 
 mesh = pv.Cube()
 actor = plotter.add_mesh(mesh, color="white", smooth_shading=True)
+
 
 def block_vtk_q(interactor, event):
     key = interactor.GetKeySym()
@@ -13,6 +15,7 @@ def block_vtk_q(interactor, event):
         interactor.SetKeyCode("\x00")
         interactor.SetKeySym("")
         return
+
 
 plotter.iren.initialize()
 plotter.iren.interactor.AddObserver("CharEvent", block_vtk_q, 10.0)

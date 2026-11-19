@@ -2,13 +2,13 @@ import numpy as np
 import pyvista as pv
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageLayout
-from trame.widgets import vuetify3 as vuetify
 from trame.widgets import vtk as trame_vtk
-
+from trame.widgets import vuetify3 as vuetify
 
 # =============================================================================
 # 1. СЛОЙ ДАННЫХ (Data Model)
 # =============================================================================
+
 
 class OpticElement:
     def __init__(self, name="Lens", position=0.0, tilt=0.0, radius=1.0):
@@ -21,6 +21,7 @@ class OpticElement:
 # =============================================================================
 # 2. КОНТРОЛЛЕР И СЦЕНА (Controller & View)
 # =============================================================================
+
 
 class OpticsWebController:
     def __init__(self, server):
@@ -36,7 +37,7 @@ class OpticsWebController:
         # Абстрактные модели линз
         self.models = {
             "Lens_1": OpticElement("Входная линза", position=-3.0, tilt=0.0, radius=1.2),
-            "Lens_2": OpticElement("Фокусирующая линза", position=2.0, tilt=15.0, radius=1.0)
+            "Lens_2": OpticElement("Фокусирующая линза", position=2.0, tilt=15.0, radius=1.0),
         }
         self.actors = {}
 
@@ -63,7 +64,7 @@ class OpticsWebController:
             lens_mesh.rotate_y(model.tilt, inplace=True)
             lens_mesh.translate((model.position, 0, 0), inplace=True)
 
-            is_selected = (key == self.state.selected_id)
+            is_selected = key == self.state.selected_id
             color = "#FFD700" if is_selected else ("#00FFFF" if key == "Lens_1" else "#85BB65")
 
             actor = self.plotter.add_mesh(lens_mesh, color=color, opacity=0.5, show_edges=True)
@@ -132,8 +133,11 @@ with SinglePageLayout(server) as layout:
             # Делим рабочую область на две колонки через VRow
             with vuetify.VRow(no_gutters=True, class_="fill-height", style="height: 100%;"):
                 # КОЛОНКА 1 (Слева): Панель управления (занимает 3 части из 12)
-                with vuetify.VCol(cols=3, class_="pa-4 bg-grey-darken-4",
-                                  style="border-right: 1px solid #444; overflow-y: auto; color: white;"):
+                with vuetify.VCol(
+                    cols=3,
+                    class_="pa-4 bg-grey-darken-4",
+                    style="border-right: 1px solid #444; overflow-y: auto; color: white;",
+                ):
                     vuetify.VCardTitle("Оптические Элементы", class_="text-h6 px-0")
 
                     with vuetify.VRow(class_="py-2 px-0 justify-space-around", no_gutters=True):
@@ -146,15 +150,21 @@ with SinglePageLayout(server) as layout:
                     # Слайдеры управления
                     vuetify.VSlider(
                         v_model=("prop_pos",),
-                        min=-6.0, max=6.0, step=0.1,
+                        min=-6.0,
+                        max=6.0,
+                        step=0.1,
                         label="Позиция X",
-                        color="cyan", class_="mt-4"
+                        color="cyan",
+                        class_="mt-4",
                     )
                     vuetify.VSlider(
                         v_model=("prop_tilt",),
-                        min=-45.0, max=45.0, step=1.0,
+                        min=-45.0,
+                        max=45.0,
+                        step=1.0,
                         label="Наклон Y",
-                        color="amber", class_="mt-2"
+                        color="amber",
+                        class_="mt-2",
                     )
 
                 # КОЛОНКА 2 (Справа): 3D Окно (занимает 9 частей из 12)

@@ -27,8 +27,8 @@ def build_default_scene():
     Запускается из 'if __name__ == "__main__"'.
     """
     from core.rays import RayPool
-    from surfaces.universal_lens import UniversalLens
     from emitters import BeamEmitter
+    from surfaces.universal_lens import UniversalLens
     from visualization import RayTracer
 
     plotter = pv.Plotter()
@@ -43,16 +43,23 @@ def build_default_scene():
     tracer = RayTracer(plotter, mode="simple", pool=pool)
 
     lens = UniversalLens(
-        origin=(0, 0, 0), R1=5.0, R2=5.0,
-        thickness=0.5, edge_radius=1.5, n=1.5,
+        origin=(0, 0, 0),
+        R1=5.0,
+        R2=5.0,
+        thickness=0.5,
+        edge_radius=1.5,
+        n=1.5,
     )
     plotter.add_mesh(lens.get_mesh(), color="cyan", opacity=0.4, name="lens")
     for surf in lens.get_surfaces():
         tracer.add_elements(surf)
 
     emitter = BeamEmitter(
-        origin=(-5.0, 0.0, 0.0), direction=(1.0, 0.0, 0.0),
-        num_rays=7, min_offset=-1.0, max_offset=1.0,
+        origin=(-5.0, 0.0, 0.0),
+        direction=(1.0, 0.0, 0.0),
+        num_rays=7,
+        min_offset=-1.0,
+        max_offset=1.0,
     )
     tracer.add_emitter(emitter)
 

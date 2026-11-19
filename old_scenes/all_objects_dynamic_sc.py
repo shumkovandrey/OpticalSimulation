@@ -1,9 +1,11 @@
+import os
 import time
+
 import numpy as np
 import pyvista as pv
-import os
-from main import *
+
 from fast_math import *
+from main import *
 
 
 def trajectories_to_segments(trajectories, colors):
@@ -12,14 +14,14 @@ def trajectories_to_segments(trajectories, colors):
     for traj, color in zip(trajectories, colors):
         for i in range(len(traj) - 1):
             p1 = traj[i]
-            p2 = traj[i+1]
-            segments.append((p1, p2, 1.0, color))   # энергия 1.0, цвет луча
+            p2 = traj[i + 1]
+            segments.append((p1, p2, 1.0, color))  # энергия 1.0, цвет луча
     return segments
 
 
 # ---------------------- ГЛОБАЛЬНЫЕ НАСТРОЙКИ ----------------------
 global_interaction = True
-state = {'paused': False}
+state = {"paused": False}
 
 # --- Настройки лучей (изменяемые стрелками) ---
 ray_count = 1
@@ -32,10 +34,18 @@ obj_ray_defaults = {}
 
 # Флаги зажатия клавиш
 keys = {
-    'w': False, 'a': False, 's': False, 'd': False,
-    'q': False, 'e': False,
-    't': False, 'f': False, 'g': False, 'h': False,
-    'r': False, 'y': False
+    "w": False,
+    "a": False,
+    "s": False,
+    "d": False,
+    "q": False,
+    "e": False,
+    "t": False,
+    "f": False,
+    "g": False,
+    "h": False,
+    "r": False,
+    "y": False,
 }
 
 need_reset = False
@@ -43,44 +53,64 @@ need_reset = False
 # Переключение видимости (1..7) – защита от автоповтора
 digit_pressed = {str(i): False for i in range(1, 8)}
 
+
 # ---------------------- ФУНКЦИЯ СОЗДАНИЯ ОБЪЕКТОВ И ЛУЧЕЙ ----------------------
 def create_scene():
     """Возвращает (objects, rays_dict, actors, mesh_obj)"""
     plane_mirror = PlaneSurface(
-        point=[0, -20, 0], rotation_degrees=(0, 0, 45),
-        half_sizes=(2.0, 2.0), n_inside=1.0,
-        reflection_range=(0, 10000)
+        point=[0, -20, 0], rotation_degrees=(0, 0, 45), half_sizes=(2.0, 2.0), n_inside=1.0, reflection_range=(0, 10000)
     )
     sphere_mirror = SphereSurface(
         radius=-15.0,
         rotation_degrees=(0, 0, 0),
-        edge_radius=4.0, thickness=10.0,
-        n_inside=1.5, refraction_range=(0, 10000),
-        lens_origin=[10, -5, 0]
+        edge_radius=4.0,
+        thickness=10.0,
+        n_inside=1.5,
+        refraction_range=(0, 10000),
+        lens_origin=[10, -5, 0],
     )
     lens1 = UniversalLens(
-        origin=[0, 10, 0], rotation_degrees=(0, 0, 0),
-        R1=10.0, R2=10.0, thickness=3, edge_radius=3.5, n=1.5,
-        refraction_range=(0, 10000), reflection_range=(0, 10000)
+        origin=[0, 10, 0],
+        rotation_degrees=(0, 0, 0),
+        R1=10.0,
+        R2=10.0,
+        thickness=3,
+        edge_radius=3.5,
+        n=1.5,
+        refraction_range=(0, 10000),
+        reflection_range=(0, 10000),
     )
     lens2 = UniversalLens(
-        origin=[0, 25, 0], rotation_degrees=(0, 0, 0),
-        R1=4.0, R2=4.0, thickness=8, edge_radius=4.0, n=1.6,
-        refraction_range=(0, 10000), reflection_range=(0, 10000)
+        origin=[0, 25, 0],
+        rotation_degrees=(0, 0, 0),
+        R1=4.0,
+        R2=4.0,
+        thickness=8,
+        edge_radius=4.0,
+        n=1.6,
+        refraction_range=(0, 10000),
+        reflection_range=(0, 10000),
     )
     parabolic_mirror = AsphericSurface(
-        center=[0, 40, 0], rotation_degrees=(0, 0, 180),
-        radius=5.0, conic_constant=-1.0,
-        edge_radius=4.5, thickness=10.0,
-        reflection_range=(0, 10000), n_inside=1.5
+        center=[0, 40, 0],
+        rotation_degrees=(0, 0, 180),
+        radius=5.0,
+        conic_constant=-1.0,
+        edge_radius=4.5,
+        thickness=10.0,
+        reflection_range=(0, 10000),
+        n_inside=1.5,
     )
     hyperbolic_lens = AsphericSurface(
         center=[0, 55, 0],
-        rotation_degrees = (0, 0, 180),
-        radius=5.0, conic_constant=-2.25,
-        edge_radius=4.0, thickness=10.0,
-        refraction_range=(0, 10000), reflection_range=(0, 10000),
-        n_inside=1.5
+        rotation_degrees=(0, 0, 180),
+        radius=5.0,
+        conic_constant=-2.25,
+        edge_radius=4.0,
+        thickness=10.0,
+        refraction_range=(0, 10000),
+        reflection_range=(0, 10000),
+        n_inside=1.5,
     )
     # hyperbolic_lens2 = AsphericSurface(
     #     center=[-1, 55, 0],
@@ -91,9 +121,12 @@ def create_scene():
     #     n_inside=1.5
     # )
     hyperbolic_lens_enter = PlaneSurface(
-        point=[-1.5, 55, 0], rotation_degrees=(0, 0, 0),
-        half_sizes=(4.0, 4.0), n_inside=1.5,
-        refraction_range=(0, 10000), reflection_range=(0, 10000),
+        point=[-1.5, 55, 0],
+        rotation_degrees=(0, 0, 0),
+        half_sizes=(4.0, 4.0),
+        n_inside=1.5,
+        refraction_range=(0, 10000),
+        reflection_range=(0, 10000),
     )
 
     mesh_path = "../Models/Untitled.stl"
@@ -101,10 +134,12 @@ def create_scene():
         tri_mesh = trimesh.load(mesh_path)
         tri_mesh.apply_scale(2.0)
         mesh_obj = MeshSurface(
-            tri_mesh, n_inside=1.5,
+            tri_mesh,
+            n_inside=1.5,
             refraction_range=(0, 10000),
             # reflection_range=(0, 10000),
-            translation=[0, 70, 0], rotation_degrees=(0, 90, 0)
+            translation=[0, 70, 0],
+            rotation_degrees=(0, 90, 0),
         )
     else:
         mesh_obj = None
@@ -148,7 +183,7 @@ def create_scene():
                 direction=[1, 0, 0],
                 color=color,
                 wavelength=550 if color != "red" else 650,
-                energy_color_type=2
+                energy_color_type=2,
             )
             ray_list.append(ray)
         rays_dict[name] = ray_list
@@ -161,8 +196,8 @@ def regenerate_rays():
     global rays_dict
     rays_dict.clear()
     for name, defaults in obj_ray_defaults.items():
-        y0 = defaults['y0']
-        base_dy = defaults['dy']
+        y0 = defaults["y0"]
+        base_dy = defaults["dy"]
         half_range = base_dy * ray_spacing
         if ray_count == 1:
             offsets = [0.0]
@@ -173,9 +208,9 @@ def regenerate_rays():
             ray = Ray(
                 origin=[-15, y0 + y_shift, 0],
                 direction=[1, 0, 0],
-                color=defaults['color'],
-                wavelength=defaults['wavelength'],
-                energy_color_type=defaults['energy_color_type']
+                color=defaults["color"],
+                wavelength=defaults["wavelength"],
+                energy_color_type=defaults["energy_color_type"],
             )
             ray_list.append(ray)
         rays_dict[name] = ray_list
@@ -190,20 +225,27 @@ initial_objects, initial_rays_dict, _ = create_scene()
 
 # Заполняем параметры для управления лучами
 for obj, name, color in objects:
-    if obj is None: continue
-    if isinstance(obj, PlaneSurface):        y0, dy = obj.point[1], 2.0
-    elif isinstance(obj, SphereSurface):     y0, dy = obj.lens_origin[1], 3.0
-    elif isinstance(obj, UniversalLens):     y0, dy = obj.origin[1], 2.5
-    elif isinstance(obj, AsphericSurface):   y0, dy = obj.center[1], 3.0
-    elif isinstance(obj, MeshSurface):       y0, dy = 70.0, 3.0
-    else:                                    y0, dy = 0.0, 2.0
+    if obj is None:
+        continue
+    if isinstance(obj, PlaneSurface):
+        y0, dy = obj.point[1], 2.0
+    elif isinstance(obj, SphereSurface):
+        y0, dy = obj.lens_origin[1], 3.0
+    elif isinstance(obj, UniversalLens):
+        y0, dy = obj.origin[1], 2.5
+    elif isinstance(obj, AsphericSurface):
+        y0, dy = obj.center[1], 3.0
+    elif isinstance(obj, MeshSurface):
+        y0, dy = 70.0, 3.0
+    else:
+        y0, dy = 0.0, 2.0
 
     obj_ray_defaults[name] = {
-        'y0': y0,
-        'dy': dy,
-        'color': color,
-        'wavelength': 550 if color != "red" else 650,
-        'energy_color_type': 1
+        "y0": y0,
+        "dy": dy,
+        "color": color,
+        "wavelength": 550 if color != "red" else 650,
+        "energy_color_type": 1,
     }
 
 # Сохраняем начальные параметры объектов
@@ -211,34 +253,34 @@ initial_obj_states = []
 for obj, name, _ in objects:
     obj_state = {}
     if isinstance(obj, PlaneSurface):
-        obj_state['point'] = np.copy(obj.point)
-        obj_state['normal'] = np.copy(obj.normal)
-        obj_state['lens_origin'] = np.copy(obj.lens_origin)
-        obj_state['lens_axis'] = np.copy(obj.lens_axis)
+        obj_state["point"] = np.copy(obj.point)
+        obj_state["normal"] = np.copy(obj.normal)
+        obj_state["lens_origin"] = np.copy(obj.lens_origin)
+        obj_state["lens_axis"] = np.copy(obj.lens_axis)
     elif isinstance(obj, SphereSurface):
-        obj_state['lens_origin'] = np.copy(obj.lens_origin)
-        obj_state['lens_axis'] = np.copy(obj.lens_axis)
-        obj_state['center'] = np.copy(obj.center)
-        obj_state['radius'] = obj.radius
+        obj_state["lens_origin"] = np.copy(obj.lens_origin)
+        obj_state["lens_axis"] = np.copy(obj.lens_axis)
+        obj_state["center"] = np.copy(obj.center)
+        obj_state["radius"] = obj.radius
     elif isinstance(obj, UniversalLens):
-        obj_state['origin'] = np.copy(obj.origin)
-        obj_state['axis_dir'] = np.copy(obj.axis_dir)
-        obj_state['rotation'] = np.copy(obj.rotation)
-        obj_state['rotation_degrees'] = obj.rotation_degrees
-        obj_state['R1'] = obj.R1
-        obj_state['R2'] = obj.R2
-        obj_state['thickness'] = obj.thickness
-        obj_state['edge_radius'] = obj.edge_radius
-        obj_state['n'] = obj.n
+        obj_state["origin"] = np.copy(obj.origin)
+        obj_state["axis_dir"] = np.copy(obj.axis_dir)
+        obj_state["rotation"] = np.copy(obj.rotation)
+        obj_state["rotation_degrees"] = obj.rotation_degrees
+        obj_state["R1"] = obj.R1
+        obj_state["R2"] = obj.R2
+        obj_state["thickness"] = obj.thickness
+        obj_state["edge_radius"] = obj.edge_radius
+        obj_state["n"] = obj.n
     elif isinstance(obj, AsphericSurface):
-        obj_state['center'] = np.copy(obj.center)
-        obj_state['lens_origin'] = np.copy(obj.lens_origin)
-        obj_state['lens_axis'] = np.copy(obj.lens_axis)
-        obj_state['radius'] = obj.radius
+        obj_state["center"] = np.copy(obj.center)
+        obj_state["lens_origin"] = np.copy(obj.lens_origin)
+        obj_state["lens_axis"] = np.copy(obj.lens_axis)
+        obj_state["radius"] = obj.radius
     elif isinstance(obj, MeshSurface):
         # Для MeshSurface сохраняем только текущую матрицу трансформации?
         # Проще сохранить trimesh-объект и повторно применить translation/rotation
-        obj_state['mesh'] = obj.mesh.copy()   # trimesh.Trimesh
+        obj_state["mesh"] = obj.mesh.copy()  # trimesh.Trimesh
     initial_obj_states.append((name, obj_state))
 
 # Начальные параметры лучей
@@ -246,14 +288,16 @@ initial_ray_params = {}
 for name, ray_list in rays_dict.items():
     params = []
     for ray in ray_list:
-        params.append({
-            'origin': np.copy(ray.origin),
-            'direction': np.copy(ray.direction),
-            'energy': 1.0,
-            'color': ray.color,
-            # 'wavelength': ray.wavelength,
-            'energy_color_type': ray.energy_color_type
-        })
+        params.append(
+            {
+                "origin": np.copy(ray.origin),
+                "direction": np.copy(ray.direction),
+                "energy": 1.0,
+                "color": ray.color,
+                # 'wavelength': ray.wavelength,
+                "energy_color_type": ray.energy_color_type,
+            }
+        )
     initial_ray_params[name] = params
 
 # Сохраняем начальные параметры лучей (origin, direction, energy, color, wavelength, energy_color_type)
@@ -261,14 +305,16 @@ initial_ray_params = {}
 for name, ray_list in rays_dict.items():
     params = []
     for ray in ray_list:
-        params.append({
-            'origin': np.copy(ray.origin),
-            'direction': np.copy(ray.direction),
-            'energy': 1.0,
-            'color': ray.color,
-            # 'wavelength': ray.wavelength,
-            'energy_color_type': ray.energy_color_type
-        })
+        params.append(
+            {
+                "origin": np.copy(ray.origin),
+                "direction": np.copy(ray.direction),
+                "energy": 1.0,
+                "color": ray.color,
+                # 'wavelength': ray.wavelength,
+                "energy_color_type": ray.energy_color_type,
+            }
+        )
     initial_ray_params[name] = params
 
 
@@ -296,6 +342,7 @@ tracer = RayTracer(
 # Стрелки, которые мы перехватываем
 arrow_keys = ["Left", "Right", "Up", "Down"]
 arrow_pressed = {k: False for k in arrow_keys}
+
 
 def on_key_press_early(interactor, event):
     """Перехват стрелок с высоким приоритетом, чтобы заблокировать стандартное поведение."""
@@ -340,24 +387,29 @@ def on_key_press(interactor, event):
     # Непрерывные действия
     if key in keys:
         keys[key] = True
-    elif key == 'space':
-        state['paused'] = not state['paused']
-    elif key == 'm':
+    elif key == "space":
+        state["paused"] = not state["paused"]
+    elif key == "m":
         global global_interaction
 
         global_interaction = not global_interaction
-    elif key == 'n':
+    elif key == "n":
         if isinstance(tracer.mode, SimpleMode):
             tracer.mode = TreeMode(max_depth=10, min_energy=0.001, offset_distance=0.001, energy_color_type=0)
         else:
             tracer.mode = SimpleMode(max_bounces=10, offset_distance=0.001, energy_color_type=0)
         tracer.cloud.update([], energy_color_type=tracer.mode.energy_color_type)  # очистка
-    elif key == 'x':
+    elif key == "x":
         global need_reset
         need_reset = True
-    elif key == 'z':
+    elif key == "z":
         print("center зеркала:", objects[4][0].center, ", lens_axis зеркала:", objects[4][0].lens_axis)
-        print("origin луча:", rays_dict[objects[4][1]][0].origin, ", direction луча:", rays_dict[objects[4][1]][0].direction)
+        print(
+            "origin луча:",
+            rays_dict[objects[4][1]][0].origin,
+            ", direction луча:",
+            rays_dict[objects[4][1]][0].direction,
+        )
         print("t:", objects[4][0].intersect(rays_dict[objects[4][1]][0]))
     elif key.isdigit() and 1 <= int(key) <= len(objects):
         # Защита от автоповтора – переключаем только при первом нажатии
@@ -367,6 +419,7 @@ def on_key_press(interactor, event):
             obj, name, _ = objects[idx]
             object_visible[name] = not object_visible[name]
             actors[name].SetVisibility(object_visible[name])
+
 
 def on_key_release(interactor, event):
     key = interactor.GetKeySym()
@@ -382,7 +435,8 @@ def on_key_release(interactor, event):
 
 
 # Блокировка нежелательных клавиш PyVista
-problematic_keys = {'w', 'W', 's', 'S', 'r', 'R', 'q', 'Q', 'e', 'E', '3', '7', 'x', 'X'}
+problematic_keys = {"w", "W", "s", "S", "r", "R", "q", "Q", "e", "E", "3", "7", "x", "X"}
+
 
 def block_vtk_keys(interactor, event):
     key = interactor.GetKeySym()
@@ -391,14 +445,16 @@ def block_vtk_keys(interactor, event):
         interactor.SetKeySym("")
         return
 
+
 plotter.iren.interactor.AddObserver("CharEvent", block_vtk_keys, 10.0)
 
 # Перехват стрелок (высокий приоритет)
-plotter.iren.interactor.AddObserver('KeyPressEvent', on_key_press_early, 10.0)
+plotter.iren.interactor.AddObserver("KeyPressEvent", on_key_press_early, 10.0)
 # Основные нажатия (буквы, цифры, пробел и т.д.)
-plotter.iren.interactor.AddObserver('KeyPressEvent', on_key_press)
+plotter.iren.interactor.AddObserver("KeyPressEvent", on_key_press)
 # Отпускание всех клавиш
-plotter.iren.interactor.AddObserver('KeyReleaseEvent', on_key_release)
+plotter.iren.interactor.AddObserver("KeyReleaseEvent", on_key_release)
+
 
 # ---------------------- СБРОС СЦЕНЫ ----------------------
 def reset_scene():
@@ -407,39 +463,39 @@ def reset_scene():
     tracer.cloud.update([])
 
     # 2. Восстанавливаем объекты из начальных состояний
-    for (name, state) in initial_obj_states:
+    for name, state in initial_obj_states:
         # Находим текущий объект по имени (он тот же, что и был)
         obj = next(o for o, n, _ in objects if n == name)
         if isinstance(obj, PlaneSurface):
-            obj.point = np.copy(state['point'])
-            obj.normal = np.copy(state['normal'])
-            obj.lens_origin = np.copy(state['lens_origin'])
-            obj.lens_axis = np.copy(state['lens_axis'])
+            obj.point = np.copy(state["point"])
+            obj.normal = np.copy(state["normal"])
+            obj.lens_origin = np.copy(state["lens_origin"])
+            obj.lens_axis = np.copy(state["lens_axis"])
             if obj.face_tangents is not None:
                 # Пересчитать тангенты по новой нормали
                 obj.face_tangents = get_tangents(obj.normal)
         elif isinstance(obj, SphereSurface):
-            obj.lens_origin = np.copy(state['lens_origin'])
-            obj.lens_axis = np.copy(state['lens_axis'])
-            obj.center = np.copy(state['center'])
+            obj.lens_origin = np.copy(state["lens_origin"])
+            obj.lens_axis = np.copy(state["lens_axis"])
+            obj.center = np.copy(state["center"])
             # edge_radius, thickness не менялись
         elif isinstance(obj, UniversalLens):
-            obj.origin = np.copy(state['origin'])
-            obj.axis_dir = np.copy(state['axis_dir'])
-            obj.rotation = np.copy(state['rotation'])
-            obj.rotation_degrees = state['rotation_degrees']
+            obj.origin = np.copy(state["origin"])
+            obj.axis_dir = np.copy(state["axis_dir"])
+            obj.rotation = np.copy(state["rotation"])
+            obj.rotation_degrees = state["rotation_degrees"]
             # Пересоздаём поверхности с исходными параметрами
-            obj.R1 = state['R1']
-            obj.R2 = state['R2']
-            obj.thickness = state['thickness']
-            obj.edge_radius = state['edge_radius']
-            obj.n = state['n']
+            obj.R1 = state["R1"]
+            obj.R2 = state["R2"]
+            obj.thickness = state["thickness"]
+            obj.edge_radius = state["edge_radius"]
+            obj.n = state["n"]
             obj._create_surfaces()
         elif isinstance(obj, AsphericSurface):
-            obj.center = np.copy(state['center'])
-            obj.lens_origin = np.copy(state['lens_origin'])
-            obj.lens_axis = np.copy(state['lens_axis'])
-            obj.radius = state['radius']
+            obj.center = np.copy(state["center"])
+            obj.lens_origin = np.copy(state["lens_origin"])
+            obj.lens_axis = np.copy(state["lens_axis"])
+            obj.radius = state["radius"]
             # Восстанавливаем правильные тангенциальные векторы
             obj._t1, obj._t2 = get_tangents(obj.lens_axis)
             # Обновляем матрицы перехода
@@ -447,7 +503,7 @@ def reset_scene():
             obj._rot_world_to_local = obj._rot_local_to_world.T
         elif isinstance(obj, MeshSurface):
             # Восстанавливаем исходный trimesh (без накопленных трансформаций)
-            obj.mesh = state['mesh'].copy()
+            obj.mesh = state["mesh"].copy()
             obj.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(obj.mesh)
 
     # Сбрасываем настройки лучей к исходным
@@ -459,9 +515,9 @@ def reset_scene():
     for name, ray_list in rays_dict.items():
         if name in initial_ray_params:
             for ray, init in zip(ray_list, initial_ray_params[name]):
-                ray.origin = np.copy(init['origin'])
-                ray.direction = np.copy(init['direction'])
-                ray.energy = init['energy']
+                ray.origin = np.copy(init["origin"])
+                ray.direction = np.copy(init["direction"])
+                ray.energy = init["energy"]
                 # цвет, длина волны не менялись
 
     # 4. Обновляем меши акторов (акторы те же, геометрия новая)
@@ -505,7 +561,7 @@ N - режим взаимодействия лучей: simple/tree
 """)
 
 while plotter.render:
-    if state['paused']:
+    if state["paused"]:
         plotter.update()
         last_time = time.time()
         continue
@@ -524,44 +580,50 @@ while plotter.render:
 
     # Перемещение объектов (WASD)
     delta_obj = np.array([0.0, 0.0, 0.0])
-    if keys['w']: delta_obj[1] += move_speed * dt
-    if keys['s']: delta_obj[1] -= move_speed * dt
-    if keys['a']: delta_obj[0] -= move_speed * dt
-    if keys['d']: delta_obj[0] += move_speed * dt
+    if keys["w"]:
+        delta_obj[1] += move_speed * dt
+    if keys["s"]:
+        delta_obj[1] -= move_speed * dt
+    if keys["a"]:
+        delta_obj[0] -= move_speed * dt
+    if keys["d"]:
+        delta_obj[0] += move_speed * dt
     if np.any(delta_obj != 0):
         for obj, name, _ in objects:
             if object_visible[name]:
                 obj.translate(delta_obj)
 
     # Поворот объектов (Q/E)
-    if keys['q']:
+    if keys["q"]:
         for obj, name, _ in objects:
             if object_visible[name]:
                 obj.rotate((0, 0, rot_speed * dt))
-    if keys['e']:
+    if keys["e"]:
         for obj, name, _ in objects:
             if object_visible[name]:
                 obj.rotate((0, 0, -rot_speed * dt))
 
     # Перемещение лучей (TFGH)
     delta_rays = np.array([0.0, 0.0, 0.0])
-    if keys['t']: delta_rays[1] += move_speed * dt
-    if keys['g']: delta_rays[1] -= move_speed * dt
-    if keys['f']: delta_rays[0] -= move_speed * dt
-    if keys['h']: delta_rays[0] += move_speed * dt
+    if keys["t"]:
+        delta_rays[1] += move_speed * dt
+    if keys["g"]:
+        delta_rays[1] -= move_speed * dt
+    if keys["f"]:
+        delta_rays[0] -= move_speed * dt
+    if keys["h"]:
+        delta_rays[0] += move_speed * dt
 
     # Поворот направления лучей (R/Y)
     angle_ray = 0.0
-    if keys['r']:
+    if keys["r"]:
         angle_ray = rot_speed * dt
-    elif keys['y']:
+    elif keys["y"]:
         angle_ray = -rot_speed * dt
 
     if angle_ray != 0.0:
         cos_a, sin_a = np.cos(np.radians(angle_ray)), np.sin(np.radians(angle_ray))
-        rot_matrix = np.array([[cos_a, -sin_a, 0],
-                               [sin_a,  cos_a, 0],
-                               [0,      0,     1]])
+        rot_matrix = np.array([[cos_a, -sin_a, 0], [sin_a, cos_a, 0], [0, 0, 1]])
 
     for name, ray_list in rays_dict.items():
         if not object_visible[name]:

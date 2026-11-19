@@ -1,7 +1,8 @@
 """Классы лучей: Ray, DispersiveRay, WhiteRay и пул переиспользования RayPool."""
 
-import numpy as np
 from typing import List, Tuple
+
+import numpy as np
 
 from utils.color import wavelength_to_rgb as _wavelength_to_rgb_utils
 
@@ -60,8 +61,9 @@ class DispersiveRay(Ray):
 class WhiteRay:
     """Контейнер для пучка спектральных лучей; сам в трассировке не участвует."""
 
-    def __init__(self, origin, direction, num_spectral_bands=7, energy=1.0,
-                 current_n=1.0, energy_color_type=2, **kwargs):
+    def __init__(
+        self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, energy_color_type=2, **kwargs
+    ):
         self.origin = np.array(origin, dtype=float)
         self.direction = np.array(direction, dtype=float)
         self.direction /= np.linalg.norm(self.direction)
@@ -114,13 +116,20 @@ class RayPool:
             self.pools[ray_class] = []
             if ray_class is not WhiteRay:
                 for _ in range(self.initial_size):
-                    self.pools[ray_class].append(
-                        ray_class(np.zeros(3), np.array([1.0, 0.0, 0.0]))
-                    )
+                    self.pools[ray_class].append(ray_class(np.zeros(3), np.array([1.0, 0.0, 0.0])))
 
-    def acquire(self, origin, direction, energy=1.0, current_n=1.0,
-                color="yellow", energy_color_type=2, wavelength=None,
-                ray_class=Ray, num_spectral_bands=7):
+    def acquire(
+        self,
+        origin,
+        direction,
+        energy=1.0,
+        current_n=1.0,
+        color="yellow",
+        energy_color_type=2,
+        wavelength=None,
+        ray_class=Ray,
+        num_spectral_bands=7,
+    ):
         """Взять луч определённого класса из пула и инициализировать его поля."""
         self._ensure_pool_exists(ray_class)
 
@@ -128,8 +137,7 @@ class RayPool:
             ray = self.pools[ray_class].pop()
         else:
             if ray_class is WhiteRay:
-                ray = WhiteRay(np.zeros(3), np.array([1.0, 0.0, 0.0]),
-                               num_spectral_bands=num_spectral_bands, pool=self)
+                ray = WhiteRay(np.zeros(3), np.array([1.0, 0.0, 0.0]), num_spectral_bands=num_spectral_bands, pool=self)
             else:
                 ray = ray_class(np.zeros(3), np.array([1.0, 0.0, 0.0]))
 

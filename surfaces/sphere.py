@@ -13,11 +13,20 @@ class SphereSurface(BaseSurface):
     Сферическая поверхность с ограничениями по радиусу апертуры и продольному
     положению (толщине) вдоль оптической оси линзы.
     """
-    def __init__(self, radius, rotation_degrees=(0,0,0), n_inside=1.0,
-                 edge_radius=None, thickness=0.0,
-                 reflection_range=None, refraction_range=None,
-                 absorption_range=None,
-                 lens_origin=None, lens_axis=None):
+
+    def __init__(
+        self,
+        radius,
+        rotation_degrees=(0, 0, 0),
+        n_inside=1.0,
+        edge_radius=None,
+        thickness=0.0,
+        reflection_range=None,
+        refraction_range=None,
+        absorption_range=None,
+        lens_origin=None,
+        lens_axis=None,
+    ):
         """
         Параметры:
         radius : float
@@ -42,7 +51,7 @@ class SphereSurface(BaseSurface):
             self.lens_axis = np.array(lens_axis, dtype=float) / np.linalg.norm(lens_axis)
         else:
             base_axis = np.array([1.0, 0.0, 0.0])
-            rot = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+            rot = R.from_euler("xyz", rotation_degrees, degrees=True).as_matrix()
             self.lens_axis = rot @ base_axis
             self.lens_axis /= np.linalg.norm(self.lens_axis)
         # Центр вычисляется однозначно:
@@ -56,7 +65,7 @@ class SphereSurface(BaseSurface):
         self.absorption_range = absorption_range
 
     def rotate(self, angles_deg):
-        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        rot = R.from_euler("xyz", angles_deg, degrees=True).as_matrix()
         v = self.center - self.lens_origin  # вектор от вершины к центру
         self.center = self.lens_origin + rot @ v
         self.lens_axis = rot @ self.lens_axis
@@ -72,10 +81,10 @@ class SphereSurface(BaseSurface):
         # Вычисление коэффициентов квадратного уравнения для пересечения луча со сферой
         a = np.dot(ray.direction, ray.direction)
         b = 2.0 * np.dot(oc, ray.direction)
-        c = np.dot(oc, oc) - self.radius ** 2
+        c = np.dot(oc, oc) - self.radius**2
 
         # Дискриминант квадратного уравнения
-        disc = b ** 2 - 4 * a * c
+        disc = b**2 - 4 * a * c
         if disc < 0:
             # Дискриминант отрицательный: луч проходит мимо сферы
             return None
@@ -111,7 +120,7 @@ class SphereSurface(BaseSurface):
                 # Проверка на принадлежность точки правильной полусфере
                 # Т.к. сферическая поверхность это сегмент, а не полная сфера, точка должна лежать на нужной части, а не на её противоположной половине.
                 # Вычисляем максимальную толщину сегмента линзы
-                sagitta = abs(self.radius) - np.sqrt(max(0.0, abs(self.radius) ** 2 - r_max ** 2))
+                sagitta = abs(self.radius) - np.sqrt(max(0.0, abs(self.radius) ** 2 - r_max**2))
 
                 # Проверяем, что смещение точки пересечения вдоль оси не превышает толщину нужной части
                 if abs(projection) <= (sagitta + 1e-4):
@@ -128,11 +137,10 @@ class SphereSurface(BaseSurface):
         abs_radius = abs(self.radius)
 
         # 1. Создаем сферу. ВНИМАНИЕ: Для PyVista центр в (0,0,0) - это центр кривизны!
-        mesh = pv.Sphere(radius=abs_radius, center=(0, 0, 0),
-                         phi_resolution=80, theta_resolution=80)
+        mesh = pv.Sphere(radius=abs_radius, center=(0, 0, 0), phi_resolution=80, theta_resolution=80)
 
         # 2. Вычисляем стрелку прогиба (высоту сегмента чаши)
-        sagitta = abs_radius - np.sqrt(max(0.0, abs_radius ** 2 - self.edge_radius ** 2))
+        sagitta = abs_radius - np.sqrt(max(0.0, abs_radius**2 - self.edge_radius**2))
 
         # 3. Обрезаем нужную чашу в локальных координатах PyVista
         if self.radius > 0:

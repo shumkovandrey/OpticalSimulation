@@ -2,11 +2,11 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
-from utils.geometry import get_tangents
-from surfaces.base import LensAssembly
-from surfaces.plane import PlaneSurface
 from surfaces.aspheric import AsphericSurface
+from surfaces.base import LensAssembly
 from surfaces.cylinder import CylinderSurface
+from surfaces.plane import PlaneSurface
+from utils.geometry import get_tangents
 
 
 class HyperbolicLens(LensAssembly):
@@ -18,12 +18,20 @@ class HyperbolicLens(LensAssembly):
     Коническая константа k рассчитывается автоматически на основе геометрических параметров.
     """
 
-    def __init__(self, origin, rotation_degrees=(0, 0, 0),
-                 thickness=2.0, edge_radius=3.0, n=1.5, f_target=10.0,
-                 reflection_range=None, refraction_range=(0, np.inf),
-                 absorption_range=None):
+    def __init__(
+        self,
+        origin,
+        rotation_degrees=(0, 0, 0),
+        thickness=2.0,
+        edge_radius=3.0,
+        n=1.5,
+        f_target=10.0,
+        reflection_range=None,
+        refraction_range=(0, np.inf),
+        absorption_range=None,
+    ):
         self.origin = np.array(origin, dtype=float)
-        self.rotation = R.from_euler('xyz', rotation_degrees, degrees=True).as_matrix()
+        self.rotation = R.from_euler("xyz", rotation_degrees, degrees=True).as_matrix()
         self.axis_dir = self.rotation @ np.array([1.0, 0.0, 0.0])
         self.thickness = thickness
         self.edge_radius = edge_radius
@@ -32,7 +40,7 @@ class HyperbolicLens(LensAssembly):
 
         # ПОЛНЫЙ АВТОРАСЧЕТ: Радиус вершины и коническая константа строго по законам оптики
         self.R_curvature = -float(self.f_target * (self.n - 1.0))
-        self.k = -(self.n ** 2)
+        self.k = -(self.n**2)
 
         self.aspheric_coeffs = []
         self.reflection_range = reflection_range
@@ -50,11 +58,11 @@ class HyperbolicLens(LensAssembly):
         c = 1.0 / self.R_curvature if self.R_curvature != 0 else 0.0
 
         # Синхронизировано с логикой ядра Numba из main.py
-        discr = 1.0 - (1.0 + self.k) * (c ** 2) * (r ** 2)
+        discr = 1.0 - (1.0 + self.k) * (c**2) * (r**2)
         if discr >= 0:
-            sag1 = (c * r ** 2) / (1.0 + np.sqrt(discr))
+            sag1 = (c * r**2) / (1.0 + np.sqrt(discr))
         else:
-            sag1 = (c * r ** 2) / 2.0
+            sag1 = (c * r**2) / 2.0
 
         # Длина бокового цилиндрического ободка с учётом знака профиля (v1_local - sag1)
         edge_thickness = self.thickness + sag1
@@ -70,27 +78,43 @@ class HyperbolicLens(LensAssembly):
 
         # 1. Передняя поверхность — Асферическая (гиперболоид)
         self.front = AsphericSurface(
-            center=[-half, 0, 0], radius=self.R_curvature, conic_constant=self.k,
-            aspheric_coeffs=self.aspheric_coeffs, n_inside=self.n, edge_radius=self.edge_radius,
-            thickness=self.thickness, reflection_range=self.reflection_range,
-            refraction_range=self.refraction_range, absorption_range=self.absorption_range,
-            lens_origin=[-half, 0, 0], lens_axis=[-1.0, 0.0, 0.0]
+            center=[-half, 0, 0],
+            radius=self.R_curvature,
+            conic_constant=self.k,
+            aspheric_coeffs=self.aspheric_coeffs,
+            n_inside=self.n,
+            edge_radius=self.edge_radius,
+            thickness=self.thickness,
+            reflection_range=self.reflection_range,
+            refraction_range=self.refraction_range,
+            absorption_range=self.absorption_range,
+            lens_origin=[-half, 0, 0],
+            lens_axis=[-1.0, 0.0, 0.0],
         )
 
         # 2. Задняя поверхность — Плоская
         self.back = PlaneSurface(
-            point=[half, 0, 0], normal=[1.0, 0.0, 0.0],
-            n_inside=self.n, edge_radius=self.edge_radius,
-            reflection_range=self.reflection_range, refraction_range=self.refraction_range,
+            point=[half, 0, 0],
+            normal=[1.0, 0.0, 0.0],
+            n_inside=self.n,
+            edge_radius=self.edge_radius,
+            reflection_range=self.reflection_range,
+            refraction_range=self.refraction_range,
             absorption_range=self.absorption_range,
-            lens_origin=[half, 0, 0], lens_axis=[1.0, 0.0, 0.0]
+            lens_origin=[half, 0, 0],
+            lens_axis=[1.0, 0.0, 0.0],
         )
 
         # 3. Боковая поверхность (цилиндрический ободок)
         self.cylinder = CylinderSurface(
-            center=local_cylinder_center, axis_dir=[1.0, 0.0, 0.0], radius=self.edge_radius,
-            half_length=half_rim_length, n_inside=self.n, reflection_range=self.reflection_range,
-            refraction_range=self.refraction_range, absorption_range=self.absorption_range
+            center=local_cylinder_center,
+            axis_dir=[1.0, 0.0, 0.0],
+            radius=self.edge_radius,
+            half_length=half_rim_length,
+            n_inside=self.n,
+            reflection_range=self.reflection_range,
+            refraction_range=self.refraction_range,
+            absorption_range=self.absorption_range,
         )
 
         # Синхронно позиционируем все поверхности по матрице
@@ -101,7 +125,7 @@ class HyperbolicLens(LensAssembly):
         self.cylinder.axis_dir = mat[:3, :3] @ self.cylinder.axis_dir
 
     def rotate(self, angles_deg):
-        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        rot = R.from_euler("xyz", angles_deg, degrees=True).as_matrix()
         self.axis_dir = rot @ self.axis_dir
         self.axis_dir /= np.linalg.norm(self.axis_dir)
         self.rotation = rot @ self.rotation
@@ -129,13 +153,13 @@ class HyperbolicLens(LensAssembly):
         x_front_local = v1_local - sag_values
         x_back_local = np.full_like(r_grid, v2_local)
 
-        front_mesh = pv.StructuredGrid(x_front_local, y, z).extract_surface(algorithm='dataset_surface')
-        back_mesh = pv.StructuredGrid(x_back_local, y, z).extract_surface(algorithm='dataset_surface')
+        front_mesh = pv.StructuredGrid(x_front_local, y, z).extract_surface(algorithm="dataset_surface")
+        back_mesh = pv.StructuredGrid(x_back_local, y, z).extract_surface(algorithm="dataset_surface")
 
         rim_x = np.array([x_front_local[:, -1], x_back_local[:, -1]])
         rim_y = np.array([y[:, -1], y[:, -1]])
         rim_z = np.array([z[:, -1], z[:, -1]])
-        rim_mesh = pv.StructuredGrid(rim_x, rim_y, rim_z).extract_surface(algorithm='dataset_surface')
+        rim_mesh = pv.StructuredGrid(rim_x, rim_y, rim_z).extract_surface(algorithm="dataset_surface")
 
         local_mesh = front_mesh.merge(back_mesh).merge(rim_mesh)
 

@@ -9,10 +9,16 @@ from core.rays import Ray, RayPool
 from fast_math import fresnel_amplitudes
 
 
-def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarray,
-              allow_reflection: bool = True, allow_refraction: bool = True,
-              offset_distance: float = DEFAULT_OFFSET_DISTANCE,
-              pool: Optional[RayPool] = None) -> List[Ray]:
+def split_ray(
+    ray: Ray,
+    normal: np.ndarray,
+    n_next: float,
+    start_point: np.ndarray,
+    allow_reflection: bool = True,
+    allow_refraction: bool = True,
+    offset_distance: float = DEFAULT_OFFSET_DISTANCE,
+    pool: Optional[RayPool] = None,
+) -> List[Ray]:
     """Расщепляет луч на отражённый и преломлённый по формулам Френеля.
 
     Полностью эквивалентна split_ray из main.py (шаг 5, без поляризации).
@@ -34,8 +40,8 @@ def split_ray(ray: Ray, normal: np.ndarray, n_next: float, start_point: np.ndarr
     R_coeff = 0.5 * (R_s + R_p)
 
     eta = n1 / n2
-    sin2_t = (eta ** 2) * (1.0 - cos_i ** 2)
-    is_tir = (sin2_t >= 1.0)
+    sin2_t = (eta**2) * (1.0 - cos_i**2)
+    is_tir = sin2_t >= 1.0
 
     if is_tir:
         R_coeff = 1.0

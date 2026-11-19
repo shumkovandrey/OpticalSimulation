@@ -49,6 +49,6 @@ def energy_to_alpha(energy, etype, min_alpha=0.0, gamma=1.0):
     elif etype == 1:
         return np.clip(energy, 0.0, 1.0)
     elif etype == 2:
-        return max(min_alpha, energy ** gamma)
+        return max(min_alpha, energy**gamma)
     else:
         return 1.0

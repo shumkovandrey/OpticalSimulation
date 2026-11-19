@@ -1,11 +1,12 @@
 import io
 import os
 import tempfile
-import pyvista as pv
 
+import pyvista as pv
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageWithDrawerLayout
-from trame.widgets import vuetify3 as v3, vtk as vtk_widgets
+from trame.widgets import vtk as vtk_widgets
+from trame.widgets import vuetify3 as v3
 
 # Важно для работы PyVista в безголовом (headless) режиме на сервере
 pv.OFF_SCREEN = True
@@ -57,9 +58,7 @@ def update_geometry(resolution, **kwargs):
     # Обновляем разрешение только если открыта базовая сфера
     if state.uploaded_file is None:
         global current_mesh
-        current_mesh = pv.Sphere(
-            theta_resolution=resolution, phi_resolution=resolution
-        )
+        current_mesh = pv.Sphere(theta_resolution=resolution, phi_resolution=resolution)
         actor.GetMapper().SetInputData(current_mesh)
         ctrl.view_update()
 
@@ -184,9 +183,7 @@ with SinglePageWithDrawerLayout(server, full_height=True) as layout:
                 v3.VSelect(
                     v_model=("representation", "surface"),
                     label="Режим отображения",
-                    items=(
-                        "['surface', 'wireframe', 'points']",
-                    ),
+                    items=("['surface', 'wireframe', 'points']",),
                     density="compact",
                     variant="outlined",
                     classes="mb-2",
@@ -258,10 +255,10 @@ if __name__ == "__main__":
 
     # 2. Безопасно переопределяем встроенные параметры Trame без конфликтов argparse
     server.cli.set_defaults(
-        host="0.0.0.0",     # Открываем сокет наружу, чтобы Amvera могла проксировать трафик
-        port=port_env,      # Привязываем порт к переменной окружения хостинга
-        timeout=0,          # Отключаем автовыключение сервера при отсутствии активности
-        open_browser=False  # Запрещаем открывать десктопный браузер внутри Linux-контейнера
+        host="0.0.0.0",  # Открываем сокет наружу, чтобы Amvera могла проксировать трафик
+        port=port_env,  # Привязываем порт к переменной окружения хостинга
+        timeout=0,  # Отключаем автовыключение сервера при отсутствии активности
+        open_browser=False,  # Запрещаем открывать десктопный браузер внутри Linux-контейнера
     )
 
     # 3. Запускаем сервер

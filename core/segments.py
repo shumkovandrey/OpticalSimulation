@@ -9,6 +9,7 @@ import numpy as np
 @dataclass(slots=True)
 class Segment:
     """Один отрезок трассированного луча."""
+
     start: np.ndarray
     end: np.ndarray
     energy: float
@@ -21,6 +22,7 @@ class Segment:
 @dataclass(slots=True)
 class HitInfo:
     """Информация о пересечении луча с объектом сцены."""
+
     obj: Any
     t: float
     point: np.ndarray

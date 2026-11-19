@@ -4,28 +4,30 @@ from typing import List, Optional
 
 import numpy as np
 
-from constants import RAY_INFINITY_DISTANCE, DEFAULT_OFFSET_DISTANCE, DEFAULT_MIN_ENERGY
-from core.rays import Ray, RayPool, WhiteRay, DispersiveRay
-from core.segments import Segment
+from constants import DEFAULT_MIN_ENERGY, DEFAULT_OFFSET_DISTANCE, RAY_INFINITY_DISTANCE
 from core.dispersion import get_dispersion_n
+from core.rays import DispersiveRay, Ray, RayPool, WhiteRay
+from core.segments import Segment
 from tracing.hit_finder import find_best_hit
 from tracing.interaction import split_ray
 
 
-def trace_recursive(ray: 'Ray',
-                     elements: List,
-                     depth: int,
-                     min_energy: float = DEFAULT_MIN_ENERGY,
-                     offset_distance: float = DEFAULT_OFFSET_DISTANCE,
-                     total_limit: int = 5000,
-                     pool: Optional[RayPool] = None) -> List[Segment]:
+def trace_recursive(
+    ray: "Ray",
+    elements: List,
+    depth: int,
+    min_energy: float = DEFAULT_MIN_ENERGY,
+    offset_distance: float = DEFAULT_OFFSET_DISTANCE,
+    total_limit: int = 5000,
+    pool: Optional[RayPool] = None,
+) -> List[Segment]:
     """Рекурсивная трассировка дерева лучей.
 
     Полностью эквивалентна _trace_recursive из main.py (шаг 5).
     """
     segments = []
 
-    def recurse(current_ray: 'Ray', d: int, from_pool: bool):
+    def recurse(current_ray: "Ray", d: int, from_pool: bool):
         nonlocal segments
 
         if len(segments) >= total_limit or d <= 0 or current_ray.energy < min_energy:
@@ -47,16 +49,24 @@ def trace_recursive(ray: 'Ray',
 
         if hit is None:
             end = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
-            segments.append(Segment(
-                current_ray.origin.copy(), end.copy(),
-                current_ray.energy, ray_color,
-            ))
+            segments.append(
+                Segment(
+                    current_ray.origin.copy(),
+                    end.copy(),
+                    current_ray.energy,
+                    ray_color,
+                )
+            )
             return
         else:
-            segments.append(Segment(
-                current_ray.origin.copy(), hit.point.copy(),
-                current_ray.energy, ray_color,
-            ))
+            segments.append(
+                Segment(
+                    current_ray.origin.copy(),
+                    hit.point.copy(),
+                    current_ray.energy,
+                    ray_color,
+                )
+            )
 
         if hit.absorbed:
             return
@@ -67,7 +77,8 @@ def trace_recursive(ray: 'Ray',
 
             if pool:
                 new_ray = pool.acquire(
-                    start, new_dir,
+                    start,
+                    new_dir,
                     energy=current_ray.energy,
                     current_n=current_ray.current_n,
                     color=current_ray.color,
@@ -76,7 +87,8 @@ def trace_recursive(ray: 'Ray',
                 )
             else:
                 new_ray = Ray(
-                    start, new_dir,
+                    start,
+                    new_dir,
                     energy=current_ray.energy,
                     current_n=current_ray.current_n,
                     color=current_ray.color,
@@ -96,7 +108,8 @@ def trace_recursive(ray: 'Ray',
             start = hit.point + offset_distance * current_ray.direction
             if pool:
                 new_ray = pool.acquire(
-                    start, current_ray.direction,
+                    start,
+                    current_ray.direction,
                     energy=current_ray.energy,
                     current_n=current_ray.current_n,
                     color=current_ray.color,
@@ -105,7 +118,8 @@ def trace_recursive(ray: 'Ray',
                 )
             else:
                 new_ray = Ray(
-                    start, current_ray.direction,
+                    start,
+                    current_ray.direction,
                     energy=current_ray.energy,
                     current_n=current_ray.current_n,
                     color=current_ray.color,
@@ -118,7 +132,10 @@ def trace_recursive(ray: 'Ray',
             return
 
         new_rays = split_ray(
-            current_ray, hit.normal, n_next, hit.point,
+            current_ray,
+            hit.normal,
+            n_next,
+            hit.point,
             allow_reflection=hit.allow_reflection,
             allow_refraction=hit.allow_refraction,
             offset_distance=offset_distance,

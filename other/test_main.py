@@ -1,10 +1,8 @@
-import numpy as np
-
-import pyvista as pv
-
 import random
 
-import scipy.spatial.transform as st # Для удобного вращения
+import numpy as np
+import pyvista as pv
+import scipy.spatial.transform as st  # Для удобного вращения
 from scipy.spatial.transform import Rotation as R
 
 
@@ -22,7 +20,7 @@ def calculate_radius(target_f, n, thickness=0):
     C = -1 / (target_f * (n - 1))
 
     # Решаем через дискриминант
-    D = B ** 2 - 4 * A * C
+    D = B**2 - 4 * A * C
     if D < 0:
         return None  # Решения нет для такой толщины
 
@@ -59,11 +57,7 @@ def calculate_rotation_matrix(v_to):
     c = np.dot(v_from, v_to)  # Косинус угла между векторами
 
     # Кососимметричная матрица K
-    K = np.array([
-        [0, -v[2], v[1]],
-        [v[2], 0, -v[0]],
-        [-v[1], v[0], 0]
-    ])
+    K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
 
     # Формула Родрига для поворота вектора к вектору
     R = np.eye(3) + K + (K @ K) * (1 / (1 + c))
@@ -133,7 +127,7 @@ class PlaneSurface:
             cos_i = np.dot(actual_normal, ray_dir)
 
         cos_i = -cos_i
-        sin2_t = eta ** 2 * (1.0 - cos_i ** 2)
+        sin2_t = eta**2 * (1.0 - cos_i**2)
         if sin2_t > 1.0:  # Полное внутреннее отражение
             return ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
 
@@ -264,9 +258,9 @@ class SphereSurface:
         oc = ray.origin - self.center
         a = np.dot(ray.direction, ray.direction)
         b = 2.0 * np.dot(oc, ray.direction)
-        c = np.dot(oc, oc) - self.radius ** 2
+        c = np.dot(oc, oc) - self.radius**2
 
-        discriminant = b ** 2 - 4 * a * c
+        discriminant = b**2 - 4 * a * c
         if discriminant < 0:
             return None
 
@@ -306,7 +300,7 @@ class SphereSurface:
             cos_i = np.dot(actual_normal, ray_dir)
 
         cos_i = -cos_i
-        sin2_t = eta ** 2 * (1.0 - cos_i ** 2)
+        sin2_t = eta**2 * (1.0 - cos_i**2)
 
         if sin2_t > 1.0:  # Внутреннее отражение
             return ray_dir - 2 * np.dot(ray_dir, actual_normal) * actual_normal
@@ -324,8 +318,8 @@ class Screen(PlaneSurface):
             normal=normal,
             n_inside=1.0,
             lens_origin=point,  # Центр экрана
-            lens_axis=normal,   # Направление экрана
-            edge_radius=size/2  # Ограничение размера
+            lens_axis=normal,  # Направление экрана
+            edge_radius=size / 2,  # Ограничение размера
         )
         self.size = size
 
@@ -349,7 +343,7 @@ class BoxPrism:
             ([0, 1, 0], size_y / 2, [size_x, size_z]),  # Правая (+Y)
             ([0, -1, 0], size_y / 2, [size_x, size_z]),  # Левая (-Y)
             ([0, 0, 1], size_z / 2, [size_x, size_y]),  # Верхняя (+Z)
-            ([0, 0, -1], size_z / 2, [size_x, size_y])  # Нижняя (-Z)
+            ([0, 0, -1], size_z / 2, [size_x, size_y]),  # Нижняя (-Z)
         ]
 
         for norm, offset, edge_dims in face_configs:
@@ -366,7 +360,7 @@ class BoxPrism:
                 n_inside=n,
                 lens_origin=self.origin,  # Центр всего блока
                 lens_axis=norm,  # Для грани это её нормаль
-                edge_radius=r_limit
+                edge_radius=r_limit,
             )
 
             self.surfaces.append(surf)
@@ -376,14 +370,11 @@ class BoxPrism:
 
     def get_mesh(self):
         # Визуальная модель в PyVista
-        return pv.Cube(center=self.origin,
-                       x_length=self.size[0],
-                       y_length=self.size[1],
-                       z_length=self.size[2])
+        return pv.Cube(center=self.origin, x_length=self.size[0], y_length=self.size[1], z_length=self.size[2])
 
     def rotate(self, angles_deg):
         # angles_deg = [X, Y, Z] - углы поворота
-        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        rot = R.from_euler("xyz", angles_deg, degrees=True).as_matrix()
 
         for surf in self.surfaces:
             # Поворачиваем точку относительно центра
@@ -504,7 +495,7 @@ class UniversalLens:
             s = np.linalg.norm(v)
             c = np.dot(v_old, v_new)
             vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
-            self.rotation = np.eye(3) + vx + vx @ vx * ((1 - c) / (s ** 2))
+            self.rotation = np.eye(3) + vx + vx @ vx * ((1 - c) / (s**2))
 
         # Пересчитываем центры сфер в локальных координатах (относительно 0)
         v1_local = -thickness / 2
@@ -517,16 +508,24 @@ class UniversalLens:
             p1_world = self.origin + self.rotation @ np.array([v1_local, 0, 0])
             n1_world = self.rotation @ np.array([-1, 0, 0])  # Нормаль наружу (влево)
             self.front = PlaneSurface(
-                point=p1_world, normal=n1_world, n_inside=n,
-                lens_origin=self.origin, lens_axis=self.axis_dir, edge_radius=edge_radius
+                point=p1_world,
+                normal=n1_world,
+                n_inside=n,
+                lens_origin=self.origin,
+                lens_axis=self.axis_dir,
+                edge_radius=edge_radius,
             )
         else:
             # Если R1 есть — создаем сферу
             c1_world = self.origin + self.rotation @ np.array([v1_local + R1, 0, 0])
             self.front = SphereSurface(
-                center=c1_world, radius=abs(R1), n_inside=n,
-                lens_origin=self.origin, lens_axis=self.axis_dir,
-                edge_radius=edge_radius, thickness=thickness
+                center=c1_world,
+                radius=abs(R1),
+                n_inside=n,
+                lens_origin=self.origin,
+                lens_axis=self.axis_dir,
+                edge_radius=edge_radius,
+                thickness=thickness,
             )
 
         # 3. Создание ЗАДНЕЙ поверхности
@@ -534,15 +533,23 @@ class UniversalLens:
             p2_world = self.origin + self.rotation @ np.array([v2_local, 0, 0])
             n2_world = self.rotation @ np.array([1, 0, 0])  # Нормаль наружу (вправо)
             self.back = PlaneSurface(
-                point=p2_world, normal=n2_world, n_inside=n,
-                lens_origin=self.origin, lens_axis=self.axis_dir, edge_radius=edge_radius
+                point=p2_world,
+                normal=n2_world,
+                n_inside=n,
+                lens_origin=self.origin,
+                lens_axis=self.axis_dir,
+                edge_radius=edge_radius,
             )
         else:
             c2_world = self.origin + self.rotation @ np.array([v2_local - R2, 0, 0])
             self.back = SphereSurface(
-                center=c2_world, radius=abs(R2), n_inside=n,
-                lens_origin=self.origin, lens_axis=self.axis_dir,
-                edge_radius=edge_radius, thickness=thickness
+                center=c2_world,
+                radius=abs(R2),
+                n_inside=n,
+                lens_origin=self.origin,
+                lens_axis=self.axis_dir,
+                edge_radius=edge_radius,
+                thickness=thickness,
             )
 
     def get_surfaces(self):
@@ -569,7 +576,7 @@ class UniversalLens:
                 # Для front: c = v1 + R. Для back: c = v2 - R.
                 c_x = v_x + R if is_front else v_x - R
 
-                dx = np.sqrt(np.maximum(0, abs(R) ** 2 - r_vals ** 2))
+                dx = np.sqrt(np.maximum(0, abs(R) ** 2 - r_vals**2))
 
                 # Определяем, какую сторону сферы брать (выпуклость/вогнутость)
                 # Если R > 0 (выпуклая для front), берем c_x - dx
@@ -699,9 +706,9 @@ class UniversalLens:
             plotter.add_mesh(mark, color="red", line_width=3)
 
             # Подпись
-            plotter.add_point_labels([x_pos, 0.6, 0], [txt],
-                                     font_size=12, text_color="yellow",
-                                     shape=None, show_points=False)
+            plotter.add_point_labels(
+                [x_pos, 0.6, 0], [txt], font_size=12, text_color="yellow", shape=None, show_points=False
+            )
 
 
 def run_simulation(start_ray, elements, max_bounces=10):
@@ -712,7 +719,7 @@ def run_simulation(start_ray, elements, max_bounces=10):
     # print(f"--- Запуск луча из {start_ray.origin} ---")
 
     for i in range(max_bounces):
-        best_t = float('inf')
+        best_t = float("inf")
         hit_obj = None
 
         for obj in elements:
@@ -865,35 +872,23 @@ plotter = pv.Plotter()
 plotter.set_background("black")
 
 # --- ЛИНЗА 1: Собирающая (Лежит на оси X) ---
-l1 = UniversalLens(
-    origin=[-20, 0, 0],
-    axis_dir=[1, 0, 0],
-    R1=5, R2=5, thickness=0.75, edge_radius=1.75, n=1.5
-)
+l1 = UniversalLens(origin=[-20, 0, 0], axis_dir=[1, 0, 0], R1=5, R2=5, thickness=0.75, edge_radius=1.75, n=1.5)
 
 # --- ЛИНЗА 2: Рассеивающая (Стоит вертикально, ось вдоль Z) ---
-l2 = UniversalLens(
-    origin=[0, 0, 0],
-    axis_dir=[0, 0, 1],
-    R1=-15, R2=-15, thickness=2, edge_radius=8, n=1.5
-)
+l2 = UniversalLens(origin=[0, 0, 0], axis_dir=[0, 0, 1], R1=-15, R2=-15, thickness=2, edge_radius=8, n=1.5)
 
 # --- ЛИНЗА 3: Мениск (Наклонен под 45 градусов в плоскости XY) ---
-l3 = UniversalLens(
-    origin=[20, 10, 0],
-    axis_dir=[1, 1, 0],
-    R1=10, R2=20, thickness=3, edge_radius=6, n=1.5
-)
+l3 = UniversalLens(origin=[20, 10, 0], axis_dir=[1, 1, 0], R1=10, R2=20, thickness=3, edge_radius=6, n=1.5)
 
 # --- ЛИНЗА 4: Плоско-выпуклая (Наклонена в пространстве) ---
 l4 = UniversalLens(
     origin=[0, 20, 10],
-    axis_dir=[1, 0, 0], # Смотрит по диагонали Y-Z
-    R1=None,              # Первая поверхность - ПЛОСКАЯ
-    R2=None,               # Вторая - выпуклая
+    axis_dir=[1, 0, 0],  # Смотрит по диагонали Y-Z
+    R1=None,  # Первая поверхность - ПЛОСКАЯ
+    R2=None,  # Вторая - выпуклая
     thickness=4,
     edge_radius=8,
-    n=1.5
+    n=1.5,
 )
 
 all_lenses = [l1]
@@ -929,7 +924,6 @@ for i in range(len(all_lenses)):
         if len(trajectory) > 2:
             hits = pv.PolyData(trajectory[1:-1])
             plotter.add_mesh(hits, color="red", point_size=10, render_points_as_spheres=True)
-
 
 
 plotter.show_grid(color="white")

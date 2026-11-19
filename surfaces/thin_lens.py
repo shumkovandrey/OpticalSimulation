@@ -4,17 +4,18 @@ import numpy as np
 import pyvista as pv
 
 from core.rays import Ray
-from utils.geometry import get_tangents
 from surfaces.base import BaseSurface
+from utils.geometry import get_tangents
 
 
 class ThinLens(BaseSurface):
     """Тонкая линза (параксиальное приближение)."""
-    def __init__(self, center, focal_length, edge_radius=3.0,
-                 axis_dir=np.array([1.0, 0.0, 0.0]),
-                 refraction_range=(0, np.inf)):
+
+    def __init__(
+        self, center, focal_length, edge_radius=3.0, axis_dir=np.array([1.0, 0.0, 0.0]), refraction_range=(0, np.inf)
+    ):
         self.center = np.asarray(center, dtype=float)
-        self.f = focal_length          # положительное – собирающая, отрицательное – рассеивающая
+        self.f = focal_length  # положительное – собирающая, отрицательное – рассеивающая
         self.edge_radius = edge_radius
         self.axis_dir = np.asarray(axis_dir, dtype=float)
         self.axis_dir /= np.linalg.norm(self.axis_dir)
@@ -42,7 +43,7 @@ class ThinLens(BaseSurface):
         r_vec = (hit_point - self.center) - self.axis_dir * np.dot(hit_point - self.center, self.axis_dir)
         h = np.linalg.norm(r_vec)
         if h < 1e-12:
-            return ray_dir       # на оси – без отклонения
+            return ray_dir  # на оси – без отклонения
         r_unit = r_vec / h
         # Отклонение луча: delta = (h/f) * r_unit (знак уже учтён)
         new_dir = ray_dir - (h / self.f) * r_unit
@@ -50,8 +51,7 @@ class ThinLens(BaseSurface):
         return new_dir
 
     def get_mesh(self) -> pv.PolyData:
-        disc = pv.Disc(center=self.center, normal=self.axis_dir,
-                       inner=0, outer=self.edge_radius, c_res=64)
+        disc = pv.Disc(center=self.center, normal=self.axis_dir, inner=0, outer=self.edge_radius, c_res=64)
         return disc
 
     def is_active(self, wavelength):

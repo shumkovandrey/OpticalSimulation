@@ -1,17 +1,18 @@
 # visualization.py
 """Визуализация: облако отрезков (RayCloud) и оркестратор трассировки (RayTracer)."""
 
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
 import pyvista as pv
 
 pv.global_theme.allow_empty_mesh = True
 
-from core.rays import Ray, WhiteRay, RayPool
+from core.rays import Ray, RayPool, WhiteRay
 from core.segments import Segment
-from tracing.modes import TraceMode, SimpleMode, TreeMode
-from utils.color import to_rgb as _to_rgb_utils, energy_to_alpha
+from tracing.modes import SimpleMode, TraceMode, TreeMode
+from utils.color import energy_to_alpha
+from utils.color import to_rgb as _to_rgb_utils
 
 if TYPE_CHECKING:
     from emitters import BeamEmitter
@@ -23,11 +24,14 @@ class RayCloud:
     Полностью эквивалентен RayCloud из main.py (шаг 5).
     """
 
-    def __init__(self, plotter: pv.Plotter,
-                 default_color="yellow",
-                 line_width: float = 2.0,
-                 min_alpha: float = 0,
-                 gamma: float = 0.3):
+    def __init__(
+        self,
+        plotter: pv.Plotter,
+        default_color="yellow",
+        line_width: float = 2.0,
+        min_alpha: float = 0,
+        gamma: float = 0.3,
+    ):
         self.plotter = plotter
         self.default_color = default_color
         self.line_width = line_width
@@ -38,12 +42,7 @@ class RayCloud:
         temp_mesh = pv.PolyData(np.zeros((1, 3)))
         temp_mesh.point_data["colors"] = np.array([[1.0, 1.0, 1.0, 1.0]], dtype=np.float32)
         self.actor = plotter.add_mesh(
-            temp_mesh,
-            scalars="colors",
-            rgba=True,
-            line_width=line_width,
-            render_lines_as_tubes=False,
-            name="RayCloud"
+            temp_mesh, scalars="colors", rgba=True, line_width=line_width, render_lines_as_tubes=False, name="RayCloud"
         )
         self.actor.mapper.dataset.copy_from(pv.PolyData())  # очищаем
 
@@ -69,10 +68,7 @@ class RayCloud:
             points.append(p2)
             lines.append([2, offset, offset + 1])
 
-            alpha = energy_to_alpha(
-                seg.energy, energy_color_type,
-                self.min_alpha, self.gamma
-            )
+            alpha = energy_to_alpha(seg.energy, energy_color_type, self.min_alpha, self.gamma)
             rgba = self._build_rgba(seg.color, alpha)
             rgba_list.extend([rgba, rgba])
             offset += 2
@@ -97,11 +93,13 @@ class RayTracer:
     Полностью эквивалентен RayTracer из main.py (шаг 5).
     """
 
-    def __init__(self,
-                 plotter: pv.Plotter,
-                 mode='simple',  # строка или экземпляр TraceMode
-                 pool: Optional[RayPool] = None,
-                 **cloud_kwargs):
+    def __init__(
+        self,
+        plotter: pv.Plotter,
+        mode="simple",  # строка или экземпляр TraceMode
+        pool: Optional[RayPool] = None,
+        **cloud_kwargs,
+    ):
         """
         Параметры
         ---------
@@ -132,9 +130,9 @@ class RayTracer:
         """Задать режим трассировки строкой или объектом TraceMode."""
         if isinstance(mode, TraceMode):
             self._mode = mode
-        elif mode == 'simple':
+        elif mode == "simple":
             self._mode = SimpleMode(pool=self.pool)
-        elif mode == 'tree':
+        elif mode == "tree":
             self._mode = TreeMode(pool=self.pool)
         else:
             raise ValueError("mode must be 'simple', 'tree' or a TraceMode instance")
@@ -151,15 +149,15 @@ class RayTracer:
     # -----------------------------------------------------------------
     # Добавление объектов
     # -----------------------------------------------------------------
-    def add_ray(self, ray: 'Ray'):
+    def add_ray(self, ray: "Ray"):
         self.rays.append(ray)
 
     def add_elements(self, *elements):
         for el in elements:
             self.elements.append(el)
 
-    def add_emitter(self, emitter: 'BeamEmitter'):
-        if not hasattr(self, 'emitters'):
+    def add_emitter(self, emitter: "BeamEmitter"):
+        if not hasattr(self, "emitters"):
             self.emitters = []
         self.emitters.append(emitter)
 

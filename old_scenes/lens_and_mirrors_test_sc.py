@@ -1,39 +1,54 @@
 import numpy as np
 import pyvista as pv
-from main import *       # ваш основной модуль (с исправленными классами)
+
+from main import *  # ваш основной модуль (с исправленными классами)
 
 # ---------- СОЗДАЁМ ЭЛЕМЕНТЫ ----------
 # 1. Двояковыпуклая линза (фокусное расстояние ~ положительное)
 lens_biconvex = UniversalLens(
     origin=[0, 10, 0],
     rotation_degrees=(0, 0, 0),
-    R1=10, R2=-10, thickness=0.5, edge_radius=3.0, n=1.5,
-    refraction_range=(0, 10000)
+    R1=10,
+    R2=-10,
+    thickness=0.5,
+    edge_radius=3.0,
+    n=1.5,
+    refraction_range=(0, 10000),
 )
 
 # 2. Плоско-выпуклая линза (R1=бесконечность, R2=-10)
 lens_planoconvex = UniversalLens(
     origin=[0, 30, 0],
     rotation_degrees=(0, 0, 0),
-    R1=None, R2=-10, thickness=0.5, edge_radius=3.0, n=1.5,
-    refraction_range=(0, 10000)
+    R1=None,
+    R2=-10,
+    thickness=0.5,
+    edge_radius=3.0,
+    n=1.5,
+    refraction_range=(0, 10000),
 )
 
 # 3. Выпукло-вогнутая линза (мениск)
 lens_meniscus = UniversalLens(
     origin=[0, 50, 0],
     rotation_degrees=(0, 0, 120),
-    R1=15, R2=10, thickness=1, edge_radius=3.0, n=1.5,
-    refraction_range=(0, 10000)
+    R1=15,
+    R2=10,
+    thickness=1,
+    edge_radius=3.0,
+    n=1.5,
+    refraction_range=(0, 10000),
 )
 
 # 4. Вогнутое сферическое зеркало
 sphere_mirror = SphereSurface(
     radius=-15,
     rotation_degrees=(0, 0, 0),
-    edge_radius=4.0, thickness=10.0,
-    n_inside=1.0, reflection_range=(0, 10000),
-    lens_origin=[10, 70, 0]        # вершина, лучи идут слева направо
+    edge_radius=4.0,
+    thickness=10.0,
+    n_inside=1.0,
+    reflection_range=(0, 10000),
+    lens_origin=[10, 70, 0],  # вершина, лучи идут слева направо
 )
 
 # ---------- ВИЗУАЛИЗАЦИЯ ----------
@@ -57,7 +72,7 @@ plotter.add_mesh(lens_meniscus.get_mesh(), color="magenta", opacity=0.5, name="m
 plotter.add_mesh(sphere_mirror.get_mesh(), color="white", name="mirror")
 
 # Трассировщик
-tracer = RayTracer(plotter, mode='tree')
+tracer = RayTracer(plotter, mode="tree")
 
 # Добавляем элементы в трейсер
 tracer.elements.clear()

@@ -47,11 +47,7 @@ def calculate_rotation_matrix(v_to):
     v = np.cross(v_from, v_to)
     c = np.dot(v_from, v_to)
 
-    K = np.array([
-        [0, -v[2], v[1]],
-        [v[2], 0, -v[0]],
-        [-v[1], v[0], 0]
-    ])
+    K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
 
     return np.eye(3) + K + (K @ K) * (1 / (1 + c))
 
@@ -68,7 +64,7 @@ def calculate_radius(target_f, n, thickness=0):
     B = 2
     C = -1 / (target_f * (n - 1))
 
-    D = B ** 2 - 4 * A * C
+    D = B**2 - 4 * A * C
     if D < 0:
         return None
 

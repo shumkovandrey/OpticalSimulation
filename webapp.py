@@ -5,29 +5,30 @@ from trame_vuetify.ui.vuetify3 import VAppLayout
 
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
 
-import json
 import asyncio
+import json
+
 import numpy as np
 import pyvista as pv
-from trame.app import get_server
-from trame.widgets import vuetify3 as vuetify
-from scipy.spatial.transform import Rotation as R
 
 # Для холста
 from pyvista.trame.ui import plotter_ui
+from scipy.spatial.transform import Rotation as R
+from trame.app import get_server
+from trame.widgets import vuetify3 as vuetify
 
-
-from core.rays import Ray, DispersiveRay, WhiteRay, RayPool
+from core.rays import DispersiveRay, Ray, RayPool, WhiteRay
+from emitters import BeamEmitter
+from surfaces.cylinder import CylinderSurface
+from surfaces.hyperbolic_lens import HyperbolicLens
+from surfaces.mesh import MeshSurface
 from surfaces.plane import PlaneSurface
 from surfaces.sphere import SphereSurface
-from surfaces.cylinder import CylinderSurface
-from surfaces.mesh import MeshSurface
 from surfaces.universal_lens import UniversalLens
-from surfaces.hyperbolic_lens import HyperbolicLens
-from emitters import BeamEmitter
 from visualization import RayTracer
 
 pv.OFF_SCREEN = True
+
 
 class OpticsAppController:
     def __init__(self, server):
@@ -111,12 +112,10 @@ class OpticsAppController:
             {"title": "Белый свет (WhiteRay)", "value": "WhiteRay"},
         ]
 
-        # НАЧАЛО ИЗМЕНЕНИЙ: Инициализация спектральных параметров в состоянии
         for effect in ["reflection", "refraction", "absorption"]:
             self.state[f"param_{effect}_min"] = 0.0
             self.state[f"param_{effect}_max"] = np.inf
-            self.state[f"param_{effect}_enabled"] = (effect == "refraction") # преломление включено по умолчанию
-        # КОНЕЦ ИЗМЕНЕНИЙ
+            self.state[f"param_{effect}_enabled"] = effect == "refraction"  # преломление включено по умолчанию
 
         self.state.temp_pos_delta_x = 0.0
         self.state.temp_pos_delta_y = 0.0
@@ -129,7 +128,6 @@ class OpticsAppController:
         self.ctrl.trigger("apply_x_delta")(self.apply_x_delta)
         self.ctrl.trigger("apply_y_delta")(self.apply_y_delta)
         self.ctrl.trigger("apply_z_delta")(self.apply_z_delta)
-
 
         self.ctrl.trigger("set_last_pos")(self.set_last_pos)
 
@@ -150,8 +148,7 @@ class OpticsAppController:
     # ---------- Вспомогательные методы ----------
     def _update_objects_list_state(self):
         self.state.scene_objects_list = [
-            {"id": o["id"], "name": o["name"], "type": o["type"]}
-            for o in self.scene_objects
+            {"id": o["id"], "name": o["name"], "type": o["type"]} for o in self.scene_objects
         ]
 
     # ---------- Сохранение и загрузка сцены ----------
@@ -179,15 +176,10 @@ class OpticsAppController:
                 elif isinstance(val, (list, tuple)) and len(val) == 2:  # Для оптических диапазонов
                     # Заменяем np.inf на строковое представление для JSON
                     save_params[key] = [
-                        "Infinity" if v == np.inf or (isinstance(v, float) and np.isinf(v)) else v
-                        for v in val
+                        "Infinity" if v == np.inf or (isinstance(v, float) and np.isinf(v)) else v for v in val
                     ]
 
-            serialized_data.append({
-                "name": obj["name"],
-                "type": obj["type"],
-                "params": save_params
-            })
+            serialized_data.append({"name": obj["name"], "type": obj["type"], "params": save_params})
 
         try:
             with open(filename, "w", encoding="utf-8") as f:
@@ -233,8 +225,10 @@ class OpticsAppController:
                 params = obj_data["params"]
 
                 # Приводим массивы обратно к кортежам, где это необходимо
-                if "origin" in params: params["origin"] = tuple(params["origin"])
-                if "rotation" in params: params["rotation"] = tuple(params["rotation"])
+                if "origin" in params:
+                    params["origin"] = tuple(params["origin"])
+                if "rotation" in params:
+                    params["rotation"] = tuple(params["rotation"])
 
                 # Восстанавливаем классы лучей
                 if "ray_class" in params:
@@ -275,62 +269,78 @@ class OpticsAppController:
     # ---------- Создание объектов ----------
     def create_initial_objects(self):
         # 1. Входящий пучок света (параллельные лучи слева направо)
-        self.add_object("emitter", "Входящий свет", {
-            "origin": (-10.0, 0.0, 0.0),
-            "rotation": (0.0, 0.0, 0.0),
-            "num_rays": 10,
-            "min_offset": -1.2,
-            "max_offset": 1.2,
-            "wavelength": 550.0,
-            "color": "yellow",
-            "energy": 1.0,
-            "current_n": 1.0,
-            "ray_class": WhiteRay,
-            "num_spectral_bands": 7
-        })
+        self.add_object(
+            "emitter",
+            "Входящий свет",
+            {
+                "origin": (-10.0, 0.0, 0.0),
+                "rotation": (0.0, 0.0, 0.0),
+                "num_rays": 10,
+                "min_offset": -1.2,
+                "max_offset": 1.2,
+                "wavelength": 550.0,
+                "color": "yellow",
+                "energy": 1.0,
+                "current_n": 1.0,
+                "ray_class": WhiteRay,
+                "num_spectral_bands": 7,
+            },
+        )
 
         # 2. Главное зеркало (вогнутая сферическая поверхность справа)
         # Отражает лучи обратно к центру трубы
-        self.add_object("sphere_surf", "Главное зеркало (Primary)", {
-            "origin": (5.0, 0.0, 0.0),
-            "rotation": (0.0, 0.0, 0.0),  # Развернуто навстречу лучам
-            "radius": 15.0,  # Радиус кривизны зеркала
-            "edge_radius": 1.5,  # Радиус апертуры
-            "n": 1.0,
-            "reflection_range": (0.0, np.inf),
-            "refraction_range": None,
-            "absorption_range": None
-        })
+        self.add_object(
+            "sphere_surf",
+            "Главное зеркало (Primary)",
+            {
+                "origin": (5.0, 0.0, 0.0),
+                "rotation": (0.0, 0.0, 0.0),  # Развернуто навстречу лучам
+                "radius": 15.0,  # Радиус кривизны зеркала
+                "edge_radius": 1.5,  # Радиус апертуры
+                "n": 1.0,
+                "reflection_range": (0.0, np.inf),
+                "refraction_range": None,
+                "absorption_range": None,
+            },
+        )
 
         # 3. Вторичное плоское зеркало (наклонное под 45 градусов)
         # Перенаправляет лучи от главного зеркала вертикально вверх
-        self.add_object("plane", "Вторичное зеркало (Secondary)", {
-            "origin": (-2.0, 0.0, 0.0),
-            "rotation": (0.0, 0.0, 45.0),  # Наклон 45 градусов для отражения вверх
-            "edge_radius": 0.5,
-            "shape_type": "circle",
-            "width": 1.0,
-            "height": 1.0,
-            "n": 1.0,
-            "reflection_range": (0.0, np.inf),
-            "refraction_range": None,
-            "absorption_range": None
-        })
+        self.add_object(
+            "plane",
+            "Вторичное зеркало (Secondary)",
+            {
+                "origin": (-2.0, 0.0, 0.0),
+                "rotation": (0.0, 0.0, 45.0),  # Наклон 45 градусов для отражения вверх
+                "edge_radius": 0.5,
+                "shape_type": "circle",
+                "width": 1.0,
+                "height": 1.0,
+                "n": 1.0,
+                "reflection_range": (0.0, np.inf),
+                "refraction_range": None,
+                "absorption_range": None,
+            },
+        )
 
         # 4. Линза окуляра (Eyepiece Lens сверху)
         # Собирает перенаправленный свет в финальный пучок
-        self.add_object("lens", "Окуляр (Eyepiece)", {
-            "origin": (-2.0, 3.17, 0.0),
-            "rotation": (0.0, 0.0, 90.0),  # Повернута горизонтально (вдоль оси Y)
-            "R1": 4.0,
-            "R2": 2.13,
-            "thickness": 0.2,
-            "edge_radius": 0.6,
-            "n": 1.5,
-            "reflection_range": None,
-            "refraction_range": (0.0, np.inf),
-            "absorption_range": None
-        })
+        self.add_object(
+            "lens",
+            "Окуляр (Eyepiece)",
+            {
+                "origin": (-2.0, 3.17, 0.0),
+                "rotation": (0.0, 0.0, 90.0),  # Повернута горизонтально (вдоль оси Y)
+                "R1": 4.0,
+                "R2": 2.13,
+                "thickness": 0.2,
+                "edge_radius": 0.6,
+                "n": 1.5,
+                "reflection_range": None,
+                "refraction_range": (0.0, np.inf),
+                "absorption_range": None,
+            },
+        )
         self._update_objects_list_state()
 
     def add_object(self, obj_type, name, params):
@@ -338,9 +348,7 @@ class OpticsAppController:
         obj_id = f"obj_{self.object_counter}"
 
         instance = self._create_instance(obj_type, params)
-        obj_entry = {
-            "id": obj_id, "type": obj_type, "name": name, "params": params, "instance": instance
-        }
+        obj_entry = {"id": obj_id, "type": obj_type, "name": name, "params": params, "instance": instance}
         self.scene_objects.append(obj_entry)
 
         # Берем ЧИСТЫЙ локальный меш формы объекта
@@ -352,12 +360,12 @@ class OpticsAppController:
             color="green" if obj_type == "emitter" else "cyan",
             opacity=0.5,
             smooth_shading=True,
-            name=obj_id
+            name=obj_id,
         )
 
         # Задаем начальную матрицу трансформации
         mat = np.eye(4)
-        mat[:3, :3] = R.from_euler('xyz', params.get("rotation", (0, 0, 0)), degrees=True).as_matrix()
+        mat[:3, :3] = R.from_euler("xyz", params.get("rotation", (0, 0, 0)), degrees=True).as_matrix()
         mat[:3, 3] = params.get("origin", (0, 0, 0))
         actor.user_matrix = mat
 
@@ -369,53 +377,128 @@ class OpticsAppController:
         return obj_id
 
     def add_plane_click(self):
-        self.add_object("plane", f"Плоскость {len(self.scene_objects) + 1}", {
-            "origin": (0, 0, 0), "rotation": (0, 0, 0), "edge_radius": 1.5, "n": 1.0,
-            "shape_type": "circle", "width": 2.0, "height": 2.0, # <-- Добавлено
-            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
-        })
+        self.add_object(
+            "plane",
+            f"Плоскость {len(self.scene_objects) + 1}",
+            {
+                "origin": (0, 0, 0),
+                "rotation": (0, 0, 0),
+                "edge_radius": 1.5,
+                "n": 1.0,
+                "shape_type": "circle",
+                "width": 2.0,
+                "height": 2.0,
+                "reflection_range": None,
+                "refraction_range": (0, np.inf),
+                "absorption_range": None,
+            },
+        )
 
     def add_sphere_surf_click(self):
-        self.add_object("sphere_surf", f"Сфера Поверхн. {len(self.scene_objects) + 1}", {
-            "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius": 3.0, "edge_radius": 1.5, "n": 1.5,
-            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
-        })
+        self.add_object(
+            "sphere_surf",
+            f"Сфера Поверхн. {len(self.scene_objects) + 1}",
+            {
+                "origin": (0, 0, 0),
+                "rotation": (0, 0, 0),
+                "radius": 3.0,
+                "edge_radius": 1.5,
+                "n": 1.5,
+                "reflection_range": None,
+                "refraction_range": (0, np.inf),
+                "absorption_range": None,
+            },
+        )
 
     def add_cylinder_surf_click(self):
-        self.add_object("cylinder_surf", f"Цилиндр Поверхн. {len(self.scene_objects) + 1}", {
-            "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius": 1.0, "half_length": 1.0, "n": 1.5,
-            "capping": False, # <-- Добавлено
-            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None
-        })
+        self.add_object(
+            "cylinder_surf",
+            f"Цилиндр Поверхн. {len(self.scene_objects) + 1}",
+            {
+                "origin": (0, 0, 0),
+                "rotation": (0, 0, 0),
+                "radius": 1.0,
+                "half_length": 1.0,
+                "n": 1.5,
+                "capping": False,
+                "reflection_range": None,
+                "refraction_range": (0, np.inf),
+                "absorption_range": None,
+            },
+        )
 
     def add_lens_click(self):
-        self.add_object("lens", f"Линза {len(self.scene_objects) + 1}", {
-            "origin": (0, 0, 0), "rotation": (0, 0, 0), "R1": 5.0, "R2": -5.0,
-            "thickness": 0.5, "edge_radius": 1.0, "n": 1.5,
-            "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
-        })
+        self.add_object(
+            "lens",
+            f"Линза {len(self.scene_objects) + 1}",
+            {
+                "origin": (0, 0, 0),
+                "rotation": (0, 0, 0),
+                "R1": 5.0,
+                "R2": -5.0,
+                "thickness": 0.5,
+                "edge_radius": 1.0,
+                "n": 1.5,
+                "reflection_range": (0, np.inf),
+                "refraction_range": (0, np.inf),
+                "absorption_range": None,
+            },
+        )
 
     def add_hyperbolic_lens_click(self):
-        self.add_object("hyperbolic_lens", f"Гиперб. линза {len(self.scene_objects) + 1}", {
-            "origin": (0, 0, 0), "rotation": (0, 0, 0), "radius_of_curvature": 5.0,
-            "thickness": 0.5, "edge_radius": 1.0, "n": 1.5, "f_target": 10.0,
-            "reflection_range": (0, np.inf), "refraction_range": (0, np.inf), "absorption_range": None
-        })
+        self.add_object(
+            "hyperbolic_lens",
+            f"Гиперб. линза {len(self.scene_objects) + 1}",
+            {
+                "origin": (0, 0, 0),
+                "rotation": (0, 0, 0),
+                "radius_of_curvature": 5.0,
+                "thickness": 0.5,
+                "edge_radius": 1.0,
+                "n": 1.5,
+                "f_target": 10.0,
+                "reflection_range": (0, np.inf),
+                "refraction_range": (0, np.inf),
+                "absorption_range": None,
+            },
+        )
 
     def add_emitter_click(self):
-        self.add_object("emitter", f"Источник {len(self.scene_objects) + 1}", {
-            "origin": (0, 0, 0), "rotation": (0, 0, 0), "num_rays": 5, "min_offset": -0.5,
-            "max_offset": 0.5, "wavelength": 550.0, "color": "yellow", "energy": 1.0, "current_n": 1.0
-        })
+        self.add_object(
+            "emitter",
+            f"Источник {len(self.scene_objects) + 1}",
+            {
+                "origin": (0, 0, 0),
+                "rotation": (0, 0, 0),
+                "num_rays": 5,
+                "min_offset": -0.5,
+                "max_offset": 0.5,
+                "wavelength": 550.0,
+                "color": "yellow",
+                "energy": 1.0,
+                "current_n": 1.0,
+            },
+        )
 
     def add_mesh_click(self):
-        self.add_object("mesh", f"Меш {len(self.scene_objects) + 1}", {
-            "origin": (0, 0, 0), "rotation": (0, 0, 0),
-            "mesh_path": "Models/Prism.stl",
-            "n": 1.5,
-            "reflection_range": None, "refraction_range": (0, np.inf), "absorption_range": None,
-            "scale_uniform": True, "scale_all": 1.0, "scale_x": 1.0, "scale_y": 1.0, "scale_z": 1.0
-        })
+        self.add_object(
+            "mesh",
+            f"Меш {len(self.scene_objects) + 1}",
+            {
+                "origin": (0, 0, 0),
+                "rotation": (0, 0, 0),
+                "mesh_path": "Models/Prism.stl",
+                "n": 1.5,
+                "reflection_range": None,
+                "refraction_range": (0, np.inf),
+                "absorption_range": None,
+                "scale_uniform": True,
+                "scale_all": 1.0,
+                "scale_x": 1.0,
+                "scale_y": 1.0,
+                "scale_z": 1.0,
+            },
+        )
 
     # ---------- Удаление объекта ----------
     def remove_object(self, *args, **kwargs):
@@ -444,21 +527,28 @@ class OpticsAppController:
     def _create_instance(self, obj_type, params):
         if obj_type == "lens":
             return UniversalLens(
-                origin=params.get("origin", (0, 0, 0)), rotation_degrees=params.get("rotation", (0, 0, 0)),
-                R1=params.get("R1"), R2=params.get("R2"), thickness=params.get("thickness", 0.5),
-                edge_radius=params.get("edge_radius", 1.0), n=params.get("n", 1.5),
+                origin=params.get("origin", (0, 0, 0)),
+                rotation_degrees=params.get("rotation", (0, 0, 0)),
+                R1=params.get("R1"),
+                R2=params.get("R2"),
+                thickness=params.get("thickness", 0.5),
+                edge_radius=params.get("edge_radius", 1.0),
+                n=params.get("n", 1.5),
                 reflection_range=params.get("reflection_range"),
                 refraction_range=params.get("refraction_range", (0, np.inf)),
-                absorption_range=params.get("absorption_range")
+                absorption_range=params.get("absorption_range"),
             )
         elif obj_type == "hyperbolic_lens":
             return HyperbolicLens(
-                origin=params.get("origin", (0, 0, 0)), rotation_degrees=params.get("rotation", (0, 0, 0)),
-                thickness=params.get("thickness", 0.5), edge_radius=params.get("edge_radius", 1.0),
-                n=params.get("n", 1.5), f_target=params.get("f_target", 10.0),
+                origin=params.get("origin", (0, 0, 0)),
+                rotation_degrees=params.get("rotation", (0, 0, 0)),
+                thickness=params.get("thickness", 0.5),
+                edge_radius=params.get("edge_radius", 1.0),
+                n=params.get("n", 1.5),
+                f_target=params.get("f_target", 10.0),
                 reflection_range=params.get("reflection_range"),
                 refraction_range=params.get("refraction_range", (0, np.inf)),
-                absorption_range=params.get("absorption_range")
+                absorption_range=params.get("absorption_range"),
             )
         elif obj_type == "emitter":
             return BeamEmitter(
@@ -466,10 +556,15 @@ class OpticsAppController:
                 direction=np.array([1.0, 0.0, 0.0]),
                 rotation_degrees=params.get("rotation", (0, 0, 0)),  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
                 num_rays=params.get("num_rays", 5),
-                min_offset=params.get("min_offset", -0.5), max_offset=params.get("max_offset", 0.5),
-                color=params.get("color", "yellow"), wavelength=params.get("wavelength", 550),
-                energy=params.get("energy", 1.0), current_n=params.get("current_n", 1.0), pool=self.pool,
-                ray_class=params.get("ray_class", Ray), num_spectral_bands=params.get("num_spectral_bands", 7)
+                min_offset=params.get("min_offset", -0.5),
+                max_offset=params.get("max_offset", 0.5),
+                color=params.get("color", "yellow"),
+                wavelength=params.get("wavelength", 550),
+                energy=params.get("energy", 1.0),
+                current_n=params.get("current_n", 1.0),
+                pool=self.pool,
+                ray_class=params.get("ray_class", Ray),
+                num_spectral_bands=params.get("num_spectral_bands", 7),
             )
         elif obj_type == "mesh":
             if params.get("scale_uniform", True):
@@ -479,7 +574,7 @@ class OpticsAppController:
                 s_factors = (
                     float(params.get("scale_x", 1.0)),
                     float(params.get("scale_y", 1.0)),
-                    float(params.get("scale_z", 1.0))
+                    float(params.get("scale_z", 1.0)),
                 )
 
             # Передаем кортеж коэффициентов (X, Y, Z)
@@ -491,7 +586,7 @@ class OpticsAppController:
                 reflection_range=params.get("reflection_range"),
                 refraction_range=params.get("refraction_range"),
                 absorption_range=params.get("absorption_range"),
-                scale_factors=s_factors
+                scale_factors=s_factors,
             )
         elif obj_type == "plane":
             return PlaneSurface(
@@ -499,12 +594,12 @@ class OpticsAppController:
                 rotation_degrees=params.get("rotation", (0, 0, 0)),
                 n_inside=params.get("n", 1.0),
                 edge_radius=params.get("edge_radius", 1.5),
-                shape_type=params.get("shape_type", "circle"),  # <-- Добавлено
-                width=params.get("width", 2.0),  # <-- Добавлено
-                height=params.get("height", 2.0),  # <-- Добавлено
+                shape_type=params.get("shape_type", "circle"),
+                width=params.get("width", 2.0),
+                height=params.get("height", 2.0),
                 reflection_range=params.get("reflection_range"),
                 refraction_range=params.get("refraction_range", (0, np.inf)),
-                absorption_range=params.get("absorption_range")
+                absorption_range=params.get("absorption_range"),
             )
         elif obj_type == "sphere_surf":
             return SphereSurface(
@@ -515,7 +610,7 @@ class OpticsAppController:
                 reflection_range=params.get("reflection_range"),
                 refraction_range=params.get("refraction_range"),
                 absorption_range=params.get("absorption_range"),
-                lens_origin=params.get("origin", (0, 0, 0))
+                lens_origin=params.get("origin", (0, 0, 0)),
             )
         elif obj_type == "cylinder_surf":
             return CylinderSurface(
@@ -524,13 +619,12 @@ class OpticsAppController:
                 radius=params.get("radius", 1.0),
                 half_length=params.get("half_length", 1.0),
                 n_inside=params.get("n", 1.5),
-                capping=params.get("capping", False),  # <-- Добавлено
+                capping=params.get("capping", False),
                 reflection_range=params.get("reflection_range"),
                 refraction_range=params.get("refraction_range"),
-                absorption_range=params.get("absorption_range")
+                absorption_range=params.get("absorption_range"),
             )
 
-    # ---------- Трассировка ----------
     def on_trace_mode_changed(self, **kwargs):
         mode = self.state.trace_mode
         if mode == "tree":
@@ -545,18 +639,18 @@ class OpticsAppController:
             self.ray_tracer.mode.offset_distance = 0.005
             self.ray_tracer.cloud.gamma = 1
 
-        # СТРОГО ВЫСТАВЛЯЕМ ЕДИНЫЙ РЕЖИМ ДЛЯ ОБОИХ АЛГОРИТМОВ
         self.ray_tracer.mode.energy_color_type = 2
         self.update_scene()
 
     def update_scene(self):
-        if self._updating: return
+        if self._updating:
+            return
         self._updating = True
         try:
             self.ray_tracer.elements.clear()
             self.ray_tracer.rays.clear()
 
-            if hasattr(self.ray_tracer, 'emitters'):
+            if hasattr(self.ray_tracer, "emitters"):
                 self.ray_tracer.emitters.clear()
 
             for obj_entry in self.scene_objects:
@@ -571,7 +665,6 @@ class OpticsAppController:
                 elif isinstance(instance, BeamEmitter):
                     self.ray_tracer.add_emitter(instance)
 
-            # Трассировка
             segments = self.ray_tracer.trace_all()
             energy_type = self.ray_tracer.mode.energy_color_type
 
@@ -581,7 +674,6 @@ class OpticsAppController:
             if "traced_rays_geometry" in self.plotter.actors:
                 actor = self.plotter.actors["traced_rays_geometry"]
                 if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
-                    # 1. Копируем структуру полиданных лучей
                     actor.mapper.dataset.copy_from(calculated_ray_mesh)
 
                     # 2. Возвращаем цвета лучам
@@ -592,9 +684,6 @@ class OpticsAppController:
                     actor.mapper.SetScalarModeToUsePointData()
                     actor.mapper.ScalarVisibilityOn()
 
-                    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ ДЛЯ ТОЛЩИНЫ ЛУЧЕЙ:
-                    # Принудительно выставляем толщину линий обратно в 4 пикселя (или любое ваше значение)
-                    # Это заставит WebGL на клиенте перерисовать линии толстыми
                     actor.GetProperty().SetLineWidth(3)
                     actor.GetProperty().SetRenderLinesAsTubes(True)
 
@@ -615,11 +704,11 @@ class OpticsAppController:
                         opacity="linear",
                         line_width=2.5,
                         render_lines_as_tubes=True,
-                        name="traced_rays_geometry"
+                        name="traced_rays_geometry",
                     )
 
             # Оповещаем Trame о необходимости перерисовать WebGL контекст в браузере
-            if hasattr(self.ctrl, 'view_update'):
+            if hasattr(self.ctrl, "view_update"):
                 self.ctrl.view_update()
 
         finally:
@@ -660,7 +749,7 @@ class OpticsAppController:
 
         # Принудительно рендерим кадр и обновляем клиентский вид
         self.plotter.render()
-        if hasattr(self.ctrl, 'view_update'):
+        if hasattr(self.ctrl, "view_update"):
             self.ctrl.view_update()
 
     def _find_object(self, obj_id):
@@ -720,11 +809,9 @@ class OpticsAppController:
         elif obj_entry["type"] == "plane":
             self.state.param_n = float(p.get("n", 1.0))
             self.state.param_edge_radius = float(p.get("edge_radius", 1.5))
-            # НАЧАЛО ИЗМЕНЕНИЙ
             self.state.param_plane_shape = str(p.get("shape_type", "circle"))
             self.state.param_plane_width = float(p.get("width", 2.0))
             self.state.param_plane_height = float(p.get("height", 2.0))
-            # КОНЕЦ ИЗМЕНЕНИЙ
         elif obj_entry["type"] == "sphere_surf":
             self.state.param_radius = float(p.get("radius", 3.0))
             self.state.param_edge_radius = float(p.get("edge_radius", 1.5))
@@ -733,9 +820,7 @@ class OpticsAppController:
             self.state.param_radius = float(p.get("radius", 1.0))
             self.state.param_thickness = float(p.get("half_length", 1.0))
             self.state.param_n = float(p.get("n", 1.5))
-            # НАЧАЛО ИЗМЕНЕНИЙ
             self.state.param_cylinder_capping = bool(p.get("capping", False))
-            # КОНЕЦ ИЗМЕНЕНИЙ
 
         for effect in ["reflection", "refraction", "absorption"]:
             r_range = p.get(f"{effect}_range")
@@ -758,13 +843,9 @@ class OpticsAppController:
         p = obj_entry["params"]
 
         # Считываем только позицию и поворот
-        new_origin = (float(self.state.param_pos_x),
-                      float(self.state.param_pos_y),
-                      float(self.state.param_pos_z))
+        new_origin = (float(self.state.param_pos_x), float(self.state.param_pos_y), float(self.state.param_pos_z))
 
-        new_rotation = (float(self.state.param_rot_x),
-                        float(self.state.param_rot_y),
-                        float(self.state.param_rot_z))
+        new_rotation = (float(self.state.param_rot_x), float(self.state.param_rot_y), float(self.state.param_rot_z))
 
         # Обновляем параметры для физического движка на сервере
         p["origin"] = new_origin
@@ -777,7 +858,7 @@ class OpticsAppController:
         # Мгновенно двигаем 3D-актора на клиенте
         actor = self.plotter.actors[obj_id]
         mat = np.eye(4)
-        mat[:3, :3] = R.from_euler('xyz', new_rotation, degrees=True).as_matrix()
+        mat[:3, :3] = R.from_euler("xyz", new_rotation, degrees=True).as_matrix()
         mat[:3, 3] = new_origin
         actor.user_matrix = mat
 
@@ -794,13 +875,9 @@ class OpticsAppController:
         p = obj_entry["params"]
 
         # Считываем текущую позицию/поворот, чтобы не потерять их при пересоздании
-        current_origin = (float(self.state.param_pos_x),
-                          float(self.state.param_pos_y),
-                          float(self.state.param_pos_z))
+        current_origin = (float(self.state.param_pos_x), float(self.state.param_pos_y), float(self.state.param_pos_z))
 
-        current_rotation = (float(self.state.param_rot_x),
-                            float(self.state.param_rot_y),
-                            float(self.state.param_rot_z))
+        current_rotation = (float(self.state.param_rot_x), float(self.state.param_rot_y), float(self.state.param_rot_z))
 
         p["origin"] = current_origin
         p["rotation"] = current_rotation
@@ -868,7 +945,6 @@ class OpticsAppController:
         instance = self._create_instance(obj_entry["type"], p)
         obj_entry["instance"] = instance
 
-        # ВАЖНО: Удаляем старого актора и создаем заново с НОВЫМ мешем (по старой схеме)
         if obj_id in self.plotter.actors:
             self.plotter.remove_actor(obj_id)
 
@@ -881,12 +957,12 @@ class OpticsAppController:
             color="green" if obj_entry["type"] == "emitter" else "cyan",
             opacity=0.5,
             smooth_shading=True,
-            name=obj_id
+            name=obj_id,
         )
 
         # Сразу же позиционируем его матрицей
         mat = np.eye(4)
-        mat[:3, :3] = R.from_euler('xyz', current_rotation, degrees=True).as_matrix()
+        mat[:3, :3] = R.from_euler("xyz", current_rotation, degrees=True).as_matrix()
         mat[:3, 3] = current_origin
         actor.user_matrix = mat
 
@@ -895,7 +971,7 @@ class OpticsAppController:
 
     # Точка входа для изменения параметров формы (с дебаунсом для хостинга)
     def on_shape_param_change(self, *args, **kwargs):
-        if getattr(self, '_loading_state', False):
+        if getattr(self, "_loading_state", False):
             return
         if self._debounce_timer is not None:
             self._debounce_timer.cancel()
@@ -904,7 +980,7 @@ class OpticsAppController:
 
     # Точка входа для параметров трансформации (БЕЗ задержки для плавного скольжения)
     def on_transform_param_change(self, *args, **kwargs):
-        if getattr(self, '_loading_state', False):
+        if getattr(self, "_loading_state", False):
             return
         if self._debounce_timer is not None:
             self._debounce_timer.cancel()
@@ -921,7 +997,7 @@ class OpticsAppController:
         self.state.param_pos_y = float(float(self.state.temp_last_pos_y) + kwargs["temp_pos_delta_y"])
         self.state.param_pos_z = float(float(self.state.temp_last_pos_z) + kwargs["temp_pos_delta_z"])
         # self.update_object_transform()
-        if getattr(self, '_loading_state', False):
+        if getattr(self, "_loading_state", False):
             return
         if self._debounce_timer is not None:
             self._debounce_timer.cancel()
@@ -958,10 +1034,7 @@ app = OpticsAppController(server)
 # --- РАЗДЕЛЬНЫЕ ПОДПИСКИ TRAME ---
 
 # 1. Параметры трансформации (Мгновенный отклик матрицы)
-transform_params = [
-    "param_pos_x", "param_pos_y", "param_pos_z",
-    "param_rot_x", "param_rot_y", "param_rot_z"
-]
+transform_params = ["param_pos_x", "param_pos_y", "param_pos_z", "param_rot_x", "param_rot_y", "param_rot_z"]
 for param in transform_params:
     server.state.change(param)(app.on_transform_param_change)
 
@@ -972,11 +1045,30 @@ for axis in ["x", "y", "z"]:
 
 # 2. Параметры формы (Пересоздание 3D-модели с Debounce)
 shape_params = [
-    "param_n", "param_radius", "param_R1", "param_R2", "param_f_target", "param_thickness", "param_edge_radius",
-    "param_num_rays", "param_min_offset", "param_max_offset", "param_wavelength", "param_current_n",
-    "param_ray_class", "param_num_spectral_bands", "param_mesh_path", "param_plane_shape",
-    "param_plane_width", "param_plane_height", "param_cylinder_capping",
-    "param_scale_uniform", "param_scale_all", "param_scale_x", "param_scale_y", "param_scale_z"
+    "param_n",
+    "param_radius",
+    "param_R1",
+    "param_R2",
+    "param_f_target",
+    "param_thickness",
+    "param_edge_radius",
+    "param_num_rays",
+    "param_min_offset",
+    "param_max_offset",
+    "param_wavelength",
+    "param_current_n",
+    "param_ray_class",
+    "param_num_spectral_bands",
+    "param_mesh_path",
+    "param_plane_shape",
+    "param_plane_width",
+    "param_plane_height",
+    "param_cylinder_capping",
+    "param_scale_uniform",
+    "param_scale_all",
+    "param_scale_x",
+    "param_scale_y",
+    "param_scale_z",
 ]
 for param in shape_params:
     server.state.change(param)(app.on_shape_param_change)
@@ -988,8 +1080,6 @@ for effect in ["reflection", "refraction", "absorption"]:
     server.state.change(f"param_{effect}_max")(app.on_shape_param_change)
 
 
-
-
 with VAppLayout(server) as layout:
     # Заголовок убран
     # layout.title.set_text("Оптический симулятор")
@@ -997,9 +1087,11 @@ with VAppLayout(server) as layout:
         with vuetify.VContainer(fluid=True, classes="pa-0", style="height: 100vh; overflow: hidden;"):
             with vuetify.VRow(no_gutters=True, style="height: 100%;"):
                 # Левая колонка управления
-                with vuetify.VCol(cols=3, classes="pa-4 bg-grey-darken-4",
-                                  style="height: 100%; overflow-y: auto; border-right: 1px solid #444; color: white;"):
-
+                with vuetify.VCol(
+                    cols=3,
+                    classes="pa-4 bg-grey-darken-4",
+                    style="height: 100%; overflow-y: auto; border-right: 1px solid #444; color: white;",
+                ):
                     server.state.setdefault("save_dialog_visible", False)
                     server.state.setdefault("load_dialog_visible", False)
                     server.state.setdefault("file_to_save", "scene_1")
@@ -1007,18 +1099,19 @@ with VAppLayout(server) as layout:
 
                     with vuetify.VRow(class_="mb-2", no_gutters=True):
                         with vuetify.VCol(cols=4, class_="pr-1"):
-                            with vuetify.VBtn(color="success", block=True, size="small",
-                                              click="save_dialog_visible = true"):
+                            with vuetify.VBtn(
+                                color="success", block=True, size="small", click="save_dialog_visible = true"
+                            ):
                                 vuetify.VIcon("mdi-content-save", class_="mr-1")
                                 "Сохранить"
                         with vuetify.VCol(cols=4, class_="pl-1"):
-                            with vuetify.VBtn(color="warning", block=True, size="small",
-                                              click="load_dialog_visible = true"):
+                            with vuetify.VBtn(
+                                color="warning", block=True, size="small", click="load_dialog_visible = true"
+                            ):
                                 vuetify.VIcon("mdi-folder-open", class_="mr-1")
                                 "Загрузить"
                         with vuetify.VCol(cols=4, class_="pl-1"):
-                            with vuetify.VBtn(color="blue", block=True, size="small",
-                                              click="trigger('export_scene')"):
+                            with vuetify.VBtn(color="blue", block=True, size="small", click="trigger('export_scene')"):
                                 vuetify.VLabel("Экспорт", class_="mr-1")
                                 "Экспорт"
 
@@ -1026,25 +1119,33 @@ with VAppLayout(server) as layout:
                     with vuetify.VDialog(v_model="save_dialog_visible", max_width="400px"):
                         with vuetify.VCard(class_="bg-grey-darken-3 text-white pa-4"):
                             vuetify.VCardTitle("Сохранить сцену", class_="px-0")
-                            vuetify.VTextField(v_model="file_to_save", label="Имя файла (без расширения)",
-                                               class_="my-3", dense=True)
+                            vuetify.VTextField(
+                                v_model="file_to_save", label="Имя файла (без расширения)", class_="my-3", dense=True
+                            )
                             with vuetify.VCardActions(class_="px-0"):
                                 vuetify.VSpacer()
                                 vuetify.VBtn("Отмена", color="grey", click="save_dialog_visible = false")
-                                vuetify.VBtn("ОК", color="success",
-                                             click="trigger('save_scene_to_file', [file_to_save]); save_dialog_visible = false")
+                                vuetify.VBtn(
+                                    "ОК",
+                                    color="success",
+                                    click="trigger('save_scene_to_file', [file_to_save]); save_dialog_visible = false",
+                                )
 
                     # Диалоговое окно загрузки файла
                     with vuetify.VDialog(v_model="load_dialog_visible", max_width="400px"):
                         with vuetify.VCard(class_="bg-grey-darken-3 text-white pa-4"):
                             vuetify.VCardTitle("Загрузить сцену", class_="px-0")
-                            vuetify.VTextField(v_model="file_to_load", label="Имя файла (.json)", class_="my-3",
-                                               dense=True)
+                            vuetify.VTextField(
+                                v_model="file_to_load", label="Имя файла (.json)", class_="my-3", dense=True
+                            )
                             with vuetify.VCardActions(class_="px-0"):
                                 vuetify.VSpacer()
                                 vuetify.VBtn("Отмена", color="grey", click="load_dialog_visible = false")
-                                vuetify.VBtn("ОК", color="warning",
-                                             click="trigger('load_scene_from_file', [file_to_load]); load_dialog_visible = false")
+                                vuetify.VBtn(
+                                    "ОК",
+                                    color="warning",
+                                    click="trigger('load_scene_from_file', [file_to_load]); load_dialog_visible = false",
+                                )
 
                     vuetify.VDivider(class_="my-2")
 
@@ -1067,90 +1168,130 @@ with VAppLayout(server) as layout:
                     vuetify.VDivider(class_="my-4")
                     with vuetify.VCard(flat=True, color="transparent", style="max-height: 200px; overflow-y: auto;"):
                         with vuetify.VList(dense=True, nav=True):
-                            with vuetify.VListItem(v_for="obj in scene_objects_list",
-                                                   key="obj.id",
-                                                   active="selected_object_id == obj.id",
-                                                   click="selected_object_id = obj.id",
-                                                   style="cursor: pointer;"):
+                            with vuetify.VListItem(
+                                v_for="obj in scene_objects_list",
+                                key="obj.id",
+                                active="selected_object_id == obj.id",
+                                click="selected_object_id = obj.id",
+                                style="cursor: pointer;",
+                            ):
                                 vuetify.VIcon("mdi-cube-outline", small=True, class_="mr-2")
                                 vuetify.VListItemTitle("{{ obj.name }}")
                                 with vuetify.Template(v_slot_append=True):
-                                    vuetify.VBtn(icon="mdi-delete",
-                                                 size="x-small",
-                                                 variant="text",
-                                                 color="red",
-                                                 click="trigger('delete_object_event', [obj.id])")
+                                    vuetify.VBtn(
+                                        icon="mdi-delete",
+                                        size="x-small",
+                                        variant="text",
+                                        color="red",
+                                        click="trigger('delete_object_event', [obj.id])",
+                                    )
 
                     vuetify.VDivider(class_="my-4")
                     with vuetify.VRow(no_gutters=True, align="center", class_="mb-2"):
                         with vuetify.VCol(cols=9):
-                            vuetify.VCardTitle("Параметры: {{ selected_object_id ? selected_object_id : 'не выбран' }}",
-                                               classes="text-subtitle-1 px-0 text-cyan-lighten-2")
+                            vuetify.VCardTitle(
+                                "Параметры: {{ selected_object_id ? selected_object_id : 'не выбран' }}",
+                                classes="text-subtitle-1 px-0 text-cyan-lighten-2",
+                            )
                         with vuetify.VCol(cols=3, class_="text-right"):
                             # Кнопка становится активной, только если объект выбран
-                            vuetify.VBtn(icon="mdi-crosshairs-gps",
-                                         size="small",
-                                         color="cyan-darken-2",
-                                         variant="flat",
-                                         # disabled="selected_object_id == None",
-                                         click="trigger('focus_on_object_event')",
-                                         title="Сфокусировать камеру на объекте")
+                            vuetify.VBtn(
+                                icon="mdi-crosshairs-gps",
+                                size="small",
+                                color="cyan-darken-2",
+                                variant="flat",
+                                # disabled="selected_object_id == None",
+                                click="trigger('focus_on_object_event')",
+                                title="Сфокусировать камеру на объекте",
+                            )
 
                     # --- Блок позиционирования ---
                     vuetify.VCardTitle("Позиция", class_="px-0", style="text-color: white")
                     # Ось X
                     with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
-                            vuetify.VTextField(v_model="param_pos_x", label="X", type="number",
-                                               dense=True, class_="mb-2")
+                            vuetify.VTextField(
+                                v_model="param_pos_x", label="X", type="number", dense=True, class_="mb-2"
+                            )
                         with vuetify.VCol(cols=8):
-                            vuetify.VSlider(v_model="temp_pos_delta_x", min=-10, max=10, step=0.01,
-                                            dense=True, hide_details=True,
-                                            thumb_label="always",
-                                            mouseup="trigger('apply_x_delta')",
-                                            mousedown="trigger('set_last_pos')",)
+                            vuetify.VSlider(
+                                v_model="temp_pos_delta_x",
+                                min=-10,
+                                max=10,
+                                step=0.01,
+                                dense=True,
+                                hide_details=True,
+                                thumb_label="always",
+                                mouseup="trigger('apply_x_delta')",
+                                mousedown="trigger('set_last_pos')",
+                            )
                     # Ось Y
                     with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
-                            vuetify.VTextField(v_model="param_pos_y", label="Y", type="number",
-                                               dense=True, class_="mb-2")
+                            vuetify.VTextField(
+                                v_model="param_pos_y", label="Y", type="number", dense=True, class_="mb-2"
+                            )
                         with vuetify.VCol(cols=8):
-                            vuetify.VSlider(v_model="temp_pos_delta_y", min=-10, max=10, step=0.01,
-                                            dense=True, hide_details=True,
-                                            thumb_label="always",
-                                            mouseup="trigger('apply_y_delta')",
-                                            mousedown="trigger('set_last_pos')",)
+                            vuetify.VSlider(
+                                v_model="temp_pos_delta_y",
+                                min=-10,
+                                max=10,
+                                step=0.01,
+                                dense=True,
+                                hide_details=True,
+                                thumb_label="always",
+                                mouseup="trigger('apply_y_delta')",
+                                mousedown="trigger('set_last_pos')",
+                            )
                     # Ось Z
                     with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
-                            vuetify.VTextField(v_model="param_pos_z", label="Z", type="number",
-                                               dense=True, class_="mb-2")
+                            vuetify.VTextField(
+                                v_model="param_pos_z", label="Z", type="number", dense=True, class_="mb-2"
+                            )
                         with vuetify.VCol(cols=8):
-                            vuetify.VSlider(v_model="temp_pos_delta_z", min=-10, max=10, step=0.01,
-                                            dense=True, hide_details=True,
-                                            thumb_label="always",
-                                            mouseup="trigger('apply_z_delta')",
-                                            mousedown="trigger('set_last_pos')",)
+                            vuetify.VSlider(
+                                v_model="temp_pos_delta_z",
+                                min=-10,
+                                max=10,
+                                step=0.01,
+                                dense=True,
+                                hide_details=True,
+                                thumb_label="always",
+                                mouseup="trigger('apply_z_delta')",
+                                mousedown="trigger('set_last_pos')",
+                            )
 
                     # --- Блок вращения ---
                     vuetify.VCardTitle("Поворот", class_="px-0", style="text-color: white")
                     for axis in ["x", "y", "z"]:
                         with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model=f"param_rot_{axis}", label=axis.upper(), type="number",
-                                                   dense=True, class_="mb-2")
+                                vuetify.VTextField(
+                                    v_model=f"param_rot_{axis}",
+                                    label=axis.upper(),
+                                    type="number",
+                                    dense=True,
+                                    class_="mb-2",
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model=f"param_rot_{axis}", min=-180, max=180, step=1, dense=True,
-                                                hide_details=True)
+                                vuetify.VSlider(
+                                    v_model=f"param_rot_{axis}",
+                                    min=-180,
+                                    max=180,
+                                    step=1,
+                                    dense=True,
+                                    hide_details=True,
+                                )
 
                     vuetify.VDivider(class_="my-4")
 
                     with vuetify.VContainer(v_if="selected_object_type == 'plane'", class_="pa-0"):
                         vuetify.VCardTitle("Плоскость", class_="px-0", style="text-color: white")
 
-                        # ИСПРАВЛЕНИЕ: v_model перенесен строго на группу, убраны пустые блоки pass
-                        with vuetify.VRadioGroup(v_model="param_plane_shape", inline=True, class_="mb-2",
-                                                 hide_details=True):
+                        with vuetify.VRadioGroup(
+                            v_model="param_plane_shape", inline=True, class_="mb-2", hide_details=True
+                        ):
                             vuetify.VRadio(label="Круг", value="circle", color="cyan")
                             vuetify.VRadio(label="Прямоугольник", value="rectangle", color="cyan")
 
@@ -1158,91 +1299,137 @@ with VAppLayout(server) as layout:
                         with vuetify.VContainer(v_if="param_plane_shape == 'circle'", class_="pa-0"):
                             with vuetify.VRow(no_gutters=True, align="center"):
                                 with vuetify.VCol(cols=4):
-                                    vuetify.VTextField(v_model="param_edge_radius", label="Радиус", type="number",
-                                                       dense=True)
+                                    vuetify.VTextField(
+                                        v_model="param_edge_radius", label="Радиус", type="number", dense=True
+                                    )
                                 with vuetify.VCol(cols=8):
-                                    vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1, dense=True,
-                                                    hide_details=True)
+                                    vuetify.VSlider(
+                                        v_model="param_edge_radius",
+                                        min=0.1,
+                                        max=5.0,
+                                        step=0.1,
+                                        dense=True,
+                                        hide_details=True,
+                                    )
 
                         # Если ПРЯМОУГОЛЬНИК — показываем настройки ширины и высоты
                         with vuetify.VContainer(v_if="param_plane_shape == 'rectangle'", class_="pa-0"):
                             with vuetify.VRow(no_gutters=True, align="center", class_="mb-1"):
                                 with vuetify.VCol(cols=4):
-                                    vuetify.VTextField(v_model="param_plane_width", label="Ширина", type="number",
-                                                       dense=True)
+                                    vuetify.VTextField(
+                                        v_model="param_plane_width", label="Ширина", type="number", dense=True
+                                    )
                                 with vuetify.VCol(cols=8):
-                                    vuetify.VSlider(v_model="param_plane_width", min=0.1, max=10.0, step=0.1,
-                                                    dense=True, hide_details=True)
+                                    vuetify.VSlider(
+                                        v_model="param_plane_width",
+                                        min=0.1,
+                                        max=10.0,
+                                        step=0.1,
+                                        dense=True,
+                                        hide_details=True,
+                                    )
                             with vuetify.VRow(no_gutters=True, align="center"):
                                 with vuetify.VCol(cols=4):
-                                    vuetify.VTextField(v_model="param_plane_height", label="Высота", type="number",
-                                                       dense=True)
+                                    vuetify.VTextField(
+                                        v_model="param_plane_height", label="Высота", type="number", dense=True
+                                    )
                                 with vuetify.VCol(cols=8):
-                                    vuetify.VSlider(v_model="param_plane_height", min=0.1, max=10.0, step=0.1,
-                                                    dense=True, hide_details=True)
+                                    vuetify.VSlider(
+                                        v_model="param_plane_height",
+                                        min=0.1,
+                                        max=10.0,
+                                        step=0.1,
+                                        dense=True,
+                                        hide_details=True,
+                                    )
 
                         with vuetify.VRow(no_gutters=True, align="center", class_="mt-2"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_n", label="n (внутри)", type="number", dense=True,
-                                                   step=0.01)
+                                vuetify.VTextField(
+                                    v_model="param_n", label="n (внутри)", type="number", dense=True, step=0.01
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True,
-                                                hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True, hide_details=True
+                                )
 
                     # Параметры SphereSurface
                     with vuetify.VContainer(v_if="selected_object_type == 'sphere_surf'", class_="pa-0"):
                         vuetify.VCardTitle("Сферическая поверхность", class_="px-0", style="text-color: white")
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_radius", label="Радиус кривизны", type="number",
-                                                   dense=True, step=0.5)
+                                vuetify.VTextField(
+                                    v_model="param_radius", label="Радиус кривизны", type="number", dense=True, step=0.5
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_radius", min=-20.0, max=20.0, step=0.5, dense=True,
-                                                hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_radius", min=-20.0, max=20.0, step=0.5, dense=True, hide_details=True
+                                )
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_edge_radius", label="Апертура", type="number",
-                                                   dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_edge_radius", label="Апертура", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1, dense=True,
-                                                hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_edge_radius",
+                                    min=0.1,
+                                    max=5.0,
+                                    step=0.1,
+                                    dense=True,
+                                    hide_details=True,
+                                )
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_n", label="n (внутри)", type="number", dense=True,
-                                                   step=0.01)
+                                vuetify.VTextField(
+                                    v_model="param_n", label="n (внутри)", type="number", dense=True, step=0.01
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True,
-                                                hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True, hide_details=True
+                                )
 
                     # Параметры CylinderSurface
                     with vuetify.VContainer(v_if="selected_object_type == 'cylinder_surf'", class_="pa-0"):
                         vuetify.VCardTitle("Цилиндрическая поверхность", class_="px-0", style="text-color: white")
 
                         # Тумблер включения/выключения оснований
-                        vuetify.VSwitch(v_model="param_cylinder_capping", label="Включить основания (крышки)",
-                                        dense=True, hide_details=True, class_="mb-2", color="orange")
+                        vuetify.VSwitch(
+                            v_model="param_cylinder_capping",
+                            label="Включить основания (крышки)",
+                            dense=True,
+                            hide_details=True,
+                            class_="mb-2",
+                            color="orange",
+                        )
 
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_radius", label="Радиус", type="number", dense=True,
-                                                   step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_radius", label="Радиус", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_radius", min=0.1, max=5.0, step=0.1, dense=True,
-                                                hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_radius", min=0.1, max=5.0, step=0.1, dense=True, hide_details=True
+                                )
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_thickness", label="Полудлина", type="number",
-                                                   dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_thickness", label="Полудлина", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_thickness", min=0.1, max=5.0, step=0.1, dense=True,
-                                                hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_thickness", min=0.1, max=5.0, step=0.1, dense=True, hide_details=True
+                                )
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_n", label="n (внутри)", type="number", dense=True,
-                                                   step=0.01)
+                                vuetify.VTextField(
+                                    v_model="param_n", label="n (внутри)", type="number", dense=True, step=0.01
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True,
-                                                hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True, hide_details=True
+                                )
 
                     # --- Параметры сферической линзы ---
                     with vuetify.VContainer(v_if="selected_object_type == 'lens'", class_="pa-0"):
@@ -1252,36 +1439,50 @@ with VAppLayout(server) as layout:
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_n", label="n", type="number", dense=True, step=0.01)
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True, hide_details=True
+                                )
                         # R1
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_R1", label="R1", type="number", dense=True, step=0.5)
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_R1", min=-20, max=20, step=0.5,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_R1", min=-20, max=20, step=0.5, dense=True, hide_details=True
+                                )
                         # R2
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_R2", label="R2", type="number", dense=True, step=0.5)
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_R2", min=-20, max=20, step=0.5,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_R2", min=-20, max=20, step=0.5, dense=True, hide_details=True
+                                )
                         # Толщина
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_thickness", label="Толщина", type="number", dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_thickness", label="Толщина", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_thickness", min=0.1, max=5.0, step=0.1,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_thickness", min=0.1, max=5.0, step=0.1, dense=True, hide_details=True
+                                )
                         # Радиус апертуры
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_edge_radius", label="Апертура", type="number", dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_edge_radius", label="Апертура", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_edge_radius",
+                                    min=0.1,
+                                    max=5.0,
+                                    step=0.1,
+                                    dense=True,
+                                    hide_details=True,
+                                )
 
                     # --- Параметры гиперболической линзы ---
                     with vuetify.VContainer(v_if="selected_object_type == 'hyperbolic_lens'", class_="pa-0"):
@@ -1289,136 +1490,219 @@ with VAppLayout(server) as layout:
                         # Толщина
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_thickness", label="Толщина", type="number", dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_thickness", label="Толщина", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_thickness", min=0.1, max=5.0, step=0.1,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_thickness", min=0.1, max=5.0, step=0.1, dense=True, hide_details=True
+                                )
                         # Радиус апертуры
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_edge_radius", label="Апертура", type="number", dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_edge_radius", label="Апертура", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_edge_radius", min=0.1, max=5.0, step=0.1,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_edge_radius",
+                                    min=0.1,
+                                    max=5.0,
+                                    step=0.1,
+                                    dense=True,
+                                    hide_details=True,
+                                )
                         # Фокус
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_f_target", label="f", type="number", dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_f_target", label="f", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_f_target", min=-30.0, max=30.0, step=0.1,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_f_target",
+                                    min=-30.0,
+                                    max=30.0,
+                                    step=0.1,
+                                    dense=True,
+                                    hide_details=True,
+                                )
                         # n
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_n", label="n", type="number", dense=True, step=0.01)
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_n", min=1.001, max=2.5, step=0.01,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_n", min=1.001, max=2.5, step=0.01, dense=True, hide_details=True
+                                )
 
                     # --- Параметры источника ---
                     with vuetify.VContainer(v_if="selected_object_type == 'emitter'", class_="pa-0"):
                         vuetify.VCardTitle("Источник", class_="px-0", style="text-color: white")
 
                         # Выбор типа луча
-                        vuetify.VSelect(label="Тип луча", v_model="param_ray_class",
-                                        items=("ray_classes_list",),
-                                        item_title="title", item_value="value",
-                                        dense=True, class_="mb-2")
+                        vuetify.VSelect(
+                            label="Тип луча",
+                            v_model="param_ray_class",
+                            items=("ray_classes_list",),
+                            item_title="title",
+                            item_value="value",
+                            dense=True,
+                            class_="mb-2",
+                        )
 
                         # Количество спектральных полос (показывается только для WhiteRay)
                         with vuetify.VContainer(v_if="param_ray_class == 'WhiteRay'", class_="pa-0 mb-2"):
                             with vuetify.VRow(no_gutters=True, align="center"):
                                 with vuetify.VCol(cols=4):
-                                    vuetify.VTextField(v_model="param_num_spectral_bands",
-                                                       label="Спектр (кол-во)", type="number", dense=True,
-                                                       step=1)
+                                    vuetify.VTextField(
+                                        v_model="param_num_spectral_bands",
+                                        label="Спектр (кол-во)",
+                                        type="number",
+                                        dense=True,
+                                        step=1,
+                                    )
                                 with vuetify.VCol(cols=8):
-                                    vuetify.VSlider(v_model="param_num_spectral_bands", min=2, max=30,
-                                                    step=1,
-                                                    dense=True, hide_details=True)
+                                    vuetify.VSlider(
+                                        v_model="param_num_spectral_bands",
+                                        min=2,
+                                        max=30,
+                                        step=1,
+                                        dense=True,
+                                        hide_details=True,
+                                    )
 
                         # Количество лучей
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_num_rays", label="Кол-во лучей",
-                                                   type="number", dense=True, step=1)
+                                vuetify.VTextField(
+                                    v_model="param_num_rays", label="Кол-во лучей", type="number", dense=True, step=1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_num_rays", min=1, max=20, step=1,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_num_rays", min=1, max=20, step=1, dense=True, hide_details=True
+                                )
 
                         # Длина волны (скрываем для Белого Света, так как он сам генерирует спектр)
-                        with vuetify.VRow(v_if="param_ray_class != 'WhiteRay'", no_gutters=True,
-                                          align="center"):
+                        with vuetify.VRow(v_if="param_ray_class != 'WhiteRay'", no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_wavelength", label="λ (нм)",
-                                                   type="number", dense=True, step=10)
+                                vuetify.VTextField(
+                                    v_model="param_wavelength", label="λ (нм)", type="number", dense=True, step=10
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_wavelength", min=380, max=780, step=10,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_wavelength", min=380, max=780, step=10, dense=True, hide_details=True
+                                )
 
                         # Мин. смещение
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_min_offset", label="Мин. смещ.",
-                                                   type="number", dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_min_offset", label="Мин. смещ.", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_min_offset", min=-3.0, max=0.0, step=0.1,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_min_offset",
+                                    min=-3.0,
+                                    max=0.0,
+                                    step=0.1,
+                                    dense=True,
+                                    hide_details=True,
+                                )
                         # Макс. смещение
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_max_offset", label="Макс. смещ.",
-                                                   type="number", dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_max_offset", label="Макс. смещ.", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_max_offset", min=0.0, max=3.0, step=0.1,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_max_offset",
+                                    min=0.0,
+                                    max=3.0,
+                                    step=0.1,
+                                    dense=True,
+                                    hide_details=True,
+                                )
 
                         # n среды
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
-                                vuetify.VTextField(v_model="param_current_n", label="n среды",
-                                                   type="number", dense=True, step=0.1)
+                                vuetify.VTextField(
+                                    v_model="param_current_n", label="n среды", type="number", dense=True, step=0.1
+                                )
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_current_n", min=1.0, max=3.0, step=0.01,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_current_n",
+                                    min=1.0,
+                                    max=3.0,
+                                    step=0.01,
+                                    dense=True,
+                                    hide_details=True,
+                                )
 
                     # --- Параметры 3D-меша ---
                     with vuetify.VContainer(v_if="selected_object_type == 'mesh'", class_="pa-0"):
                         vuetify.VCardTitle("3D-модель", class_="px-0", style="text-color: white")
-                        vuetify.VTextField(v_model="param_mesh_path", label="Путь к файлу (.obj/.stl)", dense=True,
-                                           class_="mb-2")
+                        vuetify.VTextField(
+                            v_model="param_mesh_path", label="Путь к файлу (.obj/.stl)", dense=True, class_="mb-2"
+                        )
                         with vuetify.VRow(no_gutters=True, align="center", class_="mb-2"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_n", label="n", type="number", dense=True, step=0.01)
                             with vuetify.VCol(cols=8):
-                                vuetify.VSlider(v_model="param_n", min=1.0, max=2.5, step=0.01,
-                                                dense=True, hide_details=True)
+                                vuetify.VSlider(
+                                    v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True, hide_details=True
+                                )
 
                         vuetify.VDivider(class_="my-2")
-                        # НАЧАЛО ИЗМЕНЕНИЙ ИНТЕРФЕЙСА ДЛЯ МАСШТАБИРОВАНИЯ
-                        vuetify.VSwitch(v_model="param_scale_uniform", label="Пропорциональный масштаб",
-                                        dense=True, hide_details=True, class_="mb-2", color="cyan")
+                        vuetify.VSwitch(
+                            v_model="param_scale_uniform",
+                            label="Пропорциональный масштаб",
+                            dense=True,
+                            hide_details=True,
+                            class_="mb-2",
+                            color="cyan",
+                        )
 
                         # Если тумблер включен: один общий ползунок
                         with vuetify.VContainer(v_if="param_scale_uniform", class_="pa-0"):
                             with vuetify.VRow(no_gutters=True, align="center"):
                                 with vuetify.VCol(cols=4):
-                                    vuetify.VTextField(v_model="param_scale_all", label="Масштаб", type="number",
-                                                       dense=True, step=0.1)
+                                    vuetify.VTextField(
+                                        v_model="param_scale_all", label="Масштаб", type="number", dense=True, step=0.1
+                                    )
                                 with vuetify.VCol(cols=8):
-                                    vuetify.VSlider(v_model="param_scale_all", min=0.1, max=10.0, step=0.1,
-                                                    dense=True, hide_details=True)
+                                    vuetify.VSlider(
+                                        v_model="param_scale_all",
+                                        min=0.1,
+                                        max=10.0,
+                                        step=0.1,
+                                        dense=True,
+                                        hide_details=True,
+                                    )
 
                         # Если тумблер выключен: три раздельных ползунка по осям X, Y, Z
                         with vuetify.VContainer(v_if="!param_scale_uniform", class_="pa-0"):
                             for axis in ["x", "y", "z"]:
                                 with vuetify.VRow(no_gutters=True, align="center", class_="mb-1"):
                                     with vuetify.VCol(cols=4):
-                                        vuetify.VTextField(v_model=f"param_scale_{axis}", label=f"Scale {axis.upper()}",
-                                                           type="number", dense=True, step=0.1)
+                                        vuetify.VTextField(
+                                            v_model=f"param_scale_{axis}",
+                                            label=f"Scale {axis.upper()}",
+                                            type="number",
+                                            dense=True,
+                                            step=0.1,
+                                        )
                                     with vuetify.VCol(cols=8):
-                                        vuetify.VSlider(v_model=f"param_scale_{axis}", min=0.1, max=10.0, step=0.1,
-                                                        dense=True, hide_details=True)
+                                        vuetify.VSlider(
+                                            v_model=f"param_scale_{axis}",
+                                            min=0.1,
+                                            max=10.0,
+                                            step=0.1,
+                                            dense=True,
+                                            hide_details=True,
+                                        )
 
                     with vuetify.VContainer(v_if="selected_object_type != 'emitter'", class_="pa-0"):
                         vuetify.VCardTitle("Оптические свойства (λ, нм)", class_="px-0", style="text-color: white")
@@ -1427,36 +1711,60 @@ with VAppLayout(server) as layout:
                         effects = [
                             {"key": "refraction", "label": "Преломление"},
                             {"key": "reflection", "label": "Отражение"},
-                            {"key": "absorption", "label": "Поглощение"}
+                            {"key": "absorption", "label": "Поглощение"},
                         ]
-
 
                         for eff in effects:
                             k = eff["key"]
-                            vuetify.VCheckbox(v_model=f"param_{k}_enabled", v_if=f"selected_object_type != None", label=eff["label"], dense=True,
-                                              hide_details=True)
+                            vuetify.VCheckbox(
+                                v_model=f"param_{k}_enabled",
+                                v_if=f"selected_object_type != None",
+                                label=eff["label"],
+                                dense=True,
+                                hide_details=True,
+                            )
 
-                            with vuetify.VRow(v_if=f"param_{k}_enabled && selected_object_type != None", no_gutters=True, align="center",
-                                              class_="pl-4 mb-2"):
+                            with vuetify.VRow(
+                                v_if=f"param_{k}_enabled && selected_object_type != None",
+                                no_gutters=True,
+                                align="center",
+                                class_="pl-4 mb-2",
+                            ):
                                 # Поле MIN
                                 with vuetify.VCol(cols=5, class_="pr-1"):
-                                    vuetify.VTextField(v_model=f"param_{k}_min", label="Мин", type="number", dense=True,
-                                                       hide_details=True)
+                                    vuetify.VTextField(
+                                        v_model=f"param_{k}_min",
+                                        label="Мин",
+                                        type="number",
+                                        dense=True,
+                                        hide_details=True,
+                                    )
                                 # Поле MAX
                                 with vuetify.VCol(cols=5, class_="px-1"):
-                                    vuetify.VTextField(v_model=f"param_{k}_max", label="Макс", dense=True,
-                                                       hide_details=True)
+                                    vuetify.VTextField(
+                                        v_model=f"param_{k}_max", label="Макс", dense=True, hide_details=True
+                                    )
                                 # Кнопка INFINITY
                                 with vuetify.VCol(cols=2, class_="pl-1"):
-                                    vuetify.VBtn(icon="mdi-infinity", size="small", color="grey-darken-2",
-                                                 variant="flat",
-                                                 click=f"param_{k}_max = Infinity")
+                                    vuetify.VBtn(
+                                        icon="mdi-infinity",
+                                        size="small",
+                                        color="grey-darken-2",
+                                        variant="flat",
+                                        click=f"param_{k}_max = Infinity",
+                                    )
 
                     vuetify.VDivider(class_="my-4")
-                    vuetify.VSelect(label="Режим трассировки", v_model="trace_mode", items=("trace_modes",),
-                                    item_title="title", item_value="value", dense=True, class_="mt-2")
+                    vuetify.VSelect(
+                        label="Режим трассировки",
+                        v_model="trace_mode",
+                        items=("trace_modes",),
+                        item_title="title",
+                        item_value="value",
+                        dense=True,
+                        class_="mt-2",
+                    )
 
-                # Правая колонка с 3D окном pyvista
                 # Правая колонка с 3D окном pyvista
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
                     # Используем СТРОГО локальный виджет, он не генерирует картинки на сервере
@@ -1465,13 +1773,12 @@ with VAppLayout(server) as layout:
                         app.plotter,
                         mode="client",  # Чистый клиентский рендеринг через WebGL
                         add_menu=False,
-                        interactor_style="Terrain"
+                        interactor_style="Terrain",
                     )
                     app.ctrl.view_update = ui_view.update
 
 app.update_scene()
 
-# amvera
 if __name__ == "__main__":
     # 1. Автоматически считываем порт, который Amvera выделяет внутри контейнера.
     # Если запускаем локально на ПК — сработает ваш порт по умолчанию 8085.
@@ -1479,10 +1786,10 @@ if __name__ == "__main__":
 
     # 2. Безопасно переопределяем встроенные параметры Trame без конфликтов argparse
     server.cli.set_defaults(
-        host="0.0.0.0",     # Открываем сокет наружу, чтобы Amvera могла проксировать трафик
-        port=port_env,      # Привязываем порт к переменной окружения хостинга
-        timeout=0,          # Отключаем автовыключение сервера при отсутствии активности
-        open_browser=False  # Запрещаем открывать десктопный браузер внутри Linux-контейнера
+        host="0.0.0.0",  # Открываем сокет наружу, чтобы Amvera могла проксировать трафик
+        port=port_env,  # Привязываем порт к переменной окружения хостинга
+        timeout=0,  # Отключаем автовыключение сервера при отсутствии активности
+        open_browser=False,  # Запрещаем открывать десктопный браузер внутри Linux-контейнера
     )
 
     # 3. Запускаем сервер

@@ -15,20 +15,13 @@ class BaseSurface:
 
     @staticmethod
     def _in_range(rng, wavelength):
-        return (
-            rng is not None
-            and rng[0] is not None
-            and rng[1] is not None
-            and rng[0] <= wavelength <= rng[1]
-        )
+        return rng is not None and rng[0] is not None and rng[1] is not None and rng[0] <= wavelength <= rng[1]
 
     def is_active(self, wavelength) -> bool:
         """True, если поверхность взаимодействует с данной длиной волны."""
         if wavelength is None:
             return True
-        if (self.reflection_range is None
-                and self.refraction_range is None
-                and self.absorption_range is None):
+        if self.reflection_range is None and self.refraction_range is None and self.absorption_range is None:
             return False
         return (
             self._in_range(self.reflection_range, wavelength)
@@ -69,9 +62,9 @@ class LensAssembly(BaseSurface):
         return self.front.get_normal(point)
 
     def is_active(self, wavelength) -> bool:
-        return (self.front.is_active(wavelength)
-                or self.back.is_active(wavelength)
-                or self.cylinder.is_active(wavelength))
+        return (
+            self.front.is_active(wavelength) or self.back.is_active(wavelength) or self.cylinder.is_active(wavelength)
+        )
 
     def get_surfaces(self):
         return [self.front, self.back, self.cylinder]

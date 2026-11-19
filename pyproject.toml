@@ -1,0 +1,6 @@
+[tool.ruff]
+line-length = 120
+extend-exclude = ["golden_test.py"]
+
+[tool.ruff.format]
+quote-style = "double"

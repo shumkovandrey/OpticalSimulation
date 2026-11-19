@@ -4,22 +4,23 @@ from numba import njit
 
 @njit
 def dot(v1, v2):
-    return v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2]
+    return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]
 
 
 @njit
 def fresnel_amplitudes(n1, n2, cos_i):
-    sin2_i = max(0.0, 1.0 - cos_i*cos_i)
+    sin2_i = max(0.0, 1.0 - cos_i * cos_i)
     eta = n1 / n2
-    sin2_t = eta*eta * sin2_i
+    sin2_t = eta * eta * sin2_i
     if sin2_t > 1.0:
-        return 1.0+0j, 1.0+0j, 0.0+0j, 0.0+0j
+        return 1.0 + 0j, 1.0 + 0j, 0.0 + 0j, 0.0 + 0j
     cos_t = np.sqrt(1.0 - sin2_t)
-    r_s = (n1*cos_i - n2*cos_t) / (n1*cos_i + n2*cos_t)
-    r_p = (n2*cos_i - n1*cos_t) / (n2*cos_i + n1*cos_t)
-    t_s = 2.0 * n1 * cos_i / (n1*cos_i + n2*cos_t)
-    t_p = 2.0 * n1 * cos_i / (n2*cos_i + n1*cos_t)
+    r_s = (n1 * cos_i - n2 * cos_t) / (n1 * cos_i + n2 * cos_t)
+    r_p = (n2 * cos_i - n1 * cos_t) / (n2 * cos_i + n1 * cos_t)
+    t_s = 2.0 * n1 * cos_i / (n1 * cos_i + n2 * cos_t)
+    t_p = 2.0 * n1 * cos_i / (n2 * cos_i + n1 * cos_t)
     return complex(r_s), complex(r_p), complex(t_s), complex(t_p)
+
 
 # ---------- Преломление (Снеллиус) ----------
 @njit
@@ -53,6 +54,7 @@ def refract(ray_dir, normal, n1, n2):
 
     # Векторное уравнение преломления света
     return eta * ray_dir + (eta * cos_i - cos_t) * actual_normal
+
 
 # ---------- Пересечение с плоскостью (круглая апертура) ----------
 @njit
@@ -140,14 +142,14 @@ def _sag_numba(r, R, k, coeffs):
         c = 1.0 / R
 
         # Вычисляем подкоренное выражение для уравнения коноида: 1 - (1 + k) * c^2 * r^2
-        discr = 1.0 - (1.0 + k) * c ** 2 * r ** 2
+        discr = 1.0 - (1.0 + k) * c**2 * r**2
 
         if discr < 0.0:
             # Если дискриминант < 0, то профиль геометрически невозможен
             return np.inf
 
         sqrt_discr = np.sqrt(discr)
-        sag = (c * r ** 2) / (1.0 + sqrt_discr)
+        sag = (c * r**2) / (1.0 + sqrt_discr)
 
     # 2. Добавление асферических деформаций
     # coeffs содержит коэффициенты при четных степенях радиуса: A4, A6, A8, A10...

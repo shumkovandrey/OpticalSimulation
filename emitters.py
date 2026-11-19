@@ -6,7 +6,7 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
-from core.rays import Ray, DispersiveRay, WhiteRay
+from core.rays import DispersiveRay, Ray, WhiteRay
 
 
 class BeamEmitter:
@@ -15,13 +15,24 @@ class BeamEmitter:
     Полностью эквивалентен BeamEmitter из main.py (шаг 5).
     """
 
-    def __init__(self, origin, direction=np.array([1.0, 0.0, 0.0]),
-                 rotation_degrees=(0, 0, 0), pool=None,
-                 num_rays=5, min_offset=-2.0, max_offset=2.0,
-                 color="yellow", wavelength=550, energy_color_type=2,
-                 energy=1.0, current_n=1.0, ray_class=Ray,
-                 num_spectral_bands=7,
-                 spawn_as_spectral_pack=True):
+    def __init__(
+        self,
+        origin,
+        direction=np.array([1.0, 0.0, 0.0]),
+        rotation_degrees=(0, 0, 0),
+        pool=None,
+        num_rays=5,
+        min_offset=-2.0,
+        max_offset=2.0,
+        color="yellow",
+        wavelength=550,
+        energy_color_type=2,
+        energy=1.0,
+        current_n=1.0,
+        ray_class=Ray,
+        num_spectral_bands=7,
+        spawn_as_spectral_pack=True,
+    ):
         self.origin = np.asarray(origin, dtype=float)
 
         # Сохраняем исходное базовое направление
@@ -62,7 +73,7 @@ class BeamEmitter:
 
     def rotate(self, angles_deg):
         # Рассчитываем чистую абсолютную матрицу поворота
-        rot = R.from_euler('xyz', angles_deg, degrees=True).as_matrix()
+        rot = R.from_euler("xyz", angles_deg, degrees=True).as_matrix()
         self.direction = rot @ self.base_direction
         self.rotation_matrix = rot
 
@@ -72,9 +83,6 @@ class BeamEmitter:
     def emit(self) -> List[Ray]:
         rays = []
 
-        # ИСПРАВЛЕНИЕ: Вместо слепого np.cross и условий с 0.9,
-        # мы берем честный локальный вектор Y и трансформируем его матрицей поворота.
-        # Это полностью убирает скачки на 26 градусах и заставляет работать поворот по X!
         local_perp1 = np.array([0.0, 1.0, 0.0])
         perp1 = self.rotation_matrix @ local_perp1
         perp1 /= np.linalg.norm(perp1)
@@ -92,50 +100,60 @@ class BeamEmitter:
 
                 for wl in wavelengths:
                     if self.pool:
-                        ray = self.pool.acquire(origin=world_origin,
-                                                direction=self.direction,
-                                                energy=sub_energy,
-                                                current_n=self.current_n,
-                                                color=self.color,
-                                                wavelength=wl,
-                                                energy_color_type=self.energy_color_type,
-                                                ray_class=DispersiveRay)
+                        ray = self.pool.acquire(
+                            origin=world_origin,
+                            direction=self.direction,
+                            energy=sub_energy,
+                            current_n=self.current_n,
+                            color=self.color,
+                            wavelength=wl,
+                            energy_color_type=self.energy_color_type,
+                            ray_class=DispersiveRay,
+                        )
                     else:
-                        ray = DispersiveRay(origin=world_origin,
-                                            direction=self.direction,
-                                            energy=sub_energy,
-                                            current_n=self.current_n,
-                                            energy_color_type=self.energy_color_type,
-                                            wavelength=wl)
+                        ray = DispersiveRay(
+                            origin=world_origin,
+                            direction=self.direction,
+                            energy=sub_energy,
+                            current_n=self.current_n,
+                            energy_color_type=self.energy_color_type,
+                            wavelength=wl,
+                        )
                     rays.append(ray)
             else:
                 # Стандартное создание одиночного луча
                 if self.pool:
-                    ray = self.pool.acquire(origin=world_origin,
-                                            direction=self.direction,
-                                            energy=self.energy,
-                                            current_n=self.current_n,
-                                            color=self.color,
-                                            wavelength=self.wavelength,
-                                            energy_color_type=self.energy_color_type,
-                                            ray_class=self.ray_class,
-                                            num_spectral_bands=self.num_spectral_bands)
+                    ray = self.pool.acquire(
+                        origin=world_origin,
+                        direction=self.direction,
+                        energy=self.energy,
+                        current_n=self.current_n,
+                        color=self.color,
+                        wavelength=self.wavelength,
+                        energy_color_type=self.energy_color_type,
+                        ray_class=self.ray_class,
+                        num_spectral_bands=self.num_spectral_bands,
+                    )
                 else:
                     if self.ray_class is WhiteRay:
-                        ray = WhiteRay(origin=world_origin,
-                                       direction=self.direction,
-                                       num_spectral_bands=self.num_spectral_bands,
-                                       energy=self.energy,
-                                       current_n=self.current_n,
-                                       energy_color_type=self.energy_color_type)
+                        ray = WhiteRay(
+                            origin=world_origin,
+                            direction=self.direction,
+                            num_spectral_bands=self.num_spectral_bands,
+                            energy=self.energy,
+                            current_n=self.current_n,
+                            energy_color_type=self.energy_color_type,
+                        )
                     else:
-                        ray = self.ray_class(origin=world_origin,
-                                             direction=self.direction,
-                                             energy=self.energy,
-                                             current_n=self.current_n,
-                                             color=self.color,
-                                             wavelength=self.wavelength,
-                                             energy_color_type=self.energy_color_type)
+                        ray = self.ray_class(
+                            origin=world_origin,
+                            direction=self.direction,
+                            energy=self.energy,
+                            current_n=self.current_n,
+                            color=self.color,
+                            wavelength=self.wavelength,
+                            energy_color_type=self.energy_color_type,
+                        )
                 rays.append(ray)
         return rays
 
