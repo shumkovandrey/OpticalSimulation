@@ -10,10 +10,7 @@ from core.rays import DispersiveRay, Ray, WhiteRay
 
 
 class BeamEmitter:
-    """Излучатель пучка лучей: трансформация, генерация параллельных лучей.
-
-    Полностью эквивалентен BeamEmitter из main.py (шаг 5).
-    """
+    """Излучатель пучка лучей: трансформация, генерация параллельных лучей."""
 
     def __init__(
         self,
@@ -35,19 +32,15 @@ class BeamEmitter:
     ):
         self.origin = np.asarray(origin, dtype=float)
 
-        # Сохраняем исходное базовое направление
         self.base_direction = np.asarray(direction, dtype=float)
         self.base_direction /= np.linalg.norm(self.base_direction)
 
         self.direction = self.base_direction.copy()
 
-        # Задаем начальную матрицу
         self.rotation_matrix = np.eye(3)
 
-        # Применяем начальный поворот
         self.rotate(rotation_degrees)
 
-        # Параметры генерации
         self.num_rays = num_rays
         self.min_offset = min_offset
         self.max_offset = max_offset
@@ -61,9 +54,7 @@ class BeamEmitter:
         self.use_custom = False
         self.ray_class = ray_class
 
-        # Количество спектральных составляющих для WhiteRay
         self.num_spectral_bands = num_spectral_bands
-        # Временное решение: разбивать ли белый луч на цветные сразу при создании
         self.spawn_as_spectral_pack = spawn_as_spectral_pack
 
     def add_ray(self, ray: Ray):
@@ -92,10 +83,8 @@ class BeamEmitter:
         offsets = np.linspace(self.min_offset, self.max_offset, self.num_rays)
 
         for dy in offsets:
-            # Теперь world_origin смещается строго перпендикулярно направлению выстрела
             world_origin = self.origin + dy * perp1
 
-            # Если выбран класс WhiteRay и включена опция "сразу создавать пучок"
             if self.ray_class is WhiteRay and self.spawn_as_spectral_pack:
                 wavelengths = np.linspace(400.0, 700.0, self.num_spectral_bands)
                 sub_energy = self.energy / self.num_spectral_bands
@@ -123,7 +112,6 @@ class BeamEmitter:
                         )
                     rays.append(ray)
             else:
-                # Стандартное создание одиночного луча
                 if self.pool:
                     ray = self.pool.acquire(
                         origin=world_origin,
@@ -139,16 +127,21 @@ class BeamEmitter:
                 else:
                     if self.ray_class is WhiteRay:
                         ray = WhiteRay(
-                            origin=world_origin, direction=self.direction,
+                            origin=world_origin,
+                            direction=self.direction,
                             num_spectral_bands=self.num_spectral_bands,
-                            energy=self.energy, current_n=self.current_n,
+                            energy=self.energy,
+                            current_n=self.current_n,
                             energy_color_type=self.energy_color_type,
                         )
                     else:
                         kwargs = dict(
-                            origin=world_origin, direction=self.direction,
-                            energy=self.energy, current_n=self.current_n,
-                            color=self.color, energy_color_type=self.energy_color_type,
+                            origin=world_origin,
+                            direction=self.direction,
+                            energy=self.energy,
+                            current_n=self.current_n,
+                            color=self.color,
+                            energy_color_type=self.energy_color_type,
                         )
                         if self.ray_class is DispersiveRay:
                             kwargs["wavelength"] = self.wavelength

@@ -19,10 +19,7 @@ def split_ray(
     offset_distance: float = DEFAULT_OFFSET_DISTANCE,
     pool: Optional[RayPool] = None,
 ) -> List[Ray]:
-    """Расщепляет луч на отражённый и преломлённый по формулам Френеля.
-
-    Полностью эквивалентна split_ray из main.py (шаг 5, без поляризации).
-    """
+    """Расщепляет луч на отражённый и преломлённый по формулам Френеля."""
     EPS = offset_distance
 
     cos_i = np.dot(normal, ray.direction)
@@ -70,12 +67,12 @@ def split_ray(
 
     new_rays = []
 
-    # 1. ОТРАЖЁННЫЙ
     if allow_reflection and R_coeff > 1e-6:
         reflected_energy = ray.energy * R_coeff
         if reflected_energy > 1e-6:
             new_ray = spawn_ray(
-                ray, pool,
+                ray,
+                pool,
                 origin=start_point + EPS * reflected_dir,
                 direction=reflected_dir,
                 energy=reflected_energy,
@@ -84,12 +81,12 @@ def split_ray(
             )
             new_rays.append(new_ray)
 
-    # 2. ПРЕЛОМЛЁННЫЙ
     if allow_refraction and T_coeff > 1e-6:
         refracted_energy = ray.energy * T_coeff
         if refracted_energy > 1e-6:
             new_ray = spawn_ray(
-                ray, pool,
+                ray,
+                pool,
                 origin=start_point + EPS * refracted_dir,
                 direction=refracted_dir,
                 energy=refracted_energy,

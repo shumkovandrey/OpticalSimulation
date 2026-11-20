@@ -19,7 +19,7 @@ class TraceMode(ABC):
 
 
 class SimpleMode(TraceMode):
-    """Последовательная трассировка без ветвления (см. main.py:SimpleMode)."""
+    """Последовательная трассировка без ветвления"""
 
     def __init__(
         self,
@@ -35,7 +35,6 @@ class SimpleMode(TraceMode):
         self.prioritize_refraction = prioritize_refraction
 
     def trace(self, ray: "Ray", elements: List) -> List[Segment]:
-        # Импорт внутри метода, чтобы избежать цикла modes ← simple ← modes
         from tracing.simple import trace_simple
 
         return trace_simple(

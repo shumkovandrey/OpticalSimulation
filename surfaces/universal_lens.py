@@ -50,10 +50,8 @@ class UniversalLens(LensAssembly):
     def _create_surfaces(self):
         r = float(self.edge_radius)
 
-        # 1. Вычисляем стрелки прогиба (sagitta) для передней и задней поверхностей
         sag1 = 0.0
         if self.R1 is not None:
-            # Ограничиваем радиус, чтобы избежать деления на ноль / корня из отрицательного числа на полусфере
             effective_R1 = max(abs(self.R1), r + 1e-5)
             sag1 = effective_R1 - np.sqrt(effective_R1**2 - r**2)
             if self.R1 < 0:
@@ -68,23 +66,19 @@ class UniversalLens(LensAssembly):
 
         self.internal_thickness = self.thickness
 
-        # Пересчитываем параметры на основе скорректированной внутренней толщины
         half = self.internal_thickness / 2
         edge_thickness = (
             self.internal_thickness - (sag1 if self.R1 is not None else 0.0) - (sag2 if self.R2 is not None else 0.0)
         )
         half_rim_length = edge_thickness / 2.0
 
-        # Корректируем смещение центра ободка (для несимметричных крутых линз)
         rim_center_x = (sag1 - sag2) / 2.0 if (self.R1 is not None and self.R2 is not None) else 0.0
         local_cylinder_center = np.array([rim_center_x, 0.0, 0.0])
 
-        # Строим мировую матрицу трансформации 4x4
         mat = np.eye(4)
         mat[:3, :3] = self.rotation
         mat[:3, 3] = self.origin
 
-        # 3. Инициализируем поверхности с учётом новой внутренней толщины `self.internal_thickness`
         if self.R1 is None:
             self.front = PlaneSurface(
                 point=[-half, 0, 0],
@@ -131,7 +125,6 @@ class UniversalLens(LensAssembly):
                 lens_axis=[1.0, 0.0, 0.0],
             )
 
-        # Боковой цилиндр встает ровно посередине между краями «чаш»
         self.cylinder = CylinderSurface(
             center=local_cylinder_center,
             axis_dir=[1.0, 0.0, 0.0],
@@ -143,7 +136,6 @@ class UniversalLens(LensAssembly):
             absorption_range=self.absorption_range,
         )
 
-        # Применяем трансформации к мировым координатам
         self.front.apply_transform(mat)
         self.back.apply_transform(mat)
         self.cylinder.center = mat[:3, :3] @ self.cylinder.center + mat[:3, 3]
@@ -158,7 +150,6 @@ class UniversalLens(LensAssembly):
         y = r_grid * np.cos(phi_grid)
         z = r_grid * np.sin(phi_grid)
 
-        # Используем внутреннюю скорректированную толщину вместо исходной
         v1_local = -self.internal_thickness / 2
         v2_local = self.internal_thickness / 2
 

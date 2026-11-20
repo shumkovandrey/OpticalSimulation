@@ -11,7 +11,6 @@ import json
 import numpy as np
 import pyvista as pv
 
-# Для холста
 from pyvista.trame.ui import plotter_ui
 from scipy.spatial.transform import Rotation as R
 from trame.app import get_server
@@ -95,16 +94,16 @@ class OpticsAppController:
         self.state.param_wavelength = 550.0
         self.state.param_current_n = 1.0
         self.state.param_mesh_path = ""
-        self.state.param_scale_uniform = True  # Тумблер по умолчанию ВКЛ
-        self.state.param_scale_all = 1.0  # Единый ползунок
-        self.state.param_scale_x = 1.0  # Раздельные ползунки
+        self.state.param_scale_uniform = True
+        self.state.param_scale_all = 1.0
+        self.state.param_scale_x = 1.0
         self.state.param_scale_y = 1.0
         self.state.param_scale_z = 1.0
         self.state.param_plane_shape = "rectangle"
         self.state.param_plane_width = 2.0
         self.state.param_plane_height = 2.0
         self.state.param_cylinder_capping = False
-        self.state.param_ray_class = "Ray"  # Тип по умолчанию строкой для интерфейса
+        self.state.param_ray_class = "Ray"
         self.state.param_num_spectral_bands = 7
         self.state.ray_classes_list = [
             {"title": "Обычный луч (Ray)", "value": "Ray"},
@@ -115,7 +114,7 @@ class OpticsAppController:
         for effect in ["reflection", "refraction", "absorption"]:
             self.state[f"param_{effect}_min"] = 0.0
             self.state[f"param_{effect}_max"] = np.inf
-            self.state[f"param_{effect}_enabled"] = effect == "refraction"  # преломление включено по умолчанию
+            self.state[f"param_{effect}_enabled"] = effect == "refraction"
 
         self.state.temp_pos_delta_x = 0.0
         self.state.temp_pos_delta_y = 0.0
@@ -142,39 +141,31 @@ class OpticsAppController:
         self.ctrl.trigger("load_scene_from_file")(self.load_scene_from_file)
         self.ctrl.trigger("export_scene")(self.export_scene)
 
-        # self.create_initial_objects()
         self.initializing = False
 
-    # ---------- Вспомогательные методы ----------
     def _update_objects_list_state(self):
         self.state.scene_objects_list = [
             {"id": o["id"], "name": o["name"], "type": o["type"]} for o in self.scene_objects
         ]
 
-    # ---------- Сохранение и загрузка сцены ----------
     def save_scene_to_file(self, filename):
         """Сохраняет параметры всех объектов сцены в JSON-файл в корне проекта."""
         if not filename:
             return
 
-        # Гарантируем расширение .json
         if not filename.endswith(".json"):
             filename += ".json"
 
-        # Формируем плоский словарь параметров для сохранения
         serialized_data = []
         for obj in self.scene_objects:
-            # Копируем параметры, чтобы не испортить текущие
             save_params = obj["params"].copy()
 
-            # Преобразуем numpy-типы и специфичные объекты (например, Infinity) в JSON-совместимые
             for key, val in save_params.items():
                 if isinstance(val, tuple):
                     save_params[key] = list(val)
-                elif isinstance(val, type):  # Для ray_class (например, WhiteRay)
+                elif isinstance(val, type):
                     save_params[key] = val.__name__
-                elif isinstance(val, (list, tuple)) and len(val) == 2:  # Для оптических диапазонов
-                    # Заменяем np.inf на строковое представление для JSON
+                elif isinstance(val, (list, tuple)) and len(val) == 2:
                     save_params[key] = [
                         "Infinity" if v == np.inf or (isinstance(v, float) and np.isinf(v)) else v for v in val
                     ]
@@ -206,8 +197,6 @@ class OpticsAppController:
             print(f"Ошибка чтения файла сцены: {e}")
             return
 
-        # 1. Полностью очищаем текущую сцену
-        # Удаляем всех акторов из PyVista плоттера
         for obj in self.scene_objects:
             self.plotter.remove_actor(obj["id"])
         self.scene_objects.clear()
@@ -215,27 +204,22 @@ class OpticsAppController:
         self.state.selected_object_id = None
         self.state.selected_object_type = None
 
-        # Отключаем триггеры обновления на время массовой загрузки
         self._loading_state = True
         self.initializing = True
 
         try:
-            # 2. Восстанавливаем объекты из файла
             for obj_data in loaded_data:
                 params = obj_data["params"]
 
-                # Приводим массивы обратно к кортежам, где это необходимо
                 if "origin" in params:
                     params["origin"] = tuple(params["origin"])
                 if "rotation" in params:
                     params["rotation"] = tuple(params["rotation"])
 
-                # Восстанавливаем классы лучей
                 if "ray_class" in params:
                     mapping = {"Ray": Ray, "DispersiveRay": DispersiveRay, "WhiteRay": WhiteRay}
                     params["ray_class"] = mapping.get(params["ray_class"], Ray)
 
-                # Восстанавливаем оптические диапазоны (строку "Infinity" преобразуем обратно в np.inf)
                 for effect in ["reflection", "refraction", "absorption"]:
                     range_key = f"{effect}_range"
                     if range_key in params and params[range_key] is not None:
@@ -245,7 +229,6 @@ class OpticsAppController:
                             r_max = np.inf
                         params[range_key] = (r_min, r_max)
 
-                # Создаем объект на сцене
                 self.add_object(obj_data["type"], obj_data["name"], params)
 
         except Exception as e:
@@ -254,7 +237,6 @@ class OpticsAppController:
             self._loading_state = False
             self.initializing = False
 
-        # Синхронизируем интерфейс
         self._update_objects_list_state()
         if self.scene_objects:
             first_id = self.scene_objects[0]["id"]
@@ -266,83 +248,6 @@ class OpticsAppController:
     def export_scene(self):
         self.plotter.export_gltf("my_scene.gltf")
 
-    # ---------- Создание объектов ----------
-    def create_initial_objects(self):
-        # 1. Входящий пучок света (параллельные лучи слева направо)
-        self.add_object(
-            "emitter",
-            "Входящий свет",
-            {
-                "origin": (-10.0, 0.0, 0.0),
-                "rotation": (0.0, 0.0, 0.0),
-                "num_rays": 10,
-                "min_offset": -1.2,
-                "max_offset": 1.2,
-                "wavelength": 550.0,
-                "color": "yellow",
-                "energy": 1.0,
-                "current_n": 1.0,
-                "ray_class": WhiteRay,
-                "num_spectral_bands": 7,
-            },
-        )
-
-        # 2. Главное зеркало (вогнутая сферическая поверхность справа)
-        # Отражает лучи обратно к центру трубы
-        self.add_object(
-            "sphere_surf",
-            "Главное зеркало (Primary)",
-            {
-                "origin": (5.0, 0.0, 0.0),
-                "rotation": (0.0, 0.0, 0.0),  # Развернуто навстречу лучам
-                "radius": 15.0,  # Радиус кривизны зеркала
-                "edge_radius": 1.5,  # Радиус апертуры
-                "n": 1.0,
-                "reflection_range": (0.0, np.inf),
-                "refraction_range": None,
-                "absorption_range": None,
-            },
-        )
-
-        # 3. Вторичное плоское зеркало (наклонное под 45 градусов)
-        # Перенаправляет лучи от главного зеркала вертикально вверх
-        self.add_object(
-            "plane",
-            "Вторичное зеркало (Secondary)",
-            {
-                "origin": (-2.0, 0.0, 0.0),
-                "rotation": (0.0, 0.0, 45.0),  # Наклон 45 градусов для отражения вверх
-                "edge_radius": 0.5,
-                "shape_type": "circle",
-                "width": 1.0,
-                "height": 1.0,
-                "n": 1.0,
-                "reflection_range": (0.0, np.inf),
-                "refraction_range": None,
-                "absorption_range": None,
-            },
-        )
-
-        # 4. Линза окуляра (Eyepiece Lens сверху)
-        # Собирает перенаправленный свет в финальный пучок
-        self.add_object(
-            "lens",
-            "Окуляр (Eyepiece)",
-            {
-                "origin": (-2.0, 3.17, 0.0),
-                "rotation": (0.0, 0.0, 90.0),  # Повернута горизонтально (вдоль оси Y)
-                "R1": 4.0,
-                "R2": 2.13,
-                "thickness": 0.2,
-                "edge_radius": 0.6,
-                "n": 1.5,
-                "reflection_range": None,
-                "refraction_range": (0.0, np.inf),
-                "absorption_range": None,
-            },
-        )
-        self._update_objects_list_state()
-
     def add_object(self, obj_type, name, params):
         self.object_counter += 1
         obj_id = f"obj_{self.object_counter}"
@@ -351,10 +256,8 @@ class OpticsAppController:
         obj_entry = {"id": obj_id, "type": obj_type, "name": name, "params": params, "instance": instance}
         self.scene_objects.append(obj_entry)
 
-        # Берем ЧИСТЫЙ локальный меш формы объекта
         local_mesh = instance.get_mesh()
 
-        # Выводим на сцену
         actor = self.plotter.add_mesh(
             local_mesh,
             color="green" if obj_type == "emitter" else "cyan",
@@ -363,7 +266,6 @@ class OpticsAppController:
             name=obj_id,
         )
 
-        # Задаем начальную матрицу трансформации
         mat = np.eye(4)
         mat[:3, :3] = R.from_euler("xyz", params.get("rotation", (0, 0, 0)), degrees=True).as_matrix()
         mat[:3, 3] = params.get("origin", (0, 0, 0))
@@ -500,7 +402,6 @@ class OpticsAppController:
             },
         )
 
-    # ---------- Удаление объекта ----------
     def remove_object(self, *args, **kwargs):
         if args and isinstance(args[0], list):
             obj_id = args[0][0]
@@ -523,7 +424,6 @@ class OpticsAppController:
         self._update_objects_list_state()
         self.update_scene()
 
-    # ---------- Создание экземпляров ----------
     def _create_instance(self, obj_type, params):
         if obj_type == "lens":
             return UniversalLens(
@@ -707,25 +607,23 @@ class OpticsAppController:
                         name="traced_rays_geometry",
                     )
 
-            # Оповещаем Trame о необходимости перерисовать WebGL контекст в браузере
             if hasattr(self.ctrl, "view_update"):
                 self.ctrl.view_update()
 
         finally:
             self._updating = False
 
-    # ---------- Выбор объекта ----------
     def on_object_selected(self, *args, **kwargs):
         obj_id = args[0] if args else self.state.selected_object_id
         if not obj_id:
             return
         obj_entry = self._find_object(obj_id)
         if obj_entry:
-            self._loading_state = True  # Блокируем триггеры update
+            self._loading_state = True
             try:
                 self._load_params_to_state(obj_entry)
             finally:
-                self._loading_state = False  # Снимаем блокировку
+                self._loading_state = False
 
     def focus_on_selected_object(self, *args, **kwargs):
         """Перемещает фокус камеры на текущие координаты выбранного объекта."""
@@ -737,17 +635,13 @@ class OpticsAppController:
         if not obj_entry:
             return
 
-        # Считываем текущую мировую позицию объекта из его сохраненных параметров
         p = obj_entry["params"]
         origin = p.get("origin", (0.0, 0.0, 0.0))
 
-        # Переносим фокальную точку камеры PyVista в центр объекта
         target_point = (float(origin[0]), float(origin[1]), float(origin[2]))
 
-        # fly_to плавно смещает фокус камеры в эту точку
         self.plotter.fly_to(target_point)
 
-        # Принудительно рендерим кадр и обновляем клиентский вид
         self.plotter.render()
         if hasattr(self.ctrl, "view_update"):
             self.ctrl.view_update()
@@ -767,7 +661,6 @@ class OpticsAppController:
         self.state.param_rot_x = float(p["rotation"][0])
         self.state.param_rot_y = float(p["rotation"][1])
         self.state.param_rot_z = float(p["rotation"][2])
-        # Сбрасываем временные смещения при выборе объекта
         self.state.temp_pos_delta_x = 0.0
         self.state.temp_pos_delta_y = 0.0
         self.state.temp_pos_delta_z = 0.0
@@ -789,7 +682,6 @@ class OpticsAppController:
             self.state.param_wavelength = float(p.get("wavelength", 550.0))
             self.state.param_current_n = float(p.get("current_n", 1.0))
 
-            # Восстанавливаем строковое имя класса луча для UI
             rc = p.get("ray_class", Ray)
             if rc.__name__ in ["Ray", "DispersiveRay", "WhiteRay"]:
                 self.state.param_ray_class = rc.__name__
@@ -800,7 +692,6 @@ class OpticsAppController:
         elif obj_entry["type"] == "mesh":
             self.state.param_n = float(p.get("n", 1.5))
             self.state.param_mesh_path = str(p.get("mesh_path", ""))
-            # Загружаем масштабы
             self.state.param_scale_uniform = bool(p.get("scale_uniform", True))
             self.state.param_scale_all = float(p.get("scale_all", 1.0))
             self.state.param_scale_x = float(p.get("scale_x", 1.0))
@@ -842,27 +733,22 @@ class OpticsAppController:
 
         p = obj_entry["params"]
 
-        # Считываем только позицию и поворот
         new_origin = (float(self.state.param_pos_x), float(self.state.param_pos_y), float(self.state.param_pos_z))
 
         new_rotation = (float(self.state.param_rot_x), float(self.state.param_rot_y), float(self.state.param_rot_z))
 
-        # Обновляем параметры для физического движка на сервере
         p["origin"] = new_origin
         p["rotation"] = new_rotation
 
-        # Пересоздаем только математический инстанс для Numba
         instance = self._create_instance(obj_entry["type"], p)
         obj_entry["instance"] = instance
 
-        # Мгновенно двигаем 3D-актора на клиенте
         actor = self.plotter.actors[obj_id]
         mat = np.eye(4)
         mat[:3, :3] = R.from_euler("xyz", new_rotation, degrees=True).as_matrix()
         mat[:3, 3] = new_origin
         actor.user_matrix = mat
 
-        # Пересчитываем лучи
         self.update_scene()
 
     def update_object_shape(self):
@@ -874,7 +760,6 @@ class OpticsAppController:
 
         p = obj_entry["params"]
 
-        # Считываем текущую позицию/поворот, чтобы не потерять их при пересоздании
         current_origin = (float(self.state.param_pos_x), float(self.state.param_pos_y), float(self.state.param_pos_z))
 
         current_rotation = (float(self.state.param_rot_x), float(self.state.param_rot_y), float(self.state.param_rot_z))
@@ -882,7 +767,6 @@ class OpticsAppController:
         p["origin"] = current_origin
         p["rotation"] = current_rotation
 
-        # Считываем параметры формы
         if obj_entry["type"] == "lens":
             p["n"] = float(self.state.param_n)
             p["R1"] = float(self.state.param_R1)
@@ -917,12 +801,6 @@ class OpticsAppController:
             p["scale_x"] = float(self.state.param_scale_x)
             p["scale_y"] = float(self.state.param_scale_y)
             p["scale_z"] = float(self.state.param_scale_z)
-            # Формируем и передаем обновленные коэффициенты масштабирования в параметры
-            # if p["scale_uniform"]:
-            #     s_val = p["scale_all"]
-            #     p["scale_factors"] = (s_val, s_val, s_val)
-            # else:
-            #     p["scale_factors"] = (p["scale_x"], p["scale_y"], p["scale_z"])
         elif obj_entry["type"] == "emitter":
             p["num_rays"] = int(self.state.param_num_rays)
             p["min_offset"] = float(self.state.param_min_offset)
@@ -941,17 +819,14 @@ class OpticsAppController:
             else:
                 p[f"{effect}_range"] = None
 
-        # Пересоздаем инстанс
         instance = self._create_instance(obj_entry["type"], p)
         obj_entry["instance"] = instance
 
         if obj_id in self.plotter.actors:
             self.plotter.remove_actor(obj_id)
 
-        # Берём локальный меш
         local_mesh = instance.get_mesh()
 
-        # Добавляем на сцену чистый меш формы
         actor = self.plotter.add_mesh(
             local_mesh,
             color="green" if obj_entry["type"] == "emitter" else "cyan",
@@ -960,16 +835,13 @@ class OpticsAppController:
             name=obj_id,
         )
 
-        # Сразу же позиционируем его матрицей
         mat = np.eye(4)
         mat[:3, :3] = R.from_euler("xyz", current_rotation, degrees=True).as_matrix()
         mat[:3, 3] = current_origin
         actor.user_matrix = mat
 
-        # Пересчитываем лучи
         self.update_scene()
 
-    # Точка входа для изменения параметров формы (с дебаунсом для хостинга)
     def on_shape_param_change(self, *args, **kwargs):
         if getattr(self, "_loading_state", False):
             return
@@ -978,7 +850,6 @@ class OpticsAppController:
         loop = asyncio.get_event_loop()
         self._debounce_timer = loop.call_later(self._debounce_delay, self.update_object_shape)
 
-    # Точка входа для параметров трансформации (БЕЗ задержки для плавного скольжения)
     def on_transform_param_change(self, *args, **kwargs):
         if getattr(self, "_loading_state", False):
             return
@@ -987,16 +858,11 @@ class OpticsAppController:
         loop = asyncio.get_event_loop()
         self._debounce_timer = loop.call_later(self._debounce_delay, self.update_object_transform)
 
-        # if getattr(self, '_loading_state', False):
-        #     return
-        # self.update_object_transform()
-
     def on_temp_change(self, *args, **kwargs):
         """Обработка движения временных слайдеров позиции."""
         self.state.param_pos_x = float(float(self.state.temp_last_pos_x) + kwargs["temp_pos_delta_x"])
         self.state.param_pos_y = float(float(self.state.temp_last_pos_y) + kwargs["temp_pos_delta_y"])
         self.state.param_pos_z = float(float(self.state.temp_last_pos_z) + kwargs["temp_pos_delta_z"])
-        # self.update_object_transform()
         if getattr(self, "_loading_state", False):
             return
         if self._debounce_timer is not None:
@@ -1026,24 +892,19 @@ class OpticsAppController:
         self.on_object_selected(obj_id)
 
 
-# --- Сборка интерфейса Trame / Vuetify 3 ---
 server = get_server()
 server.client_type = "vue3"
 app = OpticsAppController(server)
 
-# --- РАЗДЕЛЬНЫЕ ПОДПИСКИ TRAME ---
 
-# 1. Параметры трансформации (Мгновенный отклик матрицы)
 transform_params = ["param_pos_x", "param_pos_y", "param_pos_z", "param_rot_x", "param_rot_y", "param_rot_z"]
 for param in transform_params:
     server.state.change(param)(app.on_transform_param_change)
 
-# Подписка на временные слайдеры позиции (активное перетаскивание мышью)
 for axis in ["x", "y", "z"]:
     server.state.change(f"temp_pos_delta_{axis}")(app.on_temp_change)
 
 
-# 2. Параметры формы (Пересоздание 3D-модели с Debounce)
 shape_params = [
     "param_n",
     "param_radius",
@@ -1073,7 +934,6 @@ shape_params = [
 for param in shape_params:
     server.state.change(param)(app.on_shape_param_change)
 
-# Свойства Френеля тоже относятся к форме объекта
 for effect in ["reflection", "refraction", "absorption"]:
     server.state.change(f"param_{effect}_enabled")(app.on_shape_param_change)
     server.state.change(f"param_{effect}_min")(app.on_shape_param_change)
@@ -1081,12 +941,9 @@ for effect in ["reflection", "refraction", "absorption"]:
 
 
 with VAppLayout(server) as layout:
-    # Заголовок убран
-    # layout.title.set_text("Оптический симулятор")
     with vuetify.VMain():
         with vuetify.VContainer(fluid=True, classes="pa-0", style="height: 100vh; overflow: hidden;"):
             with vuetify.VRow(no_gutters=True, style="height: 100%;"):
-                # Левая колонка управления
                 with vuetify.VCol(
                     cols=3,
                     classes="pa-4 bg-grey-darken-4",
@@ -1115,7 +972,6 @@ with VAppLayout(server) as layout:
                                 vuetify.VLabel("Экспорт", class_="mr-1")
                                 "Экспорт"
 
-                    # Диалоговое окно сохранения файла
                     with vuetify.VDialog(v_model="save_dialog_visible", max_width="400px"):
                         with vuetify.VCard(class_="bg-grey-darken-3 text-white pa-4"):
                             vuetify.VCardTitle("Сохранить сцену", class_="px-0")
@@ -1131,7 +987,6 @@ with VAppLayout(server) as layout:
                                     click="trigger('save_scene_to_file', [file_to_save]); save_dialog_visible = false",
                                 )
 
-                    # Диалоговое окно загрузки файла
                     with vuetify.VDialog(v_model="load_dialog_visible", max_width="400px"):
                         with vuetify.VCard(class_="bg-grey-darken-3 text-white pa-4"):
                             vuetify.VCardTitle("Загрузить сцену", class_="px-0")
@@ -1151,7 +1006,6 @@ with VAppLayout(server) as layout:
 
                     vuetify.VCardTitle("Объекты сцены", classes="text-h6 px-0")
 
-                    # Единая кнопка с выпадающим меню
                     with vuetify.VBtn(color="primary", block=True):
                         vuetify.VIcon("mdi-plus", class_="mr-2")
                         "Добавить объект"
@@ -1194,20 +1048,16 @@ with VAppLayout(server) as layout:
                                 classes="text-subtitle-1 px-0 text-cyan-lighten-2",
                             )
                         with vuetify.VCol(cols=3, class_="text-right"):
-                            # Кнопка становится активной, только если объект выбран
                             vuetify.VBtn(
                                 icon="mdi-crosshairs-gps",
                                 size="small",
                                 color="cyan-darken-2",
                                 variant="flat",
-                                # disabled="selected_object_id == None",
                                 click="trigger('focus_on_object_event')",
                                 title="Сфокусировать камеру на объекте",
                             )
 
-                    # --- Блок позиционирования ---
                     vuetify.VCardTitle("Позиция", class_="px-0", style="text-color: white")
-                    # Ось X
                     with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
                             vuetify.VTextField(
@@ -1225,7 +1075,6 @@ with VAppLayout(server) as layout:
                                 mouseup="trigger('apply_x_delta')",
                                 mousedown="trigger('set_last_pos')",
                             )
-                    # Ось Y
                     with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
                             vuetify.VTextField(
@@ -1243,7 +1092,6 @@ with VAppLayout(server) as layout:
                                 mouseup="trigger('apply_y_delta')",
                                 mousedown="trigger('set_last_pos')",
                             )
-                    # Ось Z
                     with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
                             vuetify.VTextField(
@@ -1262,7 +1110,6 @@ with VAppLayout(server) as layout:
                                 mousedown="trigger('set_last_pos')",
                             )
 
-                    # --- Блок вращения ---
                     vuetify.VCardTitle("Поворот", class_="px-0", style="text-color: white")
                     for axis in ["x", "y", "z"]:
                         with vuetify.VRow(v_if="selected_object_type != None", no_gutters=True, align="center"):
@@ -1295,7 +1142,6 @@ with VAppLayout(server) as layout:
                             vuetify.VRadio(label="Круг", value="circle", color="cyan")
                             vuetify.VRadio(label="Прямоугольник", value="rectangle", color="cyan")
 
-                        # Если выбран КРУГ — показываем радиус апертуры
                         with vuetify.VContainer(v_if="param_plane_shape == 'circle'", class_="pa-0"):
                             with vuetify.VRow(no_gutters=True, align="center"):
                                 with vuetify.VCol(cols=4):
@@ -1312,7 +1158,6 @@ with VAppLayout(server) as layout:
                                         hide_details=True,
                                     )
 
-                        # Если ПРЯМОУГОЛЬНИК — показываем настройки ширины и высоты
                         with vuetify.VContainer(v_if="param_plane_shape == 'rectangle'", class_="pa-0"):
                             with vuetify.VRow(no_gutters=True, align="center", class_="mb-1"):
                                 with vuetify.VCol(cols=4):
@@ -1353,7 +1198,6 @@ with VAppLayout(server) as layout:
                                     v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True, hide_details=True
                                 )
 
-                    # Параметры SphereSurface
                     with vuetify.VContainer(v_if="selected_object_type == 'sphere_surf'", class_="pa-0"):
                         vuetify.VCardTitle("Сферическая поверхность", class_="px-0", style="text-color: white")
                         with vuetify.VRow(no_gutters=True, align="center"):
@@ -1389,11 +1233,9 @@ with VAppLayout(server) as layout:
                                     v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True, hide_details=True
                                 )
 
-                    # Параметры CylinderSurface
                     with vuetify.VContainer(v_if="selected_object_type == 'cylinder_surf'", class_="pa-0"):
                         vuetify.VCardTitle("Цилиндрическая поверхность", class_="px-0", style="text-color: white")
 
-                        # Тумблер включения/выключения оснований
                         vuetify.VSwitch(
                             v_model="param_cylinder_capping",
                             label="Включить основания (крышки)",
@@ -1431,10 +1273,8 @@ with VAppLayout(server) as layout:
                                     v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True, hide_details=True
                                 )
 
-                    # --- Параметры сферической линзы ---
                     with vuetify.VContainer(v_if="selected_object_type == 'lens'", class_="pa-0"):
                         vuetify.VCardTitle("Сферическая линза", class_="px-0", style="text-color: white")
-                        # n
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_n", label="n", type="number", dense=True, step=0.01)
@@ -1442,7 +1282,6 @@ with VAppLayout(server) as layout:
                                 vuetify.VSlider(
                                     v_model="param_n", min=1.0, max=2.5, step=0.01, dense=True, hide_details=True
                                 )
-                        # R1
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_R1", label="R1", type="number", dense=True, step=0.5)
@@ -1450,7 +1289,6 @@ with VAppLayout(server) as layout:
                                 vuetify.VSlider(
                                     v_model="param_R1", min=-20, max=20, step=0.5, dense=True, hide_details=True
                                 )
-                        # R2
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_R2", label="R2", type="number", dense=True, step=0.5)
@@ -1458,7 +1296,6 @@ with VAppLayout(server) as layout:
                                 vuetify.VSlider(
                                     v_model="param_R2", min=-20, max=20, step=0.5, dense=True, hide_details=True
                                 )
-                        # Толщина
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1468,7 +1305,6 @@ with VAppLayout(server) as layout:
                                 vuetify.VSlider(
                                     v_model="param_thickness", min=0.1, max=5.0, step=0.1, dense=True, hide_details=True
                                 )
-                        # Радиус апертуры
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1484,10 +1320,8 @@ with VAppLayout(server) as layout:
                                     hide_details=True,
                                 )
 
-                    # --- Параметры гиперболической линзы ---
                     with vuetify.VContainer(v_if="selected_object_type == 'hyperbolic_lens'", class_="pa-0"):
                         vuetify.VCardTitle("Гиперболическая линза", class_="px-0", style="text-color: white")
-                        # Толщина
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1497,7 +1331,6 @@ with VAppLayout(server) as layout:
                                 vuetify.VSlider(
                                     v_model="param_thickness", min=0.1, max=5.0, step=0.1, dense=True, hide_details=True
                                 )
-                        # Радиус апертуры
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1512,7 +1345,6 @@ with VAppLayout(server) as layout:
                                     dense=True,
                                     hide_details=True,
                                 )
-                        # Фокус
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1527,7 +1359,6 @@ with VAppLayout(server) as layout:
                                     dense=True,
                                     hide_details=True,
                                 )
-                        # n
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(v_model="param_n", label="n", type="number", dense=True, step=0.01)
@@ -1536,11 +1367,9 @@ with VAppLayout(server) as layout:
                                     v_model="param_n", min=1.001, max=2.5, step=0.01, dense=True, hide_details=True
                                 )
 
-                    # --- Параметры источника ---
                     with vuetify.VContainer(v_if="selected_object_type == 'emitter'", class_="pa-0"):
                         vuetify.VCardTitle("Источник", class_="px-0", style="text-color: white")
 
-                        # Выбор типа луча
                         vuetify.VSelect(
                             label="Тип луча",
                             v_model="param_ray_class",
@@ -1551,7 +1380,6 @@ with VAppLayout(server) as layout:
                             class_="mb-2",
                         )
 
-                        # Количество спектральных полос (показывается только для WhiteRay)
                         with vuetify.VContainer(v_if="param_ray_class == 'WhiteRay'", class_="pa-0 mb-2"):
                             with vuetify.VRow(no_gutters=True, align="center"):
                                 with vuetify.VCol(cols=4):
@@ -1572,7 +1400,6 @@ with VAppLayout(server) as layout:
                                         hide_details=True,
                                     )
 
-                        # Количество лучей
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1583,7 +1410,6 @@ with VAppLayout(server) as layout:
                                     v_model="param_num_rays", min=1, max=20, step=1, dense=True, hide_details=True
                                 )
 
-                        # Длина волны (скрываем для Белого Света, так как он сам генерирует спектр)
                         with vuetify.VRow(v_if="param_ray_class != 'WhiteRay'", no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1594,7 +1420,6 @@ with VAppLayout(server) as layout:
                                     v_model="param_wavelength", min=380, max=780, step=10, dense=True, hide_details=True
                                 )
 
-                        # Мин. смещение
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1609,7 +1434,6 @@ with VAppLayout(server) as layout:
                                     dense=True,
                                     hide_details=True,
                                 )
-                        # Макс. смещение
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1625,7 +1449,6 @@ with VAppLayout(server) as layout:
                                     hide_details=True,
                                 )
 
-                        # n среды
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
@@ -1641,7 +1464,6 @@ with VAppLayout(server) as layout:
                                     hide_details=True,
                                 )
 
-                    # --- Параметры 3D-меша ---
                     with vuetify.VContainer(v_if="selected_object_type == 'mesh'", class_="pa-0"):
                         vuetify.VCardTitle("3D-модель", class_="px-0", style="text-color: white")
                         vuetify.VTextField(
@@ -1665,7 +1487,6 @@ with VAppLayout(server) as layout:
                             color="cyan",
                         )
 
-                        # Если тумблер включен: один общий ползунок
                         with vuetify.VContainer(v_if="param_scale_uniform", class_="pa-0"):
                             with vuetify.VRow(no_gutters=True, align="center"):
                                 with vuetify.VCol(cols=4):
@@ -1682,7 +1503,6 @@ with VAppLayout(server) as layout:
                                         hide_details=True,
                                     )
 
-                        # Если тумблер выключен: три раздельных ползунка по осям X, Y, Z
                         with vuetify.VContainer(v_if="!param_scale_uniform", class_="pa-0"):
                             for axis in ["x", "y", "z"]:
                                 with vuetify.VRow(no_gutters=True, align="center", class_="mb-1"):
@@ -1707,7 +1527,6 @@ with VAppLayout(server) as layout:
                     with vuetify.VContainer(v_if="selected_object_type != 'emitter'", class_="pa-0"):
                         vuetify.VCardTitle("Оптические свойства (λ, нм)", class_="px-0", style="text-color: white")
 
-                        # Шаблон для генерации трех типов взаимодействия
                         effects = [
                             {"key": "refraction", "label": "Преломление"},
                             {"key": "reflection", "label": "Отражение"},
@@ -1730,7 +1549,6 @@ with VAppLayout(server) as layout:
                                 align="center",
                                 class_="pl-4 mb-2",
                             ):
-                                # Поле MIN
                                 with vuetify.VCol(cols=5, class_="pr-1"):
                                     vuetify.VTextField(
                                         v_model=f"param_{k}_min",
@@ -1739,12 +1557,10 @@ with VAppLayout(server) as layout:
                                         dense=True,
                                         hide_details=True,
                                     )
-                                # Поле MAX
                                 with vuetify.VCol(cols=5, class_="px-1"):
                                     vuetify.VTextField(
                                         v_model=f"param_{k}_max", label="Макс", dense=True, hide_details=True
                                     )
-                                # Кнопка INFINITY
                                 with vuetify.VCol(cols=2, class_="pl-1"):
                                     vuetify.VBtn(
                                         icon="mdi-infinity",
@@ -1765,13 +1581,10 @@ with VAppLayout(server) as layout:
                         class_="mt-2",
                     )
 
-                # Правая колонка с 3D окном pyvista
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
-                    # Используем СТРОГО локальный виджет, он не генерирует картинки на сервере
-
                     ui_view = plotter_ui(
                         app.plotter,
-                        mode="client",  # Чистый клиентский рендеринг через WebGL
+                        mode="client",
                         add_menu=False,
                         interactor_style="Terrain",
                     )
@@ -1780,18 +1593,14 @@ with VAppLayout(server) as layout:
 app.update_scene()
 
 if __name__ == "__main__":
-    # 1. Автоматически считываем порт, который Amvera выделяет внутри контейнера.
-    # Если запускаем локально на ПК — сработает ваш порт по умолчанию 8085.
     port_env = int(os.environ.get("PORT", 8085))
 
-    # 2. Безопасно переопределяем встроенные параметры Trame без конфликтов argparse
     server.cli.set_defaults(
-        host="0.0.0.0",  # Открываем сокет наружу, чтобы Amvera могла проксировать трафик
-        port=port_env,  # Привязываем порт к переменной окружения хостинга
-        timeout=0,  # Отключаем автовыключение сервера при отсутствии активности
-        open_browser=False,  # Запрещаем открывать десктопный браузер внутри Linux-контейнера
+        host="0.0.0.0",
+        port=port_env,
+        timeout=0,
+        open_browser=False,
     )
 
-    # 3. Запускаем сервер
-    print(f"--> Запуск оптического симулятора на порту {port_env}...", flush=True)
+    print(f"--> Запуск на порту {port_env}...", flush=True)
     server.start()

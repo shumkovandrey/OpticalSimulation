@@ -28,7 +28,6 @@ class MeshSurface(BaseSurface):
         scale_factors=(1.0, 1.0, 1.0),
     ):
 
-        # 1. Первичная загрузка меша
         if isinstance(mesh, str):
             self.trimesh_obj = trimesh.load(mesh)
             if isinstance(self.trimesh_obj, trimesh.Scene):
@@ -45,11 +44,9 @@ class MeshSurface(BaseSurface):
         else:
             raise TypeError("mesh должен быть str, trimesh.Trimesh или pv.PolyData")
 
-        # 2. Центрируем меш в локальный ноль СТРОГО до масштабирования
         center_mass = self.trimesh_obj.bounding_box.center_mass
         self.trimesh_obj.apply_translation(-center_mass)
 
-        # 3. Применяем масштабирование в локальном нуле
         if scale_factors is not None and not np.allclose(scale_factors, 1.0):
             scale_mat = np.eye(4)
             scale_mat[0, 0] = scale_factors[0]
@@ -57,11 +54,8 @@ class MeshSurface(BaseSurface):
             scale_mat[2, 2] = scale_factors[2]
             self.trimesh_obj.apply_transform(scale_mat)
 
-        # СОХРАНЯЕМ ЭТУ ЛОКАЛЬНУЮ СТРУКТУРУ для графического движка WebGL
         self._local_trimesh = self.trimesh_obj.copy()
 
-        # 4. А теперь строим МИРОВУЮ структуру на сервере для физического движка лучей
-        # Применяем поворот и сдвиг в пространстве к физической копии
         rot_4x4 = np.eye(4)
         rot_4x4[:3, :3] = R.from_euler("xyz", rotation_degrees, degrees=True).as_matrix()
         self.trimesh_obj.apply_transform(rot_4x4)
@@ -69,7 +63,6 @@ class MeshSurface(BaseSurface):
         if translation is not None:
             self.trimesh_obj.apply_translation(translation)
 
-        # Физический движок использует мировую структуру
         self.mesh = self.trimesh_obj
         self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
 
@@ -86,7 +79,6 @@ class MeshSurface(BaseSurface):
         return pv.PolyData(verts, faces)
 
     def intersect(self, ray: Ray) -> Optional[float]:
-        # Математика пересечений выполняется в честных мировых координатах сцены
         origins = np.array([ray.origin])
         directions = np.array([ray.direction])
         locations, _, tri_indices = self.intersector.intersects_location(origins, directions, multiple_hits=False)

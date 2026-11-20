@@ -1,4 +1,3 @@
-# visualization.py
 """Визуализация: облако отрезков (RayCloud) и оркестратор трассировки (RayTracer)."""
 
 from typing import TYPE_CHECKING, List, Optional
@@ -56,7 +55,6 @@ class RayCloud:
         rgb = _to_rgb_utils(color)
         return np.array([*rgb, alpha], dtype=np.float32)
 
-    # ---------- основной метод обновления ----------
     def update(self, segments: List[Segment], energy_color_type: int = 1):
         """Принимает список Segment и обновляет геометрию."""
         if not segments:
@@ -120,15 +118,10 @@ class RayTracer:
         self.emitters = []
         self.pool = pool
 
-        # Нормализуем режим
         self.set_mode(mode)
 
-        # Единое облако отрезков
         self.cloud = RayCloud(plotter, **cloud_kwargs)
 
-    # -----------------------------------------------------------------
-    # Удобное управление режимом
-    # -----------------------------------------------------------------
     def set_mode(self, mode):
         """Задать режим трассировки строкой или объектом TraceMode."""
         if isinstance(mode, TraceMode):

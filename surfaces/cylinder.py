@@ -43,7 +43,6 @@ class CylinderSurface(BaseSurface):
         if self.capping:
             p1 = self.center + self.axis_dir * self.half_length
             p2 = self.center - self.axis_dir * self.half_length
-            # Используем PlaneSurface в режиме круга ("circle")
             self.cap1 = PlaneSurface(
                 point=p1,
                 normal=self.axis_dir,
@@ -67,13 +66,11 @@ class CylinderSurface(BaseSurface):
             self.cap2 = None
 
     def intersect(self, ray: Ray) -> Optional[float]:
-        # Проверяем боковую поверхность
         t_side = cylinder_side_intersect(
             ray.origin, ray.direction, self.center, self.axis_dir, self.radius, self.half_length
         )
         best_t = float("inf") if t_side < 0.0 else float(t_side)
 
-        # НАЧАЛО ИЗМЕНЕНИЙ: Математика пересечения с крышками
         if self.capping and self.cap1 and self.cap2:
             t1 = self.cap1.intersect(ray)
             t2 = self.cap2.intersect(ray)
@@ -81,23 +78,19 @@ class CylinderSurface(BaseSurface):
                 best_t = t1
             if t2 is not None and t2 < best_t:
                 best_t = t2
-        # КОНЕЦ ИЗМЕНЕНИЙ
 
         if best_t == float("inf"):
             return None
         return best_t
 
     def get_normal(self, point):
-        # НАЧАЛО ИЗМЕНЕНИЙ: Определение нормали на крышках
         if self.capping:
-            # Проверяем, близко ли точка к плоскостям торцов
             vec = point - self.center
             proj = np.dot(vec, self.axis_dir)
             if abs(proj - self.half_length) < 1e-4:
                 return self.axis_dir
             elif abs(proj + self.half_length) < 1e-4:
                 return -self.axis_dir
-        # КОНЕЦ ИЗМЕНЕНИЙ
 
         vec = point - self.center
         proj = np.dot(vec, self.axis_dir)
@@ -109,7 +102,6 @@ class CylinderSurface(BaseSurface):
         return radial / norm
 
     def get_mesh(self) -> pv.PolyData:
-        # Строим дефолтный цилиндр вдоль оси X (1, 0, 0) в нуле координат
         cylinder = pv.Cylinder(
             center=(0, 0, 0),
             direction=(1, 0, 0),
@@ -126,9 +118,9 @@ class CylinderSurface(BaseSurface):
         self.axis_dir = rot @ self.axis_dir
         self.axis_dir /= np.linalg.norm(self.axis_dir)
         if self.capping:
-            self._update_caps()  # Пересчитываем крышки
+            self._update_caps()
 
     def translate(self, vec):
         self.center += np.asarray(vec)
         if self.capping:
-            self._update_caps()  # Пересчитываем крышки
+            self._update_caps()

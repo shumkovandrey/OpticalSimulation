@@ -27,7 +27,7 @@ class PlaneSurface(BaseSurface):
         shape_type="circle",
         width=2.0,
         height=2.0,
-    ):  # <-- Добавлены новые параметры
+    ):
         self.point = np.array(point, dtype=float)
 
         self.base_normal = np.array([1.0, 0.0, 0.0])
@@ -75,7 +75,7 @@ class PlaneSurface(BaseSurface):
         self.face_tangents = (t1 / np.linalg.norm(t1), t2 / np.linalg.norm(t2))
 
     def rotate(self, angles_deg):
-        """ИСПРАВЛЕНИЕ: Перезаписываем абсолютную матрицу поворота из UI и синхронно вращаем все оси."""
+        """Перезаписываем абсолютную матрицу поворота из UI и синхронно вращаем все оси."""
         self.rotation_matrix = R.from_euler("xyz", angles_deg, degrees=True).as_matrix()
         self._apply_current_rotation()
         self.lens_axis = self.normal.copy()
@@ -91,7 +91,6 @@ class PlaneSurface(BaseSurface):
         self.point = R_part @ self.point + t_part
         self.lens_origin = R_part @ self.lens_origin + t_part
 
-        # Обновляем матрицу поворота объекта
         self.rotation_matrix = R_part @ self.rotation_matrix
         self._apply_current_rotation()
         self.lens_axis = self.normal.copy()
@@ -128,12 +127,10 @@ class PlaneSurface(BaseSurface):
 
     def get_mesh(self) -> pv.PolyData:
         if self.shape_type == "rectangle":
-            # Строим локальный прямоугольник в плоскости YZ (так как базовая нормаль)
             hu, hv = self.width / 2.0, self.height / 2.0
             vertices = np.array([[0.0, -hv, -hu], [0.0, hv, -hu], [0.0, hv, hu], [0.0, -hv, hu]], dtype=np.float32)
             faces = np.array([4, 0, 1, 2, 3], dtype=np.int32)
             return pv.PolyData(vertices, faces)
         else:
-            # Круглый диск в нуле с нормалью (1, 0, 0)
             radius = self.edge_radius if self.edge_radius else 1.0
             return pv.Disc(center=(0, 0, 0), normal=(1, 0, 0), inner=0, outer=radius, c_res=64)

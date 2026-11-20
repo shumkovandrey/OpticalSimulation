@@ -38,7 +38,7 @@ class HyperbolicLens(LensAssembly):
         self.n = n
         self.f_target = float(f_target)
 
-        # ПОЛНЫЙ АВТОРАСЧЕТ: Радиус вершины и коническая константа строго по законам оптики
+        # Радиус вершины и коническая константа вычисляются автоматически
         self.R_curvature = -float(self.f_target * (self.n - 1.0))
         self.k = -(self.n**2)
 
@@ -54,21 +54,17 @@ class HyperbolicLens(LensAssembly):
         r = float(self.edge_radius)
         half = self.thickness / 2.0
 
-        # Вычисляем стрелку прогиба (sagitta) для края гиперболы
         c = 1.0 / self.R_curvature if self.R_curvature != 0 else 0.0
 
-        # Синхронизировано с логикой ядра Numba из main.py
         discr = 1.0 - (1.0 + self.k) * (c**2) * (r**2)
         if discr >= 0:
             sag1 = (c * r**2) / (1.0 + np.sqrt(discr))
         else:
             sag1 = (c * r**2) / 2.0
 
-        # Длина бокового цилиндрического ободка с учётом знака профиля (v1_local - sag1)
         edge_thickness = self.thickness + sag1
         half_rim_length = edge_thickness / 2.0
 
-        # Смещение центра ободка влево (в сторону минуса по X)
         rim_center_x = -sag1 / 2.0
         local_cylinder_center = np.array([rim_center_x, 0.0, 0.0])
 
@@ -76,7 +72,6 @@ class HyperbolicLens(LensAssembly):
         mat[:3, :3] = self.rotation
         mat[:3, 3] = self.origin
 
-        # 1. Передняя поверхность — Асферическая (гиперболоид)
         self.front = AsphericSurface(
             center=[-half, 0, 0],
             radius=self.R_curvature,
@@ -92,7 +87,6 @@ class HyperbolicLens(LensAssembly):
             lens_axis=[-1.0, 0.0, 0.0],
         )
 
-        # 2. Задняя поверхность — Плоская
         self.back = PlaneSurface(
             point=[half, 0, 0],
             normal=[1.0, 0.0, 0.0],
@@ -105,7 +99,6 @@ class HyperbolicLens(LensAssembly):
             lens_axis=[1.0, 0.0, 0.0],
         )
 
-        # 3. Боковая поверхность (цилиндрический ободок)
         self.cylinder = CylinderSurface(
             center=local_cylinder_center,
             axis_dir=[1.0, 0.0, 0.0],
@@ -117,7 +110,6 @@ class HyperbolicLens(LensAssembly):
             absorption_range=self.absorption_range,
         )
 
-        # Синхронно позиционируем все поверхности по матрице
         self.front.apply_transform(mat)
         self.back.apply_transform(mat)
 
@@ -149,7 +141,6 @@ class HyperbolicLens(LensAssembly):
         r_flat = r_grid.flatten()
         sag_values = self.front.sag(r_flat).reshape(r_grid.shape)
 
-        # Исправленный вариант профиля меша
         x_front_local = v1_local - sag_values
         x_back_local = np.full_like(r_grid, v2_local)
 

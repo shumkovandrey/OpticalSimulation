@@ -10,10 +10,7 @@ from surfaces.thin_lens import ThinLens
 
 
 def find_best_hit(ray: "Ray", elements: List) -> Optional[HitInfo]:
-    """Находит ближайшее пересечение луча с элементами сцены.
-
-    Полностью эквивалентна find_best_hit из main.py (шаг 5).
-    """
+    """Находит ближайшее пересечение луча с элементами сцены."""
     best_t = float("inf")
     best_hit = None
 

@@ -2,8 +2,6 @@
 
 from typing import List, Optional
 
-import numpy as np
-
 from constants import DEFAULT_MIN_ENERGY, DEFAULT_OFFSET_DISTANCE, RAY_INFINITY_DISTANCE
 from core.dispersion import get_dispersion_n
 from core.rays import DispersiveRay, Ray, RayPool, WhiteRay, spawn_ray
@@ -22,10 +20,7 @@ def trace_recursive(
     total_limit: int = 5000,
     pool: Optional[RayPool] = None,
 ) -> List[Segment]:
-    """Рекурсивная трассировка дерева лучей.
-
-    Полностью эквивалентна _trace_recursive из main.py (шаг 5).
-    """
+    """Рекурсивная трассировка дерева лучей."""
     segments = []
 
     def recurse(current_ray: "Ray", d: int, from_pool: bool):
@@ -76,8 +71,7 @@ def trace_recursive(
             new_dir = hit.obj.thin_lens_deflection(current_ray.direction, hit.point)
             start = hit.point + offset_distance * new_dir
 
-            new_ray = spawn_ray(current_ray, pool,
-                                origin=start, direction=new_dir)
+            new_ray = spawn_ray(current_ray, pool, origin=start, direction=new_dir)
             recurse(new_ray, d - 1, from_pool=(pool is not None))
             if pool:
                 pool.release(new_ray)

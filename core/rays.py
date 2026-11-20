@@ -54,7 +54,9 @@ class Ray:
 class DispersiveRay(Ray):
     """Луч с длиной волны (нм): цвет и показатель преломления зависят от спектра."""
 
-    def __init__(self, origin, direction, wavelength=550.0, energy=1.0, current_n=1.0, color="yellow", energy_color_type=2):
+    def __init__(
+        self, origin, direction, wavelength=550.0, energy=1.0, current_n=1.0, color="yellow", energy_color_type=2
+    ):
         """Создаёт луч.
 
         Parameters
@@ -75,9 +77,14 @@ class DispersiveRay(Ray):
             Длина волны (нм), если луч спектральный.
         """
 
-        super().__init__(origin=origin, direction=direction, energy=energy,
-                         current_n=current_n, color=color,
-                         energy_color_type=energy_color_type)
+        super().__init__(
+            origin=origin,
+            direction=direction,
+            energy=energy,
+            current_n=current_n,
+            color=color,
+            energy_color_type=energy_color_type,
+        )
 
         self.wavelength = wavelength
         if wavelength is not None:
@@ -87,9 +94,7 @@ class DispersiveRay(Ray):
 class WhiteRay:
     """Контейнер для пучка спектральных лучей; сам в трассировке не участвует."""
 
-    def __init__(
-        self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, energy_color_type=2
-    ):
+    def __init__(self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, energy_color_type=2):
         """Создаёт луч.
 
         Parameters
@@ -217,9 +222,16 @@ class RayPool:
         self.pools[ray_class].append(ray)
 
 
-def spawn_ray(template: Ray, pool: "RayPool | None" = None, *,
-              origin=None, direction=None, energy=None, current_n=None,
-              color=None) -> Ray:
+def spawn_ray(
+    template: Ray,
+    pool: "RayPool | None" = None,
+    *,
+    origin=None,
+    direction=None,
+    energy=None,
+    current_n=None,
+    color=None,
+) -> Ray:
     """Создаёт новый луч того же класса, что и template.
 
     Поля, для которых передан None, копируются из template. wavelength

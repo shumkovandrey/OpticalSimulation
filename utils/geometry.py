@@ -53,10 +53,7 @@ def calculate_rotation_matrix(v_to):
 
 
 def calculate_radius(target_f, n, thickness=0):
-    """Радиус R для двояковыпуклой линзы (тонкая или с толщиной).
-
-    Оставлено для будущего использования (UI/аналитика).
-    """
+    """Радиус R для двояковыпуклой линзы (тонкая или с толщиной)."""
     if thickness == 0:
         return 2 * target_f * (n - 1)
 

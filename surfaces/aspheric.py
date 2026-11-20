@@ -85,10 +85,8 @@ class AsphericSurface(BaseSurface):
         return dsag0 + dsag_asp
 
     def intersect(self, ray: Ray) -> Optional[float]:
-        # Переводим луч в локальные координаты
         origin_loc = self._world_to_local(ray.origin)
         dir_loc = self._rot_world_to_local @ ray.direction
-        # Нормализуем направление на всякий случай
         dir_loc = dir_loc / np.linalg.norm(dir_loc)
 
         sag_max = self.sag(self.edge_radius) if self.edge_radius > 0 else 0.0

@@ -46,7 +46,6 @@ class SphereSurface(BaseSurface):
 
         self.radius = radius
 
-        # Оптическая ось – поворот базового вектора (1,0,0)
         if lens_axis is not None:
             self.lens_axis = np.array(lens_axis, dtype=float) / np.linalg.norm(lens_axis)
         else:
@@ -54,7 +53,6 @@ class SphereSurface(BaseSurface):
             rot = R.from_euler("xyz", rotation_degrees, degrees=True).as_matrix()
             self.lens_axis = rot @ base_axis
             self.lens_axis /= np.linalg.norm(self.lens_axis)
-        # Центр вычисляется однозначно:
         self.center = self.lens_origin - self.radius * self.lens_axis
 
         self.n = n_inside
@@ -136,31 +134,17 @@ class SphereSurface(BaseSurface):
     def get_mesh(self) -> pv.PolyData:
         abs_radius = abs(self.radius)
 
-        # 1. Создаем сферу. ВНИМАНИЕ: Для PyVista центр в (0,0,0) - это центр кривизны!
         mesh = pv.Sphere(radius=abs_radius, center=(0, 0, 0), phi_resolution=80, theta_resolution=80)
 
-        # 2. Вычисляем стрелку прогиба (высоту сегмента чаши)
         sagitta = abs_radius - np.sqrt(max(0.0, abs_radius**2 - self.edge_radius**2))
 
-        # 3. Обрезаем нужную чашу в локальных координатах PyVista
         if self.radius > 0:
-            # Выпуклая: вершина сферы находится на её правом краю в точке (+R, 0, 0)
             mesh = mesh.clip(normal=[1, 0, 0], origin=[abs_radius - sagitta, 0, 0], invert=False)
-
-            # СДВИГ К ВЕРШИНЕ: Чтобы локальный ноль меша (0,0,0) стал ВЕРШИНОЙ чаши,
-            # мы должны сместить всю геометрию влево на величину радиуса R!
             mesh.translate([-abs_radius, 0, 0], inplace=True)
         else:
-            # Вогнутая: вершина сферы находится на её левом краю в точке (-R, 0, 0)
             mesh = mesh.clip(normal=[-1, 0, 0], origin=[-abs_radius + sagitta, 0, 0], invert=False)
-
-            # СДВИГ К ВЕРШИНЕ: Смещаем геометрию вправо на величину радиуса R,
-            # чтобы вершина вогнутой чаши оказалась точно в локальном нуле (0,0,0)
             mesh.translate([abs_radius, 0, 0], inplace=True)
 
-        # Теперь локальный ноль (0,0,0) меша — это ВЕРШИНА поверхности.
-        # Когда Траме применит user_matrix(param_pos), вершина меша встанет точно в координаты ползунков,
-        # идеально совпав с физическим self.lens_origin на сервере!
         return mesh
 
     def apply_transform(self, mat):

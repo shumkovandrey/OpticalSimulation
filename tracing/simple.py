@@ -15,12 +15,12 @@ from tracing.hit_finder import find_best_hit
 def trace_simple(
     ray: "Ray",
     elements: List,
-    max_bounces: int = 10,
+    max_bounces: int = 50,
     offset_distance: float = DEFAULT_OFFSET_DISTANCE,
     prioritize_refraction: bool = True,
     pool: Optional["RayPool"] = None,
 ) -> List[Segment]:
-    segments: List[Segment] = []
+    segments = []
 
     current_ray = ray
     current_n = ray.current_n
@@ -60,8 +60,10 @@ def trace_simple(
             if pool and current_from_pool:
                 pool.release(current_ray)
             next_ray = spawn_ray(
-                current_ray, pool,
-                origin=start, direction=new_dir,
+                current_ray,
+                pool,
+                origin=start,
+                direction=new_dir,
                 current_n=current_n,
             )
             current_from_pool = pool is not None
@@ -81,8 +83,10 @@ def trace_simple(
             if pool and current_from_pool:
                 pool.release(current_ray)
             next_ray = spawn_ray(
-                current_ray, pool,
-                origin=start, direction=current_ray.direction,
+                current_ray,
+                pool,
+                origin=start,
+                direction=current_ray.direction,
                 current_n=current_n,
             )
             current_from_pool = pool is not None
@@ -102,12 +106,10 @@ def trace_simple(
             sin2_t = eta * eta * (1.0 - cos_i_tir * cos_i_tir)
 
             if sin2_t >= 1.0:
-                # TIR: остаёмся в текущей среде, отражаемся.
                 allow_reflection = True
                 allow_refraction = False
             else:
                 refracted_dir = refract(current_ray.direction, hit.normal, current_n, n_next)
-                # По построению refract() вне TIR возвращает не-None
                 current_n = n_next
                 new_dir = refracted_dir
                 allow_reflection = False
@@ -124,8 +126,10 @@ def trace_simple(
         if pool and current_from_pool:
             pool.release(current_ray)
         next_ray = spawn_ray(
-            current_ray, pool,
-            origin=start, direction=new_dir,
+            current_ray,
+            pool,
+            origin=start,
+            direction=new_dir,
             current_n=current_n,
         )
         current_from_pool = pool is not None
