@@ -19,10 +19,7 @@ if TYPE_CHECKING:
 
 
 class RayCloud:
-    """Единый актор для отрисовки множества отрезков с индивидуальным цветом.
-
-    Полностью эквивалентен RayCloud из main.py (шаг 5).
-    """
+    """Единый актор для отрисовки множества отрезков с индивидуальным цветом."""
 
     def __init__(
         self,
@@ -32,6 +29,15 @@ class RayCloud:
         min_alpha: float = 0,
         gamma: float = 0.3,
     ):
+        """
+        Parameters
+        ----------
+        plotter : pv.Plotter
+        default_color : str | tuple
+            Цвет отрисовки обычных лучей (строка matplotlib или RGB-кортеж).
+        line_width : float
+            Показатель преломления среды, в которой находится луч.
+        """
         self.plotter = plotter
         self.default_color = default_color
         self.line_width = line_width
@@ -88,15 +94,12 @@ class RayCloud:
 
 
 class RayTracer:
-    """Управляет лучами, элементами сцены и запускает трассировку.
-
-    Полностью эквивалентен RayTracer из main.py (шаг 5).
-    """
+    """Управляет лучами, элементами сцены и запускает трассировку."""
 
     def __init__(
         self,
         plotter: pv.Plotter,
-        mode="simple",  # строка или экземпляр TraceMode
+        mode="simple",
         pool: Optional[RayPool] = None,
         **cloud_kwargs,
     ):
@@ -146,9 +149,6 @@ class RayTracer:
     def mode(self, value):
         self.set_mode(value)
 
-    # -----------------------------------------------------------------
-    # Добавление объектов
-    # -----------------------------------------------------------------
     def add_ray(self, ray: "Ray"):
         self.rays.append(ray)
 
@@ -161,29 +161,22 @@ class RayTracer:
             self.emitters = []
         self.emitters.append(emitter)
 
-    # -----------------------------------------------------------------
-    # Основной цикл трассировки
-    # -----------------------------------------------------------------
     def trace_all(self) -> List[Segment]:
         """
         Прогоняет все зарегистрированные лучи через текущий режим трассировки.
         """
-        # Сначала собираем лучи от эмиттеров
         for emitter in self.emitters:
             for ray in emitter.emit():
                 self.rays.append(ray)
 
-        # Распаковываем контейнеры белого света на отдельные DispersiveRay до симуляции
         unpacked_rays = []
         for ray in self.rays:
             if isinstance(ray, WhiteRay):
-                # Энергия честно поделится внутри generate_rays по спектру!
                 spectral = ray.generate_rays(pool=self.pool)
                 unpacked_rays.extend(spectral)
             else:
                 unpacked_rays.append(ray)
 
-        # Перезаписываем список лучей симуляции
         self.rays = unpacked_rays
 
         all_segments = []
@@ -197,7 +190,6 @@ class RayTracer:
         segments = self.trace_all()
         self.cloud.update(segments, energy_color_type=self._mode.energy_color_type)
 
-        # Возвращаем все лучи (включая распакованные спектральные) обратно в пул
         if self.pool:
             for ray in self.rays:
                 self.pool.release(ray)

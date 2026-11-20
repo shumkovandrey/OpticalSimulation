@@ -6,10 +6,11 @@ import numpy as np
 
 from constants import DEFAULT_MIN_ENERGY, DEFAULT_OFFSET_DISTANCE, RAY_INFINITY_DISTANCE
 from core.dispersion import get_dispersion_n
-from core.rays import DispersiveRay, Ray, RayPool, WhiteRay
+from core.rays import DispersiveRay, Ray, RayPool, WhiteRay, spawn_ray
 from core.segments import Segment
 from tracing.hit_finder import find_best_hit
 from tracing.interaction import split_ray
+from utils.color import wavelength_to_rgb
 
 
 def trace_recursive(
@@ -45,7 +46,7 @@ def trace_recursive(
 
         ray_color = current_ray.color
         if isinstance(current_ray, DispersiveRay) and current_ray.wavelength is not None:
-            ray_color = current_ray.wavelength_to_rgb(current_ray.wavelength)
+            ray_color = wavelength_to_rgb(current_ray.wavelength)
 
         if hit is None:
             end = current_ray.origin + current_ray.direction * RAY_INFINITY_DISTANCE
@@ -75,30 +76,12 @@ def trace_recursive(
             new_dir = hit.obj.thin_lens_deflection(current_ray.direction, hit.point)
             start = hit.point + offset_distance * new_dir
 
-            if pool:
-                new_ray = pool.acquire(
-                    start,
-                    new_dir,
-                    energy=current_ray.energy,
-                    current_n=current_ray.current_n,
-                    color=current_ray.color,
-                    wavelength=current_ray.wavelength,
-                    energy_color_type=current_ray.energy_color_type,
-                )
-            else:
-                new_ray = Ray(
-                    start,
-                    new_dir,
-                    energy=current_ray.energy,
-                    current_n=current_ray.current_n,
-                    color=current_ray.color,
-                    wavelength=current_ray.wavelength,
-                    energy_color_type=current_ray.energy_color_type,
-                )
-
+            new_ray = spawn_ray(current_ray, pool,
+                                origin=start, direction=new_dir)
             recurse(new_ray, d - 1, from_pool=(pool is not None))
             if pool:
                 pool.release(new_ray)
+
             return
 
         resolved_n_inside = get_dispersion_n(hit.n_inside, current_ray)

@@ -1,4 +1,4 @@
-"""Контейнеры данных: Segment (результат трассировки) и HitInfo (попадание)."""
+"""Контейнеры данных: Segment (результат трассировки) и HitInfo (пересечение)."""
 
 from dataclasses import dataclass
 from typing import Any

@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 import numpy as np
 
-from utils.color import wavelength_to_rgb as _wavelength_to_rgb_utils
+from utils.color import wavelength_to_rgb
 
 
 class Ray:
@@ -18,8 +18,25 @@ class Ray:
         current_n=1.0,
         color="yellow",
         energy_color_type=2,
-        wavelength=None,
     ):
+        """Создаёт луч.
+
+        Parameters
+        ----------
+        origin : array-like (3,)
+            Точка старта.
+        direction : array-like (3,)
+            Направление (нормализуется автоматически).
+        energy : float
+            Энергия луча (0..1). Уменьшается по Френелю при каждом взаимодействии.
+        current_n : float
+            Показатель преломления среды, в которой находится луч.
+        color : str | tuple
+            Цвет отрисовки (строка matplotlib или RGB-кортеж).
+        energy_color_type : int
+            Режим привязки прозрачности к энергии (0/1/2).
+        """
+
         self.origin = np.array(origin, dtype=float)
 
         self.direction = np.array(direction, dtype=float)
@@ -32,38 +49,66 @@ class Ray:
         self.current_n = current_n
         self.color = color
         self.energy_color_type = energy_color_type
-        self.wavelength = wavelength
 
 
 class DispersiveRay(Ray):
     """Луч с длиной волны (нм): цвет и показатель преломления зависят от спектра."""
 
-    def __init__(self, origin, direction, wavelength=550.0, **kwargs):
-        current_n = kwargs.pop("current_n", 1.0)
+    def __init__(self, origin, direction, wavelength=550.0, energy=1.0, current_n=1.0, color="yellow", energy_color_type=2):
+        """Создаёт луч.
 
-        super().__init__(
-            origin=origin,
-            direction=direction,
-            wavelength=wavelength,
-            current_n=current_n,
-            **kwargs,
-        )
+        Parameters
+        ----------
+        origin : array-like (3,)
+            Точка старта.
+        direction : array-like (3,)
+            Направление (нормализуется автоматически).
+        energy : float
+            Энергия луча (0..1). Уменьшается по Френелю при каждом взаимодействии.
+        current_n : float
+            Показатель преломления среды, в которой находится луч.
+        color : str | tuple
+            Цвет отрисовки (строка matplotlib или RGB-кортеж).
+        energy_color_type : int
+            Режим привязки прозрачности к энергии (0/1/2).
+        wavelength : float | None
+            Длина волны (нм), если луч спектральный.
+        """
 
+        super().__init__(origin=origin, direction=direction, energy=energy,
+                         current_n=current_n, color=color,
+                         energy_color_type=energy_color_type)
+
+        self.wavelength = wavelength
         if wavelength is not None:
-            self.color = self.wavelength_to_rgb(wavelength)
-
-    @staticmethod
-    def wavelength_to_rgb(wavelength_nm: float) -> Tuple[float, float, float]:
-        """Делегат utils.color.wavelength_to_rgb (сохранён для обратной совместимости)."""
-        return _wavelength_to_rgb_utils(wavelength_nm)
+            self.color = wavelength_to_rgb(wavelength)
 
 
 class WhiteRay:
     """Контейнер для пучка спектральных лучей; сам в трассировке не участвует."""
 
     def __init__(
-        self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, energy_color_type=2, **kwargs
+        self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, energy_color_type=2
     ):
+        """Создаёт луч.
+
+        Parameters
+        ----------
+        origin : array-like (3,)
+            Точка старта.
+        direction : array-like (3,)
+            Направление (нормализуется автоматически).
+        energy : float
+            Энергия луча (0..1). Уменьшается по Френелю при каждом взаимодействии.
+        current_n : float
+            Показатель преломления среды, в которой находится луч.
+        color : str | tuple
+            Цвет отрисовки (строка matplotlib или RGB-кортеж).
+        energy_color_type : int
+            Режим привязки прозрачности к энергии (0/1/2).
+        num_spectral_bands : int
+            Количество лучей в спектре
+        """
         self.origin = np.array(origin, dtype=float)
         self.direction = np.array(direction, dtype=float)
         self.direction /= np.linalg.norm(self.direction)
@@ -103,7 +148,7 @@ class WhiteRay:
 
 
 class RayPool:
-    """Пул переиспользуемых лучей для снижения аллокаций."""
+    """Пул переиспользуемых лучей для оптимизации."""
 
     def __init__(self, initial_size=100):
         self.pools = {}
@@ -137,7 +182,7 @@ class RayPool:
             ray = self.pools[ray_class].pop()
         else:
             if ray_class is WhiteRay:
-                ray = WhiteRay(np.zeros(3), np.array([1.0, 0.0, 0.0]), num_spectral_bands=num_spectral_bands, pool=self)
+                ray = WhiteRay(np.zeros(3), np.array([1.0, 0.0, 0.0]), num_spectral_bands=num_spectral_bands)
             else:
                 ray = ray_class(np.zeros(3), np.array([1.0, 0.0, 0.0]))
 
@@ -147,10 +192,11 @@ class RayPool:
         ray.energy = energy
         ray.current_n = current_n
         ray.energy_color_type = energy_color_type
-        ray.wavelength = wavelength
 
         if ray_class is DispersiveRay and wavelength is not None:
-            ray.color = ray.wavelength_to_rgb(wavelength)
+            ray.wavelength = wavelength
+            if wavelength is not None:
+                ray.color = wavelength_to_rgb(wavelength)
         elif ray_class is WhiteRay:
             ray.color = (1.0, 1.0, 1.0)
             ray.num_spectral_bands = num_spectral_bands
@@ -169,3 +215,42 @@ class RayPool:
         if ray_class not in self.pools:
             self.pools[ray_class] = []
         self.pools[ray_class].append(ray)
+
+
+def spawn_ray(template: Ray, pool: "RayPool | None" = None, *,
+              origin=None, direction=None, energy=None, current_n=None,
+              color=None) -> Ray:
+    """Создаёт новый луч того же класса, что и template.
+
+    Поля, для которых передан None, копируются из template. wavelength
+    передаётся только для DispersiveRay (у Ray такого поля нет).
+
+    Параметры
+    ----------
+    template : Ray | DispersiveRay
+        Луч-шаблон. От него наследуются energy_color_type и — для
+        DispersiveRay — wavelength.
+    pool : RayPool | None
+        Если задан, новый луч берётся из пула (acquire), иначе создаётся
+        напрямую.
+    origin, direction, energy, current_n, color : optional
+        Переопределяемые поля. None = взять из template.
+
+    Returns
+    -------
+    Ray | DispersiveRay
+    """
+    kwargs = dict(
+        origin=template.origin if origin is None else origin,
+        direction=template.direction if direction is None else direction,
+        energy=template.energy if energy is None else energy,
+        current_n=template.current_n if current_n is None else current_n,
+        color=template.color if color is None else color,
+        energy_color_type=template.energy_color_type,
+    )
+    if isinstance(template, DispersiveRay):
+        kwargs["wavelength"] = template.wavelength
+
+    if pool is not None:
+        return pool.acquire(ray_class=type(template), **kwargs)
+    return type(template)(**kwargs)

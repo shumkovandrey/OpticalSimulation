@@ -5,7 +5,7 @@ from typing import List, Optional
 import numpy as np
 
 from constants import DEFAULT_OFFSET_DISTANCE
-from core.rays import Ray, RayPool
+from core.rays import Ray, RayPool, spawn_ray
 from fast_math import fresnel_amplitudes
 
 
@@ -74,53 +74,28 @@ def split_ray(
     if allow_reflection and R_coeff > 1e-6:
         reflected_energy = ray.energy * R_coeff
         if reflected_energy > 1e-6:
-            if pool:
-                new_ray = pool.acquire(
-                    origin=start_point + EPS * reflected_dir,
-                    direction=reflected_dir,
-                    energy=reflected_energy,
-                    current_n=n1,
-                    color=ray.color,
-                    energy_color_type=ray.energy_color_type,
-                    wavelength=ray.wavelength,
-                )
-            else:
-                new_ray = type(ray)(
-                    origin=start_point + EPS * reflected_dir,
-                    direction=reflected_dir,
-                    energy=reflected_energy,
-                    current_n=n1,
-                    color=ray.color,
-                    wavelength=ray.wavelength,
-                    energy_color_type=ray.energy_color_type,
-                )
+            new_ray = spawn_ray(
+                ray, pool,
+                origin=start_point + EPS * reflected_dir,
+                direction=reflected_dir,
+                energy=reflected_energy,
+                current_n=n1,
+                color=ray.color,
+            )
             new_rays.append(new_ray)
 
     # 2. ПРЕЛОМЛЁННЫЙ
     if allow_refraction and T_coeff > 1e-6:
         refracted_energy = ray.energy * T_coeff
         if refracted_energy > 1e-6:
-            if pool:
-                new_ray = pool.acquire(
-                    origin=start_point + EPS * refracted_dir,
-                    direction=refracted_dir,
-                    energy=refracted_energy,
-                    current_n=n2,
-                    color=ray.color,
-                    energy_color_type=ray.energy_color_type,
-                    wavelength=ray.wavelength,
-                    ray_class=type(ray),
-                )
-            else:
-                new_ray = type(ray)(
-                    origin=start_point + EPS * refracted_dir,
-                    direction=refracted_dir,
-                    energy=refracted_energy,
-                    current_n=n2,
-                    color=ray.color,
-                    wavelength=ray.wavelength,
-                    energy_color_type=ray.energy_color_type,
-                )
+            new_ray = spawn_ray(
+                ray, pool,
+                origin=start_point + EPS * refracted_dir,
+                direction=refracted_dir,
+                energy=refracted_energy,
+                current_n=n1,
+                color=ray.color,
+            )
             new_rays.append(new_ray)
 
     return new_rays

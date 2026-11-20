@@ -6,7 +6,7 @@ import numpy as np
 
 from constants import DEFAULT_OFFSET_DISTANCE, RAY_INFINITY_DISTANCE
 from core.dispersion import get_dispersion_n
-from core.rays import DispersiveRay, Ray, RayPool
+from core.rays import DispersiveRay, Ray, RayPool, spawn_ray
 from core.segments import Segment
 from fast_math import refract
 from tracing.hit_finder import find_best_hit
@@ -57,31 +57,15 @@ def trace_simple(
             new_dir = hit.obj.thin_lens_deflection(current_ray.direction, hit.point)
             start = hit.point + offset_distance * new_dir
 
-            if pool:
-                if current_from_pool:
-                    pool.release(current_ray)
-                next_ray = pool.acquire(
-                    origin=start,
-                    direction=new_dir,
-                    energy=current_ray.energy,
-                    current_n=current_n,
-                    color=current_ray.color,
-                    wavelength=current_ray.wavelength,
-                    energy_color_type=current_ray.energy_color_type,
-                    ray_class=type(current_ray),
-                )
-                current_from_pool = True
-            else:
-                next_ray = type(current_ray)(
-                    start,
-                    new_dir,
-                    energy=current_ray.energy,
-                    current_n=current_n,
-                    color=current_ray.color,
-                    wavelength=current_ray.wavelength,
-                    energy_color_type=current_ray.energy_color_type,
-                )
-                current_from_pool = False
+            if pool and current_from_pool:
+                pool.release(current_ray)
+            next_ray = spawn_ray(
+                current_ray, pool,
+                origin=start, direction=new_dir,
+                current_n=current_n,
+            )
+            current_from_pool = pool is not None
+
             current_ray = next_ray
             continue
 
@@ -93,31 +77,16 @@ def trace_simple(
 
         if not allow_reflection and not allow_refraction:
             start = hit.point + offset_distance * current_ray.direction
-            if pool:
-                if current_from_pool:
-                    pool.release(current_ray)
-                next_ray = pool.acquire(
-                    origin=start,
-                    direction=current_ray.direction,
-                    energy=current_ray.energy,
-                    current_n=current_n,
-                    color=current_ray.color,
-                    wavelength=current_ray.wavelength,
-                    energy_color_type=current_ray.energy_color_type,
-                    ray_class=type(current_ray),
-                )
-                current_from_pool = True
-            else:
-                next_ray = type(current_ray)(
-                    start,
-                    current_ray.direction,
-                    energy=current_ray.energy,
-                    current_n=current_n,
-                    color=current_ray.color,
-                    wavelength=current_ray.wavelength,
-                    energy_color_type=current_ray.energy_color_type,
-                )
-                current_from_pool = False
+
+            if pool and current_from_pool:
+                pool.release(current_ray)
+            next_ray = spawn_ray(
+                current_ray, pool,
+                origin=start, direction=current_ray.direction,
+                current_n=current_n,
+            )
+            current_from_pool = pool is not None
+
             current_ray = next_ray
             continue
 
@@ -125,10 +94,6 @@ def trace_simple(
             resolved_n_inside = get_dispersion_n(hit.n_inside, current_ray)
             n_next = resolved_n_inside if abs(current_n - 1.0) < 1e-6 else 1.0
 
-            # Явная проверка полного внутреннего отражения.
-            # На ТИР луч не может преломиться, значит current_n НЕ меняется,
-            # и мы принудительно включаем отражение (даже если prioritize_refraction
-            # его подавил).
             normal_tir = hit.normal
             if np.dot(normal_tir, current_ray.direction) > 0:
                 normal_tir = -normal_tir
@@ -140,7 +105,6 @@ def trace_simple(
                 # TIR: остаёмся в текущей среде, отражаемся.
                 allow_reflection = True
                 allow_refraction = False
-                # current_n не трогаем!
             else:
                 refracted_dir = refract(current_ray.direction, hit.normal, current_n, n_next)
                 # По построению refract() вне TIR возвращает не-None
@@ -156,31 +120,16 @@ def trace_simple(
             new_dir /= np.linalg.norm(new_dir)
 
         start = hit.point + offset_distance * new_dir
-        if pool:
-            if current_from_pool:
-                pool.release(current_ray)
-            next_ray = pool.acquire(
-                origin=start,
-                direction=new_dir,
-                energy=current_ray.energy,
-                current_n=current_n,
-                color=current_ray.color,
-                wavelength=current_ray.wavelength,
-                energy_color_type=current_ray.energy_color_type,
-                ray_class=type(current_ray),
-            )
-            current_from_pool = True
-        else:
-            next_ray = type(current_ray)(
-                start,
-                new_dir,
-                energy=current_ray.energy,
-                current_n=current_n,
-                color=current_ray.color,
-                wavelength=current_ray.wavelength,
-                energy_color_type=current_ray.energy_color_type,
-            )
-            current_from_pool = False
+
+        if pool and current_from_pool:
+            pool.release(current_ray)
+        next_ray = spawn_ray(
+            current_ray, pool,
+            origin=start, direction=new_dir,
+            current_n=current_n,
+        )
+        current_from_pool = pool is not None
+
         current_ray = next_ray
 
     if current_from_pool and pool:

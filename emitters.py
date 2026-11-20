@@ -4,7 +4,7 @@ from typing import List
 
 import numpy as np
 import pyvista as pv
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation
 
 from core.rays import DispersiveRay, Ray, WhiteRay
 
@@ -72,15 +72,17 @@ class BeamEmitter:
         self.use_custom = True
 
     def rotate(self, angles_deg):
-        # Рассчитываем чистую абсолютную матрицу поворота
-        rot = R.from_euler("xyz", angles_deg, degrees=True).as_matrix()
+        """Повернуть лучи"""
+        rot = Rotation.from_euler("xyz", angles_deg, degrees=True).as_matrix()
         self.direction = rot @ self.base_direction
         self.rotation_matrix = rot
 
     def translate(self, vec):
+        """Переместить лучи"""
         self.origin += np.asarray(vec)
 
     def emit(self) -> List[Ray]:
+        """Создать лучей"""
         rays = []
 
         local_perp1 = np.array([0.0, 1.0, 0.0])
@@ -137,27 +139,24 @@ class BeamEmitter:
                 else:
                     if self.ray_class is WhiteRay:
                         ray = WhiteRay(
-                            origin=world_origin,
-                            direction=self.direction,
+                            origin=world_origin, direction=self.direction,
                             num_spectral_bands=self.num_spectral_bands,
-                            energy=self.energy,
-                            current_n=self.current_n,
+                            energy=self.energy, current_n=self.current_n,
                             energy_color_type=self.energy_color_type,
                         )
                     else:
-                        ray = self.ray_class(
-                            origin=world_origin,
-                            direction=self.direction,
-                            energy=self.energy,
-                            current_n=self.current_n,
-                            color=self.color,
-                            wavelength=self.wavelength,
-                            energy_color_type=self.energy_color_type,
+                        kwargs = dict(
+                            origin=world_origin, direction=self.direction,
+                            energy=self.energy, current_n=self.current_n,
+                            color=self.color, energy_color_type=self.energy_color_type,
                         )
+                        if self.ray_class is DispersiveRay:
+                            kwargs["wavelength"] = self.wavelength
+                        ray = self.ray_class(**kwargs)
                 rays.append(ray)
         return rays
 
     def get_mesh(self) -> pv.PolyData:
-        """Маленькая стрелка для визуализации излучателя."""
+        """Возвращается стрелка для визуализации излучателя."""
         arrow = pv.Arrow(start=(0.0, 0.0, 0.0), direction=(1.0, 0.0, 0.0), scale=0.5)
         return arrow
