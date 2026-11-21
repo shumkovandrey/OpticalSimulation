@@ -119,6 +119,9 @@ class OpticsAppController:
             {"title": "Дисперсионный луч (DispersiveRay)", "value": "DispersiveRay"},
             {"title": "Белый свет (WhiteRay)", "value": "WhiteRay"},
         ]
+        self.state.param_interval_visual = self._interval_visual
+        self.state.param_interval_shape = self._interval_shape
+        self.state.param_interval_trace = self._interval_trace
 
         for effect in ["reflection", "refraction", "absorption"]:
             self.state[f"param_{effect}_min"] = 0.0
@@ -818,6 +821,18 @@ class OpticsAppController:
         self.ray_tracer.mode.energy_color_type = 2
         self.update_scene()
 
+    def on_intervals_changed(self, *args, **kwargs):
+        """Перечитывает интервалы throttle из state и применяет к контроллеру."""
+        try:
+            v = float(self.state.param_interval_visual)
+            s = float(self.state.param_interval_shape)
+            t = float(self.state.param_interval_trace)
+        except (TypeError, ValueError):
+            return
+        self._interval_visual = max(0.01, v)
+        self._interval_shape = max(0.05, s)
+        self._interval_trace = max(0.1, t)
+
     def on_object_selected(self, *args, **kwargs):
         obj_id = args[0] if args else self.state.selected_object_id
         if not obj_id:
@@ -1124,6 +1139,8 @@ for effect in ["reflection", "refraction", "absorption"]:
     server.state.change(f"param_{effect}_min")(app.on_shape_param_change)
     server.state.change(f"param_{effect}_max")(app.on_shape_param_change)
 
+for key in ["param_interval_visual", "param_interval_shape", "param_interval_trace"]:
+    server.state.change(key)(app.on_intervals_changed)
 
 with VAppLayout(server) as layout:
     with vuetify.VMain():
@@ -1765,6 +1782,75 @@ with VAppLayout(server) as layout:
                         dense=True,
                         class_="mt-2",
                     )
+
+                    vuetify.VDivider(class_="my-4")
+                    vuetify.VCardTitle("Частота обновления", class_="px-0", style="text-color: white")
+
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=4):
+                            vuetify.VTextField(
+                                v_model="param_interval_visual",
+                                label="Позиция (с)",
+                                type="number",
+                                dense=True,
+                                step=0.01,
+                                hide_details=True,
+                            )
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(
+                                v_model="param_interval_visual",
+                                min=0.01,
+                                max=0.2,
+                                step=0.01,
+                                dense=True,
+                                hide_details=True,
+                            )
+                        with vuetify.VCol(cols=2, class_="text-caption text-right"):
+                            "{{ Math.round(1 / Math.max(param_interval_visual, 0.001)) }} Гц"
+
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=4):
+                            vuetify.VTextField(
+                                v_model="param_interval_shape",
+                                label="Форма (с)",
+                                type="number",
+                                dense=True,
+                                step=0.05,
+                                hide_details=True,
+                            )
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(
+                                v_model="param_interval_shape",
+                                min=0.05,
+                                max=1.0,
+                                step=0.05,
+                                dense=True,
+                                hide_details=True,
+                            )
+                        with vuetify.VCol(cols=2, class_="text-caption text-right"):
+                            "{{ (1 / Math.max(param_interval_shape, 0.001)).toFixed(1) }} Гц"
+
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=4):
+                            vuetify.VTextField(
+                                v_model="param_interval_trace",
+                                label="Трассировка (с)",
+                                type="number",
+                                dense=True,
+                                step=0.1,
+                                hide_details=True,
+                            )
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(
+                                v_model="param_interval_trace",
+                                min=0.1,
+                                max=3.0,
+                                step=0.1,
+                                dense=True,
+                                hide_details=True,
+                            )
+                        with vuetify.VCol(cols=2, class_="text-caption text-right"):
+                            "{{ (1 / Math.max(param_interval_trace, 0.001)).toFixed(1) }} Гц"
 
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
                     ui_view = plotter_ui(
