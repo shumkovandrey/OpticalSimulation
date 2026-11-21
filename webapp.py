@@ -3,10 +3,9 @@ import warnings
 
 from trame_vuetify.ui.vuetify3 import VAppLayout
 
-warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
-
 import asyncio
 import json
+import time
 
 import numpy as np
 import pyvista as pv
@@ -27,7 +26,7 @@ from surfaces.universal_lens import UniversalLens
 from visualization import RayTracer
 
 pv.OFF_SCREEN = True
-
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide")
 
 class OpticsAppController:
     def __init__(self, server):
@@ -54,16 +53,26 @@ class OpticsAppController:
             mode="simple",
             pool=self.pool,
             line_width=1,
-            min_alpha=0.00000005,
+            min_alpha=0,
             gamma=1,
         )
-        self.ray_tracer.mode.energy_color_type = 0
+        self.ray_tracer.mode.energy_color_type = 2
         self.ray_tracer.mode.max_bounces = 100
+        self.ray_tracer.mode.offset_distance = 0.005
 
-        self._debounce_delay = 0.01
-        self._debounce_timer = None
+        self._interval_visual = 0.05
+        self._interval_shape = 0.20
+        self._interval_trace = 0.50
 
-        self._last_applied_transform = {}
+        self._dirty_transform = False
+        self._dirty_shape = False
+        self._dirty_trace = False
+
+        self._last_visual_ts = 0.0
+        self._last_shape_ts = 0.0
+        self._last_trace_ts = 0.0
+
+        self._ticker_task = None
 
         self.state.selected_object_id = None
         self.state.selected_object_type = None
@@ -142,6 +151,270 @@ class OpticsAppController:
         self.ctrl.trigger("export_scene")(self.export_scene)
 
         self.initializing = False
+        self._ensure_ticker()
+
+    def _ensure_ticker(self):
+        if self._ticker_task is not None and not self._ticker_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._ticker_task = loop.create_task(self._ticker())
+
+    async def _ticker(self):
+        while True:
+            await asyncio.sleep(0.01)
+
+            if self._loading_state or self.initializing:
+                continue
+
+            now = time.monotonic()
+
+            if self._dirty_transform and (now - self._last_visual_ts) >= self._interval_visual:
+                self._last_visual_ts = now
+                self._dirty_transform = False
+                try:
+                    self._apply_visual_and_physics()
+                except Exception as e:
+                    print(f"[ticker visual] {e}")
+
+            if self._dirty_shape and (now - self._last_shape_ts) >= self._interval_shape:
+                self._last_shape_ts = now
+                self._dirty_shape = False
+                try:
+                    self._apply_shape_visual()
+                except Exception as e:
+                    print(f"[ticker shape] {e}")
+
+            if self._dirty_trace and (now - self._last_trace_ts) >= self._interval_trace:
+                self._last_trace_ts = now
+                self._dirty_trace = False
+                try:
+                    if self._dirty_transform:
+                        self._apply_visual_and_physics()
+                        self._dirty_transform = False
+                        self._last_visual_ts = now
+                    if self._dirty_shape:
+                        self._apply_shape_visual()
+                        self._dirty_shape = False
+                        self._last_shape_ts = now
+                    self._trace_and_render()
+                except Exception as e:
+                    print(f"[ticker trace] {e}")
+
+    def _mark_transform_dirty(self):
+        self._dirty_transform = True
+        self._dirty_trace = True
+        self._ensure_ticker()
+
+    def _mark_shape_dirty(self):
+        self._dirty_shape = True
+        self._dirty_trace = True
+        self._ensure_ticker()
+
+    def on_transform_param_change(self, *args, **kwargs):
+        if self._loading_state:
+            return
+        self._mark_transform_dirty()
+
+    def on_temp_change(self, *args, **kwargs):
+        self.state.param_pos_x = float(self.state.temp_last_pos_x + kwargs["temp_pos_delta_x"])
+        self.state.param_pos_y = float(self.state.temp_last_pos_y + kwargs["temp_pos_delta_y"])
+        self.state.param_pos_z = float(self.state.temp_last_pos_z + kwargs["temp_pos_delta_z"])
+        if self._loading_state:
+            return
+        self._mark_transform_dirty()
+
+    def on_shape_param_change(self, *args, **kwargs):
+        if self._loading_state:
+            return
+        self._mark_shape_dirty()
+
+    def _apply_visual_and_physics(self):
+        obj_id = self.state.selected_object_id
+        obj_entry = self._find_object(obj_id)
+        if not obj_entry or obj_id not in self.plotter.actors:
+            return
+
+        p = obj_entry["params"]
+        new_origin = (float(self.state.param_pos_x),
+                      float(self.state.param_pos_y),
+                      float(self.state.param_pos_z))
+        new_rotation = (float(self.state.param_rot_x),
+                        float(self.state.param_rot_y),
+                        float(self.state.param_rot_z))
+
+        p["origin"] = new_origin
+        p["rotation"] = new_rotation
+
+        obj_entry["instance"] = self._create_instance(obj_entry["type"], p)
+
+        actor = self.plotter.actors[obj_id]
+        mat = np.eye(4)
+        mat[:3, :3] = R.from_euler("xyz", new_rotation, degrees=True).as_matrix()
+        mat[:3, 3] = new_origin
+        actor.user_matrix = mat
+
+        if hasattr(self.ctrl, "view_update"):
+            self.ctrl.view_update()
+
+    def _apply_shape_visual(self):
+        obj_id = self.state.selected_object_id
+        obj_entry = self._find_object(obj_id)
+        if not obj_entry:
+            return
+
+        p = obj_entry["params"]
+        current_origin = (float(self.state.param_pos_x), float(self.state.param_pos_y), float(self.state.param_pos_z))
+
+        current_rotation = (float(self.state.param_rot_x), float(self.state.param_rot_y), float(self.state.param_rot_z))
+
+        p["origin"] = current_origin
+        p["rotation"] = current_rotation
+
+        if obj_entry["type"] == "lens":
+            p["n"] = float(self.state.param_n)
+            p["R1"] = float(self.state.param_R1)
+            p["R2"] = float(self.state.param_R2)
+            p["thickness"] = float(self.state.param_thickness)
+            p["edge_radius"] = float(self.state.param_edge_radius)
+        elif obj_entry["type"] == "hyperbolic_lens":
+            p["n"] = float(self.state.param_n)
+            p["f_target"] = float(self.state.param_f_target)
+            p["thickness"] = float(self.state.param_thickness)
+            p["edge_radius"] = float(self.state.param_edge_radius)
+        elif obj_entry["type"] == "plane":
+            p["n"] = float(self.state.param_n)
+            p["edge_radius"] = float(self.state.param_edge_radius)
+            p["shape_type"] = str(self.state.param_plane_shape)
+            p["width"] = float(self.state.param_plane_width)
+            p["height"] = float(self.state.param_plane_height)
+        elif obj_entry["type"] == "sphere_surf":
+            p["radius"] = float(self.state.param_radius)
+            p["edge_radius"] = float(self.state.param_edge_radius)
+            p["n"] = float(self.state.param_n)
+        elif obj_entry["type"] == "cylinder_surf":
+            p["radius"] = float(self.state.param_radius)
+            p["half_length"] = float(self.state.param_thickness)
+            p["n"] = float(self.state.param_n)
+            p["capping"] = bool(self.state.param_cylinder_capping)
+        elif obj_entry["type"] == "mesh":
+            p["n"] = float(self.state.param_n)
+            p["mesh_path"] = str(self.state.param_mesh_path)
+            p["scale_uniform"] = bool(self.state.param_scale_uniform)
+            p["scale_all"] = float(self.state.param_scale_all)
+            p["scale_x"] = float(self.state.param_scale_x)
+            p["scale_y"] = float(self.state.param_scale_y)
+            p["scale_z"] = float(self.state.param_scale_z)
+        elif obj_entry["type"] == "emitter":
+            p["num_rays"] = int(self.state.param_num_rays)
+            p["min_offset"] = float(self.state.param_min_offset)
+            p["max_offset"] = float(self.state.param_max_offset)
+            p["wavelength"] = float(self.state.param_wavelength)
+            p["current_n"] = float(self.state.param_current_n)
+            p["num_spectral_bands"] = int(self.state.param_num_spectral_bands)
+            mapping = {"Ray": Ray, "DispersiveRay": DispersiveRay, "WhiteRay": WhiteRay}
+            p["ray_class"] = mapping.get(self.state.param_ray_class, Ray)
+
+        for effect in ["reflection", "refraction", "absorption"]:
+            if bool(self.state[f"param_{effect}_enabled"]):
+                raw_max = self.state[f"param_{effect}_max"]
+                v_max = np.inf if raw_max in ["Infinity", "inf", None, ""] else float(raw_max)
+                p[f"{effect}_range"] = (float(self.state[f"param_{effect}_min"]), v_max)
+            else:
+                p[f"{effect}_range"] = None
+
+        obj_entry["instance"] = self._create_instance(obj_entry["type"], p)
+
+        if obj_id in self.plotter.actors:
+            self.plotter.remove_actor(obj_id)
+
+        local_mesh = obj_entry["instance"].get_mesh()
+        actor = self.plotter.add_mesh(
+            local_mesh,
+            color="green" if obj_entry["type"] == "emitter" else "cyan",
+            opacity=0.5,
+            smooth_shading=True,
+            name=obj_id,
+        )
+
+        mat = np.eye(4)
+        mat[:3, :3] = R.from_euler(
+            "xyz",
+            (self.state.param_rot_x, self.state.param_rot_y, self.state.param_rot_z),
+            degrees=True,
+        ).as_matrix()
+        mat[:3, 3] = (self.state.param_pos_x, self.state.param_pos_y, self.state.param_pos_z)
+        actor.user_matrix = mat
+
+        if hasattr(self.ctrl, "view_update"):
+            self.ctrl.view_update()
+
+    def _trace_and_render(self):
+        self.ray_tracer.elements.clear()
+        self.ray_tracer.rays.clear()
+        if hasattr(self.ray_tracer, "emitters"):
+            self.ray_tracer.emitters.clear()
+
+        for obj_entry in self.scene_objects:
+            instance = obj_entry["instance"]
+            if isinstance(instance, (UniversalLens, HyperbolicLens)):
+                for surf in instance.get_surfaces():
+                    self.ray_tracer.add_elements(surf)
+            elif isinstance(instance, MeshSurface):
+                self.ray_tracer.add_elements(instance)
+            elif isinstance(instance, (PlaneSurface, SphereSurface, CylinderSurface)):
+                self.ray_tracer.add_elements(instance)
+            elif isinstance(instance, BeamEmitter):
+                self.ray_tracer.add_emitter(instance)
+
+        segments = self.ray_tracer.trace_all()
+
+        if self.pool:
+            for r in self.ray_tracer.rays:
+                self.pool.release(r)
+        self.ray_tracer.rays.clear()
+
+        self.ray_tracer.cloud.update(segments, energy_color_type=self.ray_tracer.mode.energy_color_type)
+        calculated_ray_mesh = self.ray_tracer.cloud.actor.mapper.dataset
+
+        if "traced_rays_geometry" in self.plotter.actors:
+            actor = self.plotter.actors["traced_rays_geometry"]
+            if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
+                actor.mapper.dataset.copy_from(calculated_ray_mesh)
+                actor.mapper.dataset.point_data["colors"] = calculated_ray_mesh.point_data["colors"]
+                actor.mapper.dataset.active_scalars_name = "colors"
+                actor.mapper.SetColorModeToDirectScalars()
+                actor.mapper.SetScalarModeToUsePointData()
+                actor.mapper.ScalarVisibilityOn()
+                actor.GetProperty().SetLineWidth(3)
+                actor.GetProperty().SetRenderLinesAsTubes(True)
+                actor.mapper.dataset.Modified()
+                actor.mapper.Modified()
+            else:
+                actor.mapper.dataset.copy_from(pv.PolyData())
+                actor.mapper.Modified()
+        elif calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
+            calculated_ray_mesh.active_scalars_name = "colors"
+            self.plotter.add_mesh(
+                calculated_ray_mesh,
+                scalars="colors", rgba=True, opacity="linear",
+                line_width=2.5, render_lines_as_tubes=True,
+                name="traced_rays_geometry",
+            )
+
+        if hasattr(self.ctrl, "view_update"):
+            self.ctrl.view_update()
+
+    def update_scene(self):
+        self._apply_visual_and_physics()
+        self._apply_shape_visual()
+        self._trace_and_render()
+
+        self._dirty_transform = self._dirty_shape = self._dirty_trace = False
+        now = time.monotonic()
+        self._last_visual_ts = self._last_shape_ts = self._last_trace_ts = now
 
     def _update_objects_list_state(self):
         self.state.scene_objects_list = [
@@ -379,6 +652,8 @@ class OpticsAppController:
                 "color": "yellow",
                 "energy": 1.0,
                 "current_n": 1.0,
+                "ray_class": Ray,
+                "num_spectral_bands": 7,
             },
         )
 
@@ -543,83 +818,6 @@ class OpticsAppController:
         self.ray_tracer.mode.energy_color_type = 2
         self.update_scene()
 
-    def update_scene(self):
-        if self._updating:
-            return
-        self._updating = True
-        try:
-            self.ray_tracer.elements.clear()
-            self.ray_tracer.rays.clear()
-
-            if hasattr(self.ray_tracer, "emitters"):
-                self.ray_tracer.emitters.clear()
-
-            for obj_entry in self.scene_objects:
-                instance = obj_entry["instance"]
-                if isinstance(instance, (UniversalLens, HyperbolicLens)):
-                    for surf in instance.get_surfaces():
-                        self.ray_tracer.add_elements(surf)
-                elif isinstance(instance, MeshSurface):
-                    self.ray_tracer.add_elements(instance)
-                elif isinstance(instance, (PlaneSurface, SphereSurface, CylinderSurface)):
-                    self.ray_tracer.add_elements(instance)
-                elif isinstance(instance, BeamEmitter):
-                    self.ray_tracer.add_emitter(instance)
-
-            segments = self.ray_tracer.trace_all()
-            energy_type = self.ray_tracer.mode.energy_color_type
-
-            self.ray_tracer.cloud.update(segments, energy_color_type=energy_type)
-
-            if self.pool:
-                for r in self.ray_tracer.rays:
-                    self.pool.release(r)
-            self.ray_tracer.rays.clear()
-
-            calculated_ray_mesh = self.ray_tracer.cloud.actor.mapper.dataset
-
-            if "traced_rays_geometry" in self.plotter.actors:
-                actor = self.plotter.actors["traced_rays_geometry"]
-                if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
-                    actor.mapper.dataset.copy_from(calculated_ray_mesh)
-
-                    # 2. Возвращаем цвета лучам
-                    actor.mapper.dataset.point_data["colors"] = calculated_ray_mesh.point_data["colors"]
-                    actor.mapper.dataset.active_scalars_name = "colors"
-
-                    actor.mapper.SetColorModeToDirectScalars()
-                    actor.mapper.SetScalarModeToUsePointData()
-                    actor.mapper.ScalarVisibilityOn()
-
-                    actor.GetProperty().SetLineWidth(3)
-                    actor.GetProperty().SetRenderLinesAsTubes(True)
-
-                    # Сигналы обновления для веб-контекста
-                    actor.mapper.dataset.Modified()
-                    actor.mapper.Modified()
-                else:
-                    actor.mapper.dataset.copy_from(pv.PolyData())
-                    actor.mapper.dataset.Modified()
-                    actor.mapper.Modified()
-            else:
-                if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
-                    calculated_ray_mesh.active_scalars_name = "colors"
-                    self.plotter.add_mesh(
-                        calculated_ray_mesh,
-                        scalars="colors",
-                        rgba=True,
-                        opacity="linear",
-                        line_width=2.5,
-                        render_lines_as_tubes=True,
-                        name="traced_rays_geometry",
-                    )
-
-            if hasattr(self.ctrl, "view_update"):
-                self.ctrl.view_update()
-
-        finally:
-            self._updating = False
-
     def on_object_selected(self, *args, **kwargs):
         obj_id = args[0] if args else self.state.selected_object_id
         if not obj_id:
@@ -644,10 +842,18 @@ class OpticsAppController:
 
         p = obj_entry["params"]
         origin = p.get("origin", (0.0, 0.0, 0.0))
+        target_point = np.array(origin, dtype=float)
 
-        target_point = (float(origin[0]), float(origin[1]), float(origin[2]))
+        camera = self.plotter.camera
+        offset = np.array(camera.position) - np.array(camera.focal_point)
+        dist = np.linalg.norm(offset)
+        if dist < 1e-6:
+            offset = np.array([5.0, 5.0, 5.0])
+        else:
+            offset = offset / dist * max(dist, 5.0)
 
-        self.plotter.fly_to(target_point)
+        camera.focal_point = target_point
+        camera.position = target_point + offset
 
         self.plotter.render()
         if hasattr(self.ctrl, "view_update"):
@@ -848,34 +1054,6 @@ class OpticsAppController:
         actor.user_matrix = mat
 
         self.update_scene()
-
-    def on_shape_param_change(self, *args, **kwargs):
-        if getattr(self, "_loading_state", False):
-            return
-        if self._debounce_timer is not None:
-            self._debounce_timer.cancel()
-        loop = asyncio.get_event_loop()
-        self._debounce_timer = loop.call_later(self._debounce_delay, self.update_object_shape)
-
-    def on_transform_param_change(self, *args, **kwargs):
-        if getattr(self, "_loading_state", False):
-            return
-        if self._debounce_timer is not None:
-            self._debounce_timer.cancel()
-        loop = asyncio.get_event_loop()
-        self._debounce_timer = loop.call_later(self._debounce_delay, self.update_object_transform)
-
-    def on_temp_change(self, *args, **kwargs):
-        """Обработка движения временных слайдеров позиции."""
-        self.state.param_pos_x = float(float(self.state.temp_last_pos_x) + kwargs["temp_pos_delta_x"])
-        self.state.param_pos_y = float(float(self.state.temp_last_pos_y) + kwargs["temp_pos_delta_y"])
-        self.state.param_pos_z = float(float(self.state.temp_last_pos_z) + kwargs["temp_pos_delta_z"])
-        if getattr(self, "_loading_state", False):
-            return
-        if self._debounce_timer is not None:
-            self._debounce_timer.cancel()
-        loop = asyncio.get_event_loop()
-        self._debounce_timer = loop.call_later(self._debounce_delay, self.update_object_transform)
 
     def apply_x_delta(self):
         self.state.temp_last_pos_x = self.state.param_pos_x

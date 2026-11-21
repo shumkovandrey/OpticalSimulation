@@ -222,6 +222,7 @@ class RayPool:
         self.pools[ray_class].append(ray)
 
 
+
 def spawn_ray(
     template: Ray,
     pool: "RayPool | None" = None,

@@ -36,3 +36,4 @@ class HitInfo:
     def __post_init__(self):
         self.point = np.asarray(self.point, dtype=np.float64)
         self.normal = np.asarray(self.normal, dtype=np.float64)
+        self.n_inside = float(self.n_inside)
