@@ -60,7 +60,7 @@ class OpticsAppController:
         self.ray_tracer.mode.energy_color_type = 0
         self.ray_tracer.mode.max_bounces = 100
 
-        self._debounce_delay = 0.1
+        self._debounce_delay = 0.01
         self._debounce_timer = None
 
         self._last_applied_transform = {}
@@ -513,9 +513,10 @@ class OpticsAppController:
                 lens_origin=params.get("origin", (0, 0, 0)),
             )
         elif obj_type == "cylinder_surf":
+            rot = R.from_euler("xyz", params.get("rotation", (0, 0, 0)), degrees=True).as_matrix()
             return CylinderSurface(
                 center=params.get("origin", (0, 0, 0)),
-                axis_dir=np.array([1.0, 0.0, 0.0]),
+                axis_dir=rot @ np.array([1.0, 0.0, 0.0]),
                 radius=params.get("radius", 1.0),
                 half_length=params.get("half_length", 1.0),
                 n_inside=params.get("n", 1.5),
@@ -569,6 +570,12 @@ class OpticsAppController:
             energy_type = self.ray_tracer.mode.energy_color_type
 
             self.ray_tracer.cloud.update(segments, energy_color_type=energy_type)
+
+            if self.pool:
+                for r in self.ray_tracer.rays:
+                    self.pool.release(r)
+            self.ray_tracer.rays.clear()
+
             calculated_ray_mesh = self.ray_tracer.cloud.actor.mapper.dataset
 
             if "traced_rays_geometry" in self.plotter.actors:
