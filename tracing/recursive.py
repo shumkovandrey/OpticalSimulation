@@ -83,26 +83,15 @@ def trace_recursive(
 
         if not hit.allow_reflection and not hit.allow_refraction:
             start = hit.point + offset_distance * current_ray.direction
-            if pool:
-                new_ray = pool.acquire(
-                    start,
-                    current_ray.direction,
-                    energy=current_ray.energy,
-                    current_n=current_ray.current_n,
-                    color=current_ray.color,
-                    wavelength=current_ray.wavelength,
-                    energy_color_type=current_ray.energy_color_type,
-                )
-            else:
-                new_ray = Ray(
-                    start,
-                    current_ray.direction,
-                    energy=current_ray.energy,
-                    current_n=current_ray.current_n,
-                    color=current_ray.color,
-                    wavelength=current_ray.wavelength,
-                    energy_color_type=current_ray.energy_color_type,
-                )
+            new_ray = spawn_ray(
+                current_ray,
+                pool,
+                origin=start,
+                direction=current_ray.direction,
+                energy=current_ray.energy,
+                current_n=current_ray.current_n,
+                color=current_ray.color,
+            )
             recurse(new_ray, d - 1, from_pool=(pool is not None))
             if pool:
                 pool.release(new_ray)

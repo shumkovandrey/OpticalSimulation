@@ -90,7 +90,7 @@ def split_ray(
                 origin=start_point + EPS * refracted_dir,
                 direction=refracted_dir,
                 energy=refracted_energy,
-                current_n=n1,
+                current_n=n2,
                 color=ray.color,
             )
             new_rays.append(new_ray)
