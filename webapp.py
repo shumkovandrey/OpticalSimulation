@@ -1,19 +1,19 @@
 import os
 import warnings
 
-from trame_vuetify.ui.vuetify3 import VAppLayout
-
 import asyncio
 import json
 import time
 
 import numpy as np
 import pyvista as pv
+import vtk
 
 from pyvista.trame.ui import plotter_ui
 from scipy.spatial.transform import Rotation as R
 from trame.app import get_server
 from trame.widgets import vuetify3 as vuetify
+from trame_vuetify.ui.vuetify3 import VAppLayout
 
 from core.rays import DispersiveRay, Ray, RayPool, WhiteRay
 from emitters import BeamEmitter
@@ -60,17 +60,20 @@ class OpticsAppController:
         self.ray_tracer.mode.max_bounces = 100
         self.ray_tracer.mode.offset_distance = 0.005
 
-        self._interval_visual = 0.05
-        self._interval_shape = 0.20
-        self._interval_trace = 0.50
+        self._interval_visual = 0.1
+        self._interval_shape = 0.5
+        self._interval_trace = 1
+        self._interval_net = 0.1
 
         self._dirty_transform = False
         self._dirty_shape = False
         self._dirty_trace = False
+        self._dirty_net = False
 
         self._last_visual_ts = 0.0
         self._last_shape_ts = 0.0
         self._last_trace_ts = 0.0
+        self._last_net_ts = 0.0
 
         self._ticker_task = None
 
@@ -122,6 +125,7 @@ class OpticsAppController:
         self.state.param_interval_visual = self._interval_visual
         self.state.param_interval_shape = self._interval_shape
         self.state.param_interval_trace = self._interval_trace
+        self.state.param_interval_net = self._interval_net
 
         for effect in ["reflection", "refraction", "absorption"]:
             self.state[f"param_{effect}_min"] = 0.0
@@ -206,6 +210,11 @@ class OpticsAppController:
                 except Exception as e:
                     print(f"[ticker trace] {e}")
 
+            if self._dirty_net and (now - self._last_net_ts) >= self._interval_net:
+                self._last_net_ts = now
+                self._dirty_net = False
+                self.ctrl.view_update()
+
     def _mark_transform_dirty(self):
         self._dirty_transform = True
         self._dirty_trace = True
@@ -259,8 +268,10 @@ class OpticsAppController:
         mat[:3, 3] = new_origin
         actor.user_matrix = mat
 
-        if hasattr(self.ctrl, "view_update"):
-            self.ctrl.view_update()
+        self._dirty_net = True
+
+        # if hasattr(self.ctrl, "view_update"):
+        #     self.ctrl.view_update()
 
     def _apply_shape_visual(self):
         obj_id = self.state.selected_object_id
@@ -351,8 +362,10 @@ class OpticsAppController:
         mat[:3, 3] = (self.state.param_pos_x, self.state.param_pos_y, self.state.param_pos_z)
         actor.user_matrix = mat
 
-        if hasattr(self.ctrl, "view_update"):
-            self.ctrl.view_update()
+        self._dirty_net = True
+
+        # if hasattr(self.ctrl, "view_update"):
+        #     self.ctrl.view_update()
 
     def _trace_and_render(self):
         self.ray_tracer.elements.clear()
@@ -384,6 +397,8 @@ class OpticsAppController:
 
         if "traced_rays_geometry" in self.plotter.actors:
             actor = self.plotter.actors["traced_rays_geometry"]
+            actor.mapper.SetScalarVisibility(0)
+            actor.mapper.SetLookupTable(None)
             if calculated_ray_mesh and calculated_ray_mesh.n_points > 0:
                 actor.mapper.dataset.copy_from(calculated_ray_mesh)
                 actor.mapper.dataset.point_data["colors"] = calculated_ray_mesh.point_data["colors"]
@@ -407,8 +422,10 @@ class OpticsAppController:
                 name="traced_rays_geometry",
             )
 
-        if hasattr(self.ctrl, "view_update"):
-            self.ctrl.view_update()
+        self._dirty_net = True
+
+        # if hasattr(self.ctrl, "view_update"):
+        #     self.ctrl.view_update()
 
     def update_scene(self):
         self._apply_visual_and_physics()
@@ -827,11 +844,13 @@ class OpticsAppController:
             v = float(self.state.param_interval_visual)
             s = float(self.state.param_interval_shape)
             t = float(self.state.param_interval_trace)
+            n = float(self.state.param_interval_net)
         except (TypeError, ValueError):
             return
         self._interval_visual = max(0.01, v)
         self._interval_shape = max(0.05, s)
         self._interval_trace = max(0.1, t)
+        self._interval_net = max(0.01, n)
 
     def on_object_selected(self, *args, **kwargs):
         obj_id = args[0] if args else self.state.selected_object_id
@@ -1139,7 +1158,7 @@ for effect in ["reflection", "refraction", "absorption"]:
     server.state.change(f"param_{effect}_min")(app.on_shape_param_change)
     server.state.change(f"param_{effect}_max")(app.on_shape_param_change)
 
-for key in ["param_interval_visual", "param_interval_shape", "param_interval_trace"]:
+for key in ["param_interval_visual", "param_interval_shape", "param_interval_trace", "param_interval_net"]:
     server.state.change(key)(app.on_intervals_changed)
 
 with VAppLayout(server) as layout:
@@ -1805,8 +1824,6 @@ with VAppLayout(server) as layout:
                                 dense=True,
                                 hide_details=True,
                             )
-                        with vuetify.VCol(cols=2, class_="text-caption text-right"):
-                            "{{ Math.round(1 / Math.max(param_interval_visual, 0.001)) }} Гц"
 
                     with vuetify.VRow(no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
@@ -1827,8 +1844,6 @@ with VAppLayout(server) as layout:
                                 dense=True,
                                 hide_details=True,
                             )
-                        with vuetify.VCol(cols=2, class_="text-caption text-right"):
-                            "{{ (1 / Math.max(param_interval_shape, 0.001)).toFixed(1) }} Гц"
 
                     with vuetify.VRow(no_gutters=True, align="center"):
                         with vuetify.VCol(cols=4):
@@ -1849,8 +1864,26 @@ with VAppLayout(server) as layout:
                                 dense=True,
                                 hide_details=True,
                             )
-                        with vuetify.VCol(cols=2, class_="text-caption text-right"):
-                            "{{ (1 / Math.max(param_interval_trace, 0.001)).toFixed(1) }} Гц"
+
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=4):
+                            vuetify.VTextField(
+                                v_model="param_interval_net",
+                                label="Сеть (с)",
+                                type="number",
+                                dense=True,
+                                step=0.1,
+                                hide_details=True,
+                            )
+                        with vuetify.VCol(cols=6):
+                            vuetify.VSlider(
+                                v_model="param_interval_net",
+                                min=0.01,
+                                max=1.0,
+                                step=0.01,
+                                dense=True,
+                                hide_details=True,
+                            )
 
                 with vuetify.VCol(cols=9, style="height: 100%; overflow: hidden;"):
                     ui_view = plotter_ui(
@@ -1865,7 +1898,6 @@ app.update_scene()
 
 if __name__ == "__main__":
     port_env = int(os.environ.get("PORT", 8085))
-
     server.cli.set_defaults(
         host="0.0.0.0",
         port=port_env,
