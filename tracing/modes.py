@@ -6,6 +6,9 @@ from typing import List, Optional
 from core.rays import Ray, RayPool
 from core.segments import Segment
 
+from tracing.simple import trace_simple
+from tracing.recursive import trace_recursive
+
 
 class TraceMode(ABC):
     """Общий интерфейс для алгоритмов трассировки."""
@@ -35,8 +38,6 @@ class SimpleMode(TraceMode):
         self.prioritize_refraction = prioritize_refraction
 
     def trace(self, ray: "Ray", elements: List) -> List[Segment]:
-        from tracing.simple import trace_simple
-
         return trace_simple(
             ray,
             elements,
@@ -66,8 +67,6 @@ class TreeMode(TraceMode):
         self.total_limit = total_limit
 
     def trace(self, ray: "Ray", elements: List) -> List[Segment]:
-        from tracing.recursive import trace_recursive
-
         return trace_recursive(
             ray,
             elements,

@@ -17,7 +17,11 @@
             "min_offset": -1.0,
             "max_offset": 1.0,
             "wavelength": 550.0,
-            "color": "yellow",
+            "color": [
+                1.0,
+                0.0,
+                0.0
+            ],
             "energy": 1.0,
             "current_n": 1.0,
             "reflection_range": null,
@@ -75,14 +79,18 @@
             "min_offset": -1.0,
             "max_offset": 1.0,
             "wavelength": 550.0,
-            "color": "yellow",
+            "color": [
+                0.09803921568627451,
+                1.0,
+                0.0
+            ],
             "energy": 1.0,
             "current_n": 1.0,
             "reflection_range": null,
             "refraction_range": null,
             "absorption_range": null,
             "num_spectral_bands": 7,
-            "ray_class": "DispersiveRay"
+            "ray_class": "Ray"
         }
     },
     {

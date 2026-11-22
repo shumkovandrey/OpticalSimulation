@@ -96,7 +96,7 @@ def trace_simple(
 
         if allow_refraction:
             resolved_n_inside = get_dispersion_n(hit.n_inside, current_ray)
-            n_next = resolved_n_inside if abs(current_n - 1.0) < 1e-6 else 1.0
+            n_next = resolved_n_inside if abs(current_n - current_ray.base_n) < 1e-6 else current_ray.base_n
 
             normal_tir = hit.normal
             if np.dot(normal_tir, current_ray.direction) > 0:

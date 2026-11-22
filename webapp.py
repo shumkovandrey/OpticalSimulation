@@ -9,6 +9,7 @@ import numpy as np
 import pyvista as pv
 import vtk
 
+from matplotlib.colors import to_hex, to_rgb
 from pyvista.trame.ui import plotter_ui
 from scipy.spatial.transform import Rotation as R
 from trame.app import get_server
@@ -122,6 +123,11 @@ class OpticsAppController:
             {"title": "Дисперсионный луч (DispersiveRay)", "value": "DispersiveRay"},
             {"title": "Белый свет (WhiteRay)", "value": "WhiteRay"},
         ]
+        self.state.param_energy = 1.0
+        self.state.param_ray_color = "#ffff00"
+        self.state.param_ambient_n = 1.0
+        self.state.param_ray_thickness = 25
+
         self.state.param_interval_visual = self._interval_visual
         self.state.param_interval_shape = self._interval_shape
         self.state.param_interval_trace = self._interval_trace
@@ -326,6 +332,8 @@ class OpticsAppController:
             p["min_offset"] = float(self.state.param_min_offset)
             p["max_offset"] = float(self.state.param_max_offset)
             p["wavelength"] = float(self.state.param_wavelength)
+            p["energy"] = float(self.state.param_energy)
+            p["color"] = tuple(to_rgb(self.state.param_ray_color))
             p["current_n"] = float(self.state.param_current_n)
             p["num_spectral_bands"] = int(self.state.param_num_spectral_bands)
             mapping = {"Ray": Ray, "DispersiveRay": DispersiveRay, "WhiteRay": WhiteRay}
@@ -368,6 +376,7 @@ class OpticsAppController:
         #     self.ctrl.view_update()
 
     def _trace_and_render(self):
+        self.ray_tracer.mode.ambient_n = float(self.state.param_ambient_n)
         self.ray_tracer.elements.clear()
         self.ray_tracer.rays.clear()
         if hasattr(self.ray_tracer, "emitters"):
@@ -406,7 +415,7 @@ class OpticsAppController:
                 actor.mapper.SetColorModeToDirectScalars()
                 actor.mapper.SetScalarModeToUsePointData()
                 actor.mapper.ScalarVisibilityOn()
-                actor.GetProperty().SetLineWidth(3)
+                actor.GetProperty().SetLineWidth(float(self.state.param_ray_thickness))
                 actor.GetProperty().SetRenderLinesAsTubes(True)
                 actor.mapper.dataset.Modified()
                 actor.mapper.Modified()
@@ -418,7 +427,7 @@ class OpticsAppController:
             self.plotter.add_mesh(
                 calculated_ray_mesh,
                 scalars="colors", rgba=True, opacity="linear",
-                line_width=2.5, render_lines_as_tubes=True,
+                line_width=float(self.state.param_ray_thickness), render_lines_as_tubes=True,
                 name="traced_rays_geometry",
             )
 
@@ -512,6 +521,9 @@ class OpticsAppController:
                 if "ray_class" in params:
                     mapping = {"Ray": Ray, "DispersiveRay": DispersiveRay, "WhiteRay": WhiteRay}
                     params["ray_class"] = mapping.get(params["ray_class"], Ray)
+
+                if "color" in params and isinstance(params["color"], list):
+                    params["color"] = tuple(params["color"])
 
                 for effect in ["reflection", "refraction", "absorption"]:
                     range_key = f"{effect}_range"
@@ -669,9 +681,9 @@ class OpticsAppController:
                 "min_offset": -0.5,
                 "max_offset": 0.5,
                 "wavelength": 550.0,
-                "color": "yellow",
+                "color": (1.0, 1.0, 0.0),
+                "current_n": float(self.state.param_ambient_n),
                 "energy": 1.0,
-                "current_n": 1.0,
                 "ray_class": Ray,
                 "num_spectral_bands": 7,
             },
@@ -749,14 +761,14 @@ class OpticsAppController:
             return BeamEmitter(
                 origin=params.get("origin", (0, 0, 0)),
                 direction=np.array([1.0, 0.0, 0.0]),
-                rotation_degrees=params.get("rotation", (0, 0, 0)),  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
+                rotation_degrees=params.get("rotation", (0, 0, 0)),
                 num_rays=params.get("num_rays", 5),
                 min_offset=params.get("min_offset", -0.5),
                 max_offset=params.get("max_offset", 0.5),
-                color=params.get("color", "yellow"),
+                color=params.get("color", (1.0, 1.0, 0.0)),
                 wavelength=params.get("wavelength", 550),
                 energy=params.get("energy", 1.0),
-                current_n=params.get("current_n", 1.0),
+                current_n=float(params.get("current_n", self.state.param_ambient_n)),
                 pool=self.pool,
                 ray_class=params.get("ray_class", Ray),
                 num_spectral_bands=params.get("num_spectral_bands", 7),
@@ -838,6 +850,19 @@ class OpticsAppController:
         self.ray_tracer.mode.energy_color_type = 2
         self.update_scene()
 
+    def on_scene_param_change(self, *args, **kwargs):
+        if self._loading_state:
+            return
+
+        if "traced_rays_geometry" in self.plotter.actors:
+            actor = self.plotter.actors["traced_rays_geometry"]
+            actor.GetProperty().SetLineWidth(float(self.state.param_ray_thickness))
+            actor.mapper.Modified()
+
+        self._dirty_trace = True
+        self._dirty_net = True
+        self._ensure_ticker()
+
     def on_intervals_changed(self, *args, **kwargs):
         """Перечитывает интервалы throttle из state и применяет к контроллеру."""
         try:
@@ -890,8 +915,6 @@ class OpticsAppController:
         camera.position = target_point + offset
 
         self.plotter.render()
-        if hasattr(self.ctrl, "view_update"):
-            self.ctrl.view_update()
 
     def _find_object(self, obj_id):
         for o in self.scene_objects:
@@ -936,6 +959,14 @@ class OpticsAppController:
                 self.state.param_ray_class = "Ray"
 
             self.state.param_num_spectral_bands = int(p.get("num_spectral_bands", 7))
+            self.state.param_energy = float(p.get("energy", 1.0))
+            color = p.get("color", "yellow")
+            if isinstance(color, (tuple, list)):
+                color_rgb = tuple(color[:3])
+            else:
+                color_rgb = to_rgb(color)
+            self.state.param_ray_color = to_hex(color_rgb)
+
         elif obj_entry["type"] == "mesh":
             self.state.param_n = float(p.get("n", 1.5))
             self.state.param_mesh_path = str(p.get("mesh_path", ""))
@@ -1149,9 +1180,14 @@ shape_params = [
     "param_scale_x",
     "param_scale_y",
     "param_scale_z",
+    "param_energy",
+    "param_ray_color"
 ]
 for param in shape_params:
     server.state.change(param)(app.on_shape_param_change)
+
+for param in ["param_ambient_n", "param_ray_thickness"]:
+    server.state.change(param)(app.on_scene_param_change)
 
 for effect in ["reflection", "refraction", "absorption"]:
     server.state.change(f"param_{effect}_enabled")(app.on_shape_param_change)
@@ -1673,7 +1709,28 @@ with VAppLayout(server) as layout:
                         with vuetify.VRow(no_gutters=True, align="center"):
                             with vuetify.VCol(cols=4):
                                 vuetify.VTextField(
-                                    v_model="param_current_n", label="n среды", type="number", dense=True, step=0.1
+                                    v_model="param_energy", label="Энергия", type="number",
+                                    dense=True, step=0.01, hide_details=True,
+                                )
+                            with vuetify.VCol(cols=8):
+                                vuetify.VSlider(
+                                    v_model="param_energy", min=0.0, max=1.0, step=0.01,
+                                    dense=True, hide_details=True,
+                                )
+
+                        with vuetify.VContainer(v_if="param_ray_class == 'Ray'", class_="pa-0"):
+                            vuetify.VColorPicker(
+                                v_model="param_ray_color",
+                                mode="hex",
+                                hide_inputs=True,
+                                width="100%",
+                                elevation=0,
+                            )
+
+                        with vuetify.VRow(no_gutters=True, align="center"):
+                            with vuetify.VCol(cols=4):
+                                vuetify.VTextField(
+                                    v_model="param_current_n", label="n среды", type="number", dense=True, step=0.01
                                 )
                             with vuetify.VCol(cols=8):
                                 vuetify.VSlider(
@@ -1801,6 +1858,32 @@ with VAppLayout(server) as layout:
                         dense=True,
                         class_="mt-2",
                     )
+
+                    vuetify.VDivider(class_="my-4")
+                    vuetify.VCardTitle("Параметры сцены", class_="px-0", style="text-color: white")
+
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=4):
+                            vuetify.VTextField(
+                                v_model="param_ambient_n", label="n среды", type="number",
+                                dense=True, step=0.01, hide_details=True,
+                            )
+                        with vuetify.VCol(cols=8):
+                            vuetify.VSlider(
+                                v_model="param_ambient_n", min=1.0, max=3.0, step=0.01,
+                                dense=True, hide_details=True,
+                            )
+                    with vuetify.VRow(no_gutters=True, align="center"):
+                        with vuetify.VCol(cols=4):
+                            vuetify.VTextField(
+                                v_model="param_ray_thickness", label="толщина лучей", type="number",
+                                dense=True, step=0.01, hide_details=True,
+                            )
+                        with vuetify.VCol(cols=8):
+                            vuetify.VSlider(
+                                v_model="param_ray_thickness", min=1.0, max=10, step=0.01,
+                                dense=True, hide_details=True,
+                            )
 
                     vuetify.VDivider(class_="my-4")
                     vuetify.VCardTitle("Частота обновления", class_="px-0", style="text-color: white")

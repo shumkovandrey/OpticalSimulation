@@ -16,6 +16,7 @@ class Ray:
         direction,
         energy=1.0,
         current_n=1.0,
+        base_n=None,
         color="yellow",
         energy_color_type=2,
     ):
@@ -31,6 +32,8 @@ class Ray:
             Энергия луча (0..1). Уменьшается по Френелю при каждом взаимодействии.
         current_n : float
             Показатель преломления среды, в которой находится луч.
+        base_n : float
+            Показатель преломления среды, в которой начинается луч.
         color : str | tuple
             Цвет отрисовки (строка matplotlib или RGB-кортеж).
         energy_color_type : int
@@ -47,6 +50,7 @@ class Ray:
 
         self.energy = energy
         self.current_n = current_n
+        self.base_n = current_n if base_n is None else base_n
         self.color = color
         self.energy_color_type = energy_color_type
 
@@ -55,7 +59,7 @@ class DispersiveRay(Ray):
     """Луч с длиной волны (нм): цвет и показатель преломления зависят от спектра."""
 
     def __init__(
-        self, origin, direction, wavelength=550.0, energy=1.0, current_n=1.0, color="yellow", energy_color_type=2
+        self, origin, direction, wavelength=550.0, energy=1.0, current_n=1.0, base_n=None, color="yellow", energy_color_type=2
     ):
         """Создаёт луч.
 
@@ -69,6 +73,8 @@ class DispersiveRay(Ray):
             Энергия луча (0..1). Уменьшается по Френелю при каждом взаимодействии.
         current_n : float
             Показатель преломления среды, в которой находится луч.
+        base_n : float
+            Показатель преломления среды, в которой начинается луч.
         color : str | tuple
             Цвет отрисовки (строка matplotlib или RGB-кортеж).
         energy_color_type : int
@@ -82,6 +88,7 @@ class DispersiveRay(Ray):
             direction=direction,
             energy=energy,
             current_n=current_n,
+            base_n=base_n,
             color=color,
             energy_color_type=energy_color_type,
         )
@@ -94,7 +101,7 @@ class DispersiveRay(Ray):
 class WhiteRay:
     """Контейнер для пучка спектральных лучей; сам в трассировке не участвует."""
 
-    def __init__(self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, energy_color_type=2):
+    def __init__(self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, base_n=None, energy_color_type=2):
         """Создаёт луч.
 
         Parameters
@@ -107,8 +114,6 @@ class WhiteRay:
             Энергия луча (0..1). Уменьшается по Френелю при каждом взаимодействии.
         current_n : float
             Показатель преломления среды, в которой находится луч.
-        color : str | tuple
-            Цвет отрисовки (строка matplotlib или RGB-кортеж).
         energy_color_type : int
             Режим привязки прозрачности к энергии (0/1/2).
         num_spectral_bands : int
@@ -135,6 +140,7 @@ class WhiteRay:
                     direction=self.direction.copy(),
                     energy=sub_energy,
                     current_n=self.current_n,
+                    base_n=self.current_n,
                     energy_color_type=self.energy_color_type,
                     wavelength=wl,
                     ray_class=DispersiveRay,
@@ -145,6 +151,7 @@ class WhiteRay:
                     direction=self.direction.copy(),
                     energy=sub_energy,
                     current_n=self.current_n,
+                    base_n=self.current_n,
                     energy_color_type=self.energy_color_type,
                     wavelength=wl,
                 )
@@ -174,6 +181,7 @@ class RayPool:
         direction,
         energy=1.0,
         current_n=1.0,
+        base_n=None,
         color="yellow",
         energy_color_type=2,
         wavelength=None,
@@ -196,6 +204,7 @@ class RayPool:
         ray.direction /= np.linalg.norm(ray.direction)
         ray.energy = energy
         ray.current_n = current_n
+        ray.base_n = current_n if base_n is None else base_n
         ray.energy_color_type = energy_color_type
 
         if ray_class is DispersiveRay and wavelength is not None:
@@ -258,6 +267,7 @@ def spawn_ray(
         direction=template.direction if direction is None else direction,
         energy=template.energy if energy is None else energy,
         current_n=template.current_n if current_n is None else current_n,
+        base_n=template.base_n,
         color=template.color if color is None else color,
         energy_color_type=template.energy_color_type,
     )
