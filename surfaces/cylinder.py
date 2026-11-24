@@ -4,6 +4,7 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
+from core.materials import Material
 from core.rays import Ray
 from fast_math import cylinder_side_intersect
 from surfaces.base import BaseSurface
@@ -19,10 +20,7 @@ class CylinderSurface(BaseSurface):
         axis_dir,
         radius,
         half_length,
-        n_inside=1.0,
-        reflection_range=None,
-        refraction_range=None,
-        absorption_range=None,
+        material=None,
         capping=False,
     ):
         self.center = np.array(center, dtype=float)
@@ -30,10 +28,7 @@ class CylinderSurface(BaseSurface):
         self.axis_dir /= np.linalg.norm(self.axis_dir)
         self.radius = radius
         self.half_length = half_length
-        self.n = n_inside
-        self.reflection_range = reflection_range
-        self.refraction_range = refraction_range
-        self.absorption_range = absorption_range
+        self.material = material if material is not None else Material(n=1.0)
 
         self.capping = capping
         self._update_caps()

@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 
+from core.materials import Material
+
 
 @dataclass(slots=True)
 class Segment:
@@ -30,10 +32,13 @@ class HitInfo:
     allow_reflection: bool
     allow_refraction: bool
     absorbed: bool
-    n_inside: float
+    material: "Material"
     is_thin_lens: bool = False
 
     def __post_init__(self):
         self.point = np.asarray(self.point, dtype=np.float64)
         self.normal = np.asarray(self.normal, dtype=np.float64)
-        self.n_inside = float(self.n_inside)
+
+    @property
+    def n_inside(self):
+        return self.material.n

@@ -2,6 +2,7 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
+from core.materials import Material
 from surfaces.aspheric import AsphericSurface
 from surfaces.base import LensAssembly
 from surfaces.cylinder import CylinderSurface
@@ -24,28 +25,22 @@ class HyperbolicLens(LensAssembly):
         rotation_degrees=(0, 0, 0),
         thickness=2.0,
         edge_radius=3.0,
-        n=1.5,
+        material=None,
         f_target=10.0,
-        reflection_range=None,
-        refraction_range=(0, np.inf),
-        absorption_range=None,
     ):
         self.origin = np.array(origin, dtype=float)
         self.rotation = R.from_euler("xyz", rotation_degrees, degrees=True).as_matrix()
         self.axis_dir = self.rotation @ np.array([1.0, 0.0, 0.0])
         self.thickness = thickness
         self.edge_radius = edge_radius
-        self.n = n
+        self.material = material if material is not None else Material(n=1.0)
         self.f_target = float(f_target)
 
         # Радиус вершины и коническая константа вычисляются автоматически
-        self.R_curvature = -float(self.f_target * (self.n - 1.0))
-        self.k = -(self.n**2)
+        self.R_curvature = -float(self.f_target * (self.material.n - 1.0))
+        self.k = -(self.material.n**2)
 
         self.aspheric_coeffs = []
-        self.reflection_range = reflection_range
-        self.refraction_range = refraction_range
-        self.absorption_range = absorption_range
         self._last_hit_surface = None
 
         self._create_surfaces()
@@ -77,12 +72,9 @@ class HyperbolicLens(LensAssembly):
             radius=self.R_curvature,
             conic_constant=self.k,
             aspheric_coeffs=self.aspheric_coeffs,
-            n_inside=self.n,
+            material=self.material,
             edge_radius=self.edge_radius,
             thickness=self.thickness,
-            reflection_range=self.reflection_range,
-            refraction_range=self.refraction_range,
-            absorption_range=self.absorption_range,
             lens_origin=[-half, 0, 0],
             lens_axis=[-1.0, 0.0, 0.0],
         )
@@ -90,11 +82,8 @@ class HyperbolicLens(LensAssembly):
         self.back = PlaneSurface(
             point=[half, 0, 0],
             normal=[1.0, 0.0, 0.0],
-            n_inside=self.n,
+            material=self.material,
             edge_radius=self.edge_radius,
-            reflection_range=self.reflection_range,
-            refraction_range=self.refraction_range,
-            absorption_range=self.absorption_range,
             lens_origin=[half, 0, 0],
             lens_axis=[1.0, 0.0, 0.0],
         )
@@ -104,10 +93,7 @@ class HyperbolicLens(LensAssembly):
             axis_dir=[1.0, 0.0, 0.0],
             radius=self.edge_radius,
             half_length=half_rim_length,
-            n_inside=self.n,
-            reflection_range=self.reflection_range,
-            refraction_range=self.refraction_range,
-            absorption_range=self.absorption_range,
+            material=self.material,
         )
 
         self.front.apply_transform(mat)

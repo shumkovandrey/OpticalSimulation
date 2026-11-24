@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from core.materials import Material
+
 
 class BaseSurface:
     """Базовый класс для поверхностей с оптическими диапазонами.
@@ -11,6 +13,33 @@ class BaseSurface:
     Наследники обязаны установить в __init__ три атрибута:
     self.reflection_range, self.refraction_range, self.absorption_range.
     """
+
+    material: "Material"
+
+    # Обратная совместимость
+    @property
+    def n(self):
+        return self.material.n
+
+    @property
+    def empirical_coeff(self):
+        return self.material.empirical_coeff
+
+    @property
+    def a_offset(self):
+        return self.material.a_offset
+
+    @property
+    def reflection_range(self):
+        return self.material.reflection_range
+
+    @property
+    def refraction_range(self):
+        return self.material.refraction_range
+
+    @property
+    def absorption_range(self):
+        return self.material.absorption_range
 
     @staticmethod
     def _in_range(rng, wavelength):
@@ -35,6 +64,35 @@ class LensAssembly(BaseSurface):
     Ожидает, что наследник создаст в __init__ атрибуты
     self.front, self.back, self.cylinder и self._last_hit_surface = None.
     """
+
+    # Обратная совместимость
+    @property
+    def n(self):
+        return self.front.material.n
+
+    @property
+    def empirical_coeff(self):
+        return self.front.material.empirical_coeff
+
+    @property
+    def a_offset(self):
+        return self.front.material.a_offset
+
+    @property
+    def reflection_range(self):
+        return self.front.material.reflection_range
+
+    @property
+    def refraction_range(self):
+        return self.front.material.refraction_range
+
+    @property
+    def absorption_range(self):
+        return self.front.material.absorption_range
+
+    @staticmethod
+    def _in_range(rng, wavelength):
+        return rng is not None and rng[0] is not None and rng[1] is not None and rng[0] <= wavelength <= rng[1]
 
     def intersect(self, ray):
         t_front = self.front.intersect(ray)

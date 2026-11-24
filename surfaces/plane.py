@@ -4,6 +4,7 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
+from core.materials import Material
 from core.rays import Ray
 from fast_math import plane_intersect_circular, plane_intersect_rectangular
 from surfaces.base import BaseSurface
@@ -16,12 +17,9 @@ class PlaneSurface(BaseSurface):
         point,
         normal=None,
         rotation_degrees=(0, 0, 0),
-        n_inside=1.0,
+        material=None,
         half_sizes=None,
         edge_radius=None,
-        reflection_range=None,
-        refraction_range=None,
-        absorption_range=None,
         lens_origin=None,
         lens_axis=None,
         shape_type="circle",
@@ -36,7 +34,7 @@ class PlaneSurface(BaseSurface):
         self.base_t1, self.base_t2 = get_tangents(self.base_normal)
         self.face_tangents = (self.base_t1.copy(), self.base_t2.copy())
 
-        self.n = n_inside
+        self.material = material if material is not None else Material(n=1.0)
         self.edge_radius = edge_radius if edge_radius is not None else 1.5
 
         self.shape_type = shape_type
@@ -45,10 +43,6 @@ class PlaneSurface(BaseSurface):
         self.half_sizes = (
             np.array([self.width / 2.0, self.height / 2.0]) if half_sizes is None else np.array(half_sizes)
         )
-
-        self.reflection_range = reflection_range
-        self.refraction_range = refraction_range
-        self.absorption_range = absorption_range
 
         self.rotation_matrix = np.eye(3)
 

@@ -4,6 +4,7 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
+from core.materials import Material
 from core.rays import Ray
 from surfaces.base import BaseSurface
 
@@ -18,14 +19,12 @@ class SphereSurface(BaseSurface):
         self,
         radius,
         rotation_degrees=(0, 0, 0),
-        n_inside=1.0,
+        material=None,
         edge_radius=None,
         thickness=0.0,
-        reflection_range=None,
-        refraction_range=None,
-        absorption_range=None,
         lens_origin=None,
         lens_axis=None,
+
     ):
         """
         Параметры:
@@ -55,12 +54,9 @@ class SphereSurface(BaseSurface):
             self.lens_axis /= np.linalg.norm(self.lens_axis)
         self.center = self.lens_origin - self.radius * self.lens_axis
 
-        self.n = n_inside
+        self.material = material if material is not None else Material(n=1.0)
         self.edge_radius = edge_radius if edge_radius is not None else 0.0
         self.thickness = thickness
-        self.reflection_range = reflection_range
-        self.refraction_range = refraction_range
-        self.absorption_range = absorption_range
 
     def rotate(self, angles_deg):
         rot = R.from_euler("xyz", angles_deg, degrees=True).as_matrix()

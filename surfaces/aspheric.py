@@ -4,6 +4,7 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
+from core.materials import Material
 from core.rays import Ray
 from fast_math import aspheric_intersect_numba
 from surfaces.base import BaseSurface
@@ -18,12 +19,9 @@ class AsphericSurface(BaseSurface):
         conic_constant=0.0,
         aspheric_coeffs=None,
         rotation_degrees=(0, 0, 0),
-        n_inside=1.0,
+        material=None,
         edge_radius=None,
         thickness=0.0,
-        reflection_range=None,
-        refraction_range=None,
-        absorption_range=None,
         lens_origin=None,
         lens_axis=None,
     ):
@@ -40,12 +38,9 @@ class AsphericSurface(BaseSurface):
         self.lens_axis = np.array(lens_axis, dtype=float) if lens_axis is not None else default_axis.copy()
         self.lens_axis /= np.linalg.norm(self.lens_axis)
 
-        self.n = n_inside
+        self.material = material if material is not None else Material(n=1.0)
         self.edge_radius = edge_radius if edge_radius is not None else 0.0
         self.thickness = thickness
-        self.reflection_range = reflection_range
-        self.refraction_range = refraction_range
-        self.absorption_range = absorption_range
 
         self._t1, self._t2 = get_tangents(self.lens_axis)
         self._rot_local_to_world = np.column_stack([self.lens_axis, self._t1, self._t2])

@@ -17,14 +17,30 @@
             "min_offset": -1.2,
             "max_offset": 1.2,
             "wavelength": 780.0,
-            "color": "yellow",
-            "energy": 1.0,
+            "energy": 20.0,
             "current_n": 1.0,
-            "ray_class": "WhiteRay",
-            "num_spectral_bands": 30,
-            "reflection_range": null,
-            "refraction_range": null,
-            "absorption_range": null
+            "ray_class": "Ray",
+            "num_spectral_bands": 300,
+            "color": [
+                1.0,
+                0.0,
+                0.9686274509803922
+            ],
+            "material": {
+                "n": 1.5,
+                "empirical_coeff": 0.005,
+                "a_offset": 0.01,
+                "refraction_range": null,
+                "reflection_range": null,
+                "absorption_range": null,
+                "color": [
+                    0.0,
+                    1.0,
+                    1.0
+                ],
+                "opacity": 0.5,
+                "reflectivity": 0.0
+            }
         }
     },
     {
@@ -42,21 +58,32 @@
                 0.0
             ],
             "mesh_path": "Models/Prism.stl",
-            "n": 1.4,
-            "reflection_range": [
-                0.0,
-                Infinity
-            ],
-            "refraction_range": [
-                0.0,
-                Infinity
-            ],
-            "absorption_range": null,
             "scale_uniform": true,
             "scale_all": 1.0,
             "scale_x": 1.0,
             "scale_y": 1.0,
-            "scale_z": 1.0
+            "scale_z": 1.0,
+            "material": {
+                "n": 1.4,
+                "empirical_coeff": 0.018,
+                "a_offset": 0.01,
+                "refraction_range": [
+                    600.0,
+                    700.0
+                ],
+                "reflection_range": [
+                    400.0,
+                    600.0
+                ],
+                "absorption_range": null,
+                "color": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "opacity": 0.73,
+                "reflectivity": 1.0
+            }
         }
     }
 ]

@@ -17,14 +17,30 @@
             "min_offset": -0.8,
             "max_offset": 0.8,
             "wavelength": 550.0,
-            "color": "yellow",
+            "color": [
+                0.0,
+                0.3176470588235294,
+                1.0
+            ],
             "energy": 1.0,
             "current_n": 1.0,
-            "reflection_range": null,
-            "refraction_range": null,
-            "absorption_range": null,
             "num_spectral_bands": 7,
-            "ray_class": "WhiteRay"
+            "ray_class": "Ray",
+            "material": {
+                "n": 1.5,
+                "empirical_coeff": 0.005,
+                "a_offset": 0.01,
+                "refraction_range": null,
+                "reflection_range": null,
+                "absorption_range": null,
+                "color": [
+                    0.0,
+                    1.0,
+                    1.0
+                ],
+                "opacity": 0.5,
+                "reflectivity": 0.0
+            }
         }
     },
     {
@@ -45,16 +61,27 @@
             "R2": 2.5,
             "thickness": 0.5,
             "edge_radius": 1.0,
-            "n": 1.5,
-            "reflection_range": [
-                0.0,
-                Infinity
-            ],
-            "refraction_range": [
-                0.0,
-                Infinity
-            ],
-            "absorption_range": null
+            "material": {
+                "n": 1.5,
+                "empirical_coeff": 0.005,
+                "a_offset": 0.01,
+                "refraction_range": [
+                    0.0,
+                    Infinity
+                ],
+                "reflection_range": [
+                    0.0,
+                    Infinity
+                ],
+                "absorption_range": null,
+                "color": [
+                    0.0,
+                    1.0,
+                    1.0
+                ],
+                "opacity": 0.5,
+                "reflectivity": 0.0
+            }
         }
     }
 ]

@@ -2,6 +2,7 @@ import numpy as np
 import pyvista as pv
 from scipy.spatial.transform import Rotation as R
 
+from core.materials import Material
 from surfaces.base import LensAssembly
 from surfaces.cylinder import CylinderSurface
 from surfaces.plane import PlaneSurface
@@ -28,10 +29,7 @@ class UniversalLens(LensAssembly):
         R2=None,
         thickness=2.0,
         edge_radius=3.0,
-        n=1.5,
-        reflection_range=None,
-        refraction_range=(0, np.inf),
-        absorption_range=None,
+        material=None,
     ):
         self.origin = np.array(origin, dtype=float)
         self.rotation_degrees = rotation_degrees
@@ -39,11 +37,8 @@ class UniversalLens(LensAssembly):
         self.axis_dir = self.rotation @ np.array([1.0, 0.0, 0.0])
         self.thickness = thickness
         self.edge_radius = edge_radius
-        self.n = n
+        self.material = material if material is not None else Material(n=1.0)
         self.R1, self.R2 = R1, R2
-        self.reflection_range = reflection_range
-        self.refraction_range = refraction_range
-        self.absorption_range = absorption_range
 
         self._create_surfaces()
 
@@ -83,21 +78,15 @@ class UniversalLens(LensAssembly):
             self.front = PlaneSurface(
                 point=[-half, 0, 0],
                 normal=[-1.0, 0.0, 0.0],
-                n_inside=self.n,
+                material=self.material,
                 edge_radius=self.edge_radius,
-                reflection_range=self.reflection_range,
-                refraction_range=self.refraction_range,
-                absorption_range=self.absorption_range,
             )
         else:
             self.front = SphereSurface(
                 radius=self.R1,
-                n_inside=self.n,
+                material=self.material,
                 edge_radius=self.edge_radius,
                 thickness=self.internal_thickness,
-                reflection_range=self.reflection_range,
-                refraction_range=self.refraction_range,
-                absorption_range=self.absorption_range,
                 lens_origin=[-half, 0, 0],
                 lens_axis=[-1.0, 0.0, 0.0],
             )
@@ -106,21 +95,15 @@ class UniversalLens(LensAssembly):
             self.back = PlaneSurface(
                 point=[half, 0, 0],
                 normal=[1.0, 0.0, 0.0],
-                n_inside=self.n,
+                material=self.material,
                 edge_radius=self.edge_radius,
-                reflection_range=self.reflection_range,
-                refraction_range=self.refraction_range,
-                absorption_range=self.absorption_range,
             )
         else:
             self.back = SphereSurface(
                 radius=self.R2,
-                n_inside=self.n,
+                material=self.material,
                 edge_radius=self.edge_radius,
                 thickness=self.internal_thickness,
-                reflection_range=self.reflection_range,
-                refraction_range=self.refraction_range,
-                absorption_range=self.absorption_range,
                 lens_origin=[half, 0, 0],
                 lens_axis=[1.0, 0.0, 0.0],
             )
@@ -130,10 +113,7 @@ class UniversalLens(LensAssembly):
             axis_dir=[1.0, 0.0, 0.0],
             radius=self.edge_radius,
             half_length=half_rim_length,
-            n_inside=self.n,
-            reflection_range=self.reflection_range,
-            refraction_range=self.refraction_range,
-            absorption_range=self.absorption_range,
+            material=self.material,
         )
 
         self.front.apply_transform(mat)

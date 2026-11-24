@@ -4,6 +4,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from core.materials import Material
 from core.rays import Ray
 from core.segments import HitInfo
 from surfaces.thin_lens import ThinLens
@@ -23,27 +24,27 @@ def find_best_hit(ray: "Ray", elements: List) -> Optional[HitInfo]:
         if t is None or t >= best_t:
             continue
 
+        material = getattr(obj, "material", Material())
         is_thin_lens = isinstance(obj, ThinLens)
 
         absorbed = False
-        if hasattr(obj, "absorption_range") and obj.absorption_range is not None:
-            if wavelength is None or (obj.absorption_range[0] <= wavelength <= obj.absorption_range[1]):
+        if material.absorption_range is not None:
+            if wavelength is None or (material.absorption_range[0] <= wavelength <= material.absorption_range[1]):
                 absorbed = True
 
         allow_reflection = False
-        if hasattr(obj, "reflection_range") and obj.reflection_range is not None:
-            if wavelength is None or (obj.reflection_range[0] <= wavelength <= obj.reflection_range[1]):
+        if material.reflection_range is not None:
+            if wavelength is None or (material.reflection_range[0] <= wavelength <= material.reflection_range[1]):
                 allow_reflection = True
 
         allow_refraction = False
-        if hasattr(obj, "refraction_range") and obj.refraction_range is not None:
-            if wavelength is None or (obj.refraction_range[0] <= wavelength <= obj.refraction_range[1]):
+        if material.refraction_range is not None:
+            if wavelength is None or (material.refraction_range[0] <= wavelength <= material.refraction_range[1]):
                 allow_refraction = True
 
         if not is_thin_lens and not allow_reflection and not allow_refraction and not absorbed:
             continue
 
-        n_inside = getattr(obj, "n", 1.0)
         best_t = t
         hit_point = ray.origin + ray.direction * t
         normal = obj.get_normal(hit_point) if hasattr(obj, "get_normal") else np.array([0.0, 0.0, 0.0])
@@ -56,7 +57,7 @@ def find_best_hit(ray: "Ray", elements: List) -> Optional[HitInfo]:
             allow_reflection=allow_reflection,
             allow_refraction=allow_refraction,
             absorbed=absorbed,
-            n_inside=n_inside,
+            material=material,
             is_thin_lens=is_thin_lens,
         )
 

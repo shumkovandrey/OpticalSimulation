@@ -5,6 +5,7 @@ import pyvista as pv
 import trimesh
 from scipy.spatial.transform import Rotation as R
 
+from core.materials import Material
 from core.rays import Ray
 from surfaces.base import BaseSurface
 
@@ -21,10 +22,7 @@ class MeshSurface(BaseSurface):
         mesh,
         rotation_degrees=(0, 0, 0),
         translation=(0, 0, 0),
-        n_inside=1.0,
-        reflection_range=None,
-        refraction_range=None,
-        absorption_range=None,
+        material=None,
         scale_factors=(1.0, 1.0, 1.0),
     ):
 
@@ -66,10 +64,7 @@ class MeshSurface(BaseSurface):
         self.mesh = self.trimesh_obj
         self.intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self.mesh)
 
-        self.n = n_inside
-        self.reflection_range = reflection_range
-        self.refraction_range = refraction_range
-        self.absorption_range = absorption_range
+        self.material = material if material is not None else Material(n=1.0)
         self._last_hit_triangle_idx = None
 
     def get_mesh(self):
