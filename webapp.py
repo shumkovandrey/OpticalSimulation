@@ -16,7 +16,7 @@ from trame.app import get_server
 from trame.widgets import vuetify3 as vuetify
 from trame_vuetify.ui.vuetify3 import VAppLayout
 
-from core.materials import Material, parse_range
+from core.materials import Material, parse_range, MATERIAL_PRESETS
 from core.rays import DispersiveRay, Ray, RayPool, WhiteRay
 from emitters import BeamEmitter
 from surfaces.cylinder import CylinderSurface
@@ -166,6 +166,8 @@ class OpticsAppController:
         self.state.change("selected_object_id")(self.on_object_selected)
         self.state.change("trace_mode")(self.on_trace_mode_changed)
 
+        self.ctrl.trigger("apply_material_preset")(self.apply_material_preset)
+
         self.plotter.add_mesh(pv.PolyData(), name="traced_rays_geometry")
 
         self.ctrl.trigger("save_scene_to_file")(self.save_scene_to_file)
@@ -259,6 +261,30 @@ class OpticsAppController:
             else:
                 setattr(mat, f"{eff}_range", None)
         return mat
+
+    def apply_material_preset(self, name):
+        """Заполняет поля материала выбранным пресетом. Ничего не создаёт."""
+        preset = MATERIAL_PRESETS.get(name)
+        if preset is None:
+            return
+
+        self.state.param_mat_n = preset["n"]
+        self.state.param_mat_empirical_coeff = preset["empirical_coeff"]
+        self.state.param_mat_a_offset = preset["a_offset"]
+        self.state.param_mat_object_color = to_hex(preset["color"])
+        self.state.param_mat_opacity = preset["opacity"]
+        self.state.param_mat_reflectivity = preset["reflectivity"]
+
+        for eff in ["reflection", "refraction", "absorption"]:
+            rng = preset.get(f"{eff}_range")
+            if rng is None:
+                self.state[f"param_mat_{eff}_enabled"] = False
+                self.state[f"param_mat_{eff}_min"] = 0.0
+                self.state[f"param_mat_{eff}_max"] = np.inf
+            else:
+                self.state[f"param_mat_{eff}_enabled"] = True
+                self.state[f"param_mat_{eff}_min"] = float(rng[0])
+                self.state[f"param_mat_{eff}_max"] = np.inf if np.isinf(rng[1]) else float(rng[1])
 
     def on_transform_param_change(self, *args, **kwargs):
         if self._loading_state:
@@ -1753,6 +1779,62 @@ with VAppLayout(server) as layout:
                     # Параметры материала
                     with vuetify.VContainer(v_if=mat_condition, class_="pa-0"):
                         vuetify.VCardTitle("Материал", class_="px-0", style="text-color: white")
+
+                        with vuetify.VBtn(
+                                color="primary", block=True, size="small", variant="flat",
+                        ):
+                            vuetify.VIcon("mdi-palette", size="small", class_="mr-1")
+                            "Пресет"
+                            with vuetify.VMenu(activator="parent"):
+                                with vuetify.VList(dense=True):
+                                    vuetify.VListSubheader("Газы")
+                                    vuetify.VListItem(
+                                        "Воздух",
+                                        click="trigger('apply_material_preset', ['Воздух'])",
+                                    )
+                                    vuetify.VDivider()
+
+                                    vuetify.VListSubheader("Жидкости")
+                                    vuetify.VListItem(
+                                        "Вода",
+                                        click="trigger('apply_material_preset', ['Вода'])",
+                                    )
+                                    vuetify.VListItem(
+                                        "Глицерин",
+                                        click="trigger('apply_material_preset', ['Глицерин'])",
+                                    )
+                                    vuetify.VDivider()
+
+                                    vuetify.VListSubheader("Стёкла")
+                                    for name in ["BK7", "Крон", "Флинт", "Плавленый кварц"]:
+                                        vuetify.VListItem(
+                                            name,
+                                            click=f"trigger('apply_material_preset', ['{name}'])",
+                                        )
+                                    vuetify.VDivider()
+
+                                    vuetify.VListSubheader("Кристаллы")
+                                    for name in ["Алмаз", "Сапфир", "Кварц"]:
+                                        vuetify.VListItem(
+                                            name,
+                                            click=f"trigger('apply_material_preset', ['{name}'])",
+                                        )
+                                    vuetify.VDivider()
+
+                                    vuetify.VListSubheader("Полимеры")
+                                    for name in ["Акрил", "Поликарбонат"]:
+                                        vuetify.VListItem(
+                                            name,
+                                            click=f"trigger('apply_material_preset', ['{name}'])",
+                                        )
+                                    vuetify.VDivider()
+
+                                    vuetify.VListSubheader("Зеркала")
+                                    for name in ["Серебро (зеркало)", "Золото (зеркало)"]:
+                                        vuetify.VListItem(
+                                            name,
+                                            click=f"trigger('apply_material_preset', ['{name}'])",
+                                        )
 
                         with vuetify.VRow(no_gutters=True, align="center", class_="mb-2"):
                             with vuetify.VCol(cols=4):
