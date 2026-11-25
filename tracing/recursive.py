@@ -19,6 +19,7 @@ def trace_recursive(
     offset_distance: float = DEFAULT_OFFSET_DISTANCE,
     total_limit: int = 5000,
     pool: Optional[RayPool] = None,
+    ambient_n: float = 1.0,
 ) -> List[Segment]:
     """Рекурсивная трассировка дерева лучей."""
     segments = []
@@ -79,7 +80,10 @@ def trace_recursive(
             return
 
         resolved_n_inside = get_dispersion_n(hit.material, current_ray)
-        n_next = resolved_n_inside if abs(current_ray.current_n - current_ray.base_n) < 1e-6 else current_ray.base_n
+        if abs(current_ray.current_n - resolved_n_inside) < 1e-6:
+            n_next = ambient_n
+        else:
+            n_next = resolved_n_inside
 
         if not hit.allow_reflection and not hit.allow_refraction:
             start = hit.point + offset_distance * current_ray.direction

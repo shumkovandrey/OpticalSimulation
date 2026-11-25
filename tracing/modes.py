@@ -11,11 +11,12 @@ from tracing.recursive import trace_recursive
 
 
 class TraceMode(ABC):
-    """Общий интерфейс для алгоритмов трассировки."""
+    """Общий интерфейс для алгоритмов трассировки"""
 
-    def __init__(self, energy_color_type: int = 1, pool: Optional["RayPool"] = None):
+    def __init__(self, energy_color_type: int = 1, pool: Optional["RayPool"] = None, ambient_n: float = 1.0):
         self.energy_color_type = energy_color_type
         self.pool = pool
+        self.ambient_n = ambient_n
 
     @abstractmethod
     def trace(self, ray: "Ray", elements: List) -> List[Segment]: ...
@@ -31,8 +32,9 @@ class SimpleMode(TraceMode):
         prioritize_refraction: bool = True,
         energy_color_type: int = 1,
         pool=None,
+        ambient_n: float = 1.0,
     ):
-        super().__init__(energy_color_type, pool)
+        super().__init__(energy_color_type, pool, ambient_n)
         self.max_bounces = max_bounces
         self.offset_distance = offset_distance
         self.prioritize_refraction = prioritize_refraction
@@ -45,6 +47,7 @@ class SimpleMode(TraceMode):
             offset_distance=self.offset_distance,
             prioritize_refraction=self.prioritize_refraction,
             pool=self.pool,
+            ambient_n=self.ambient_n,
         )
 
 
@@ -59,8 +62,9 @@ class TreeMode(TraceMode):
         total_limit: int = 5000,
         energy_color_type: int = 1,
         pool=None,
+        ambient_n: float = 1.0,
     ):
-        super().__init__(energy_color_type, pool)
+        super().__init__(energy_color_type, pool, ambient_n)
         self.max_depth = max_depth
         self.min_energy = min_energy
         self.offset_distance = offset_distance
@@ -75,4 +79,5 @@ class TreeMode(TraceMode):
             offset_distance=self.offset_distance,
             total_limit=self.total_limit,
             pool=self.pool,
+            ambient_n=self.ambient_n,
         )

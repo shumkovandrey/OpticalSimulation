@@ -28,7 +28,7 @@ class Material:
     absorption_range: Optional[Tuple[float, float]] = None
 
     # Визуал
-    color: Tuple[float, float, float] = (0.0, 1.0, 1.0)  # cyan
+    color: Tuple[float, float, float] = (0.0, 1.0, 1.0)
     opacity: float = 0.5
     reflectivity: float = 0.0
 

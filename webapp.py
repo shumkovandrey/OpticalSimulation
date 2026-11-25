@@ -906,6 +906,7 @@ class OpticsAppController:
             self.ray_tracer.cloud.gamma = 1
 
         self.ray_tracer.mode.energy_color_type = 2
+        self.ray_tracer.mode.ambient_n = float(self.state.param_ambient_n)
         self.update_scene()
 
     def on_scene_param_change(self, *args, **kwargs):
@@ -1735,6 +1736,10 @@ with VAppLayout(server) as layout:
                                     dense=True,
                                     hide_details=True,
                                 )
+                        vuetify.VLabel(
+                            "Если источник внутри объекта, установите n = материалу этого объекта",
+                            class_="text-caption text-grey",
+                        )
 
                     vuetify.VDivider(class_="my-4")
 

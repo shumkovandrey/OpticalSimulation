@@ -19,6 +19,7 @@ def trace_simple(
     offset_distance: float = DEFAULT_OFFSET_DISTANCE,
     prioritize_refraction: bool = True,
     pool: Optional["RayPool"] = None,
+    ambient_n: float = 1.0,
 ) -> List[Segment]:
     segments = []
 
@@ -96,7 +97,10 @@ def trace_simple(
 
         if allow_refraction:
             resolved_n_inside = get_dispersion_n(hit.material, current_ray)
-            n_next = resolved_n_inside if abs(current_n - current_ray.base_n) < 1e-6 else current_ray.base_n
+            if abs(current_n - resolved_n_inside) < 1e-6:
+                n_next = ambient_n
+            else:
+                n_next = resolved_n_inside
 
             normal_tir = hit.normal
             if np.dot(normal_tir, current_ray.direction) > 0:

@@ -16,7 +16,7 @@ class Ray:
         direction,
         energy=1.0,
         current_n=1.0,
-        base_n=None,
+        start_n=None,
         color="yellow",
         energy_color_type=2,
     ):
@@ -50,7 +50,7 @@ class Ray:
 
         self.energy = energy
         self.current_n = current_n
-        self.base_n = current_n if base_n is None else base_n
+        self.start_n = current_n if start_n is None else start_n
         self.color = color
         self.energy_color_type = energy_color_type
 
@@ -59,7 +59,7 @@ class DispersiveRay(Ray):
     """Луч с длиной волны (нм): цвет и показатель преломления зависят от спектра."""
 
     def __init__(
-        self, origin, direction, wavelength=550.0, energy=1.0, current_n=1.0, base_n=None, color="yellow", energy_color_type=2
+        self, origin, direction, wavelength=550.0, energy=1.0, current_n=1.0, start_n=None, color="yellow", energy_color_type=2
     ):
         """Создаёт луч.
 
@@ -88,7 +88,7 @@ class DispersiveRay(Ray):
             direction=direction,
             energy=energy,
             current_n=current_n,
-            base_n=base_n,
+            start_n=start_n,
             color=color,
             energy_color_type=energy_color_type,
         )
@@ -101,7 +101,7 @@ class DispersiveRay(Ray):
 class WhiteRay:
     """Контейнер для пучка спектральных лучей; сам в трассировке не участвует."""
 
-    def __init__(self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, base_n=None, energy_color_type=2):
+    def __init__(self, origin, direction, num_spectral_bands=7, energy=1.0, current_n=1.0, start_n=None, energy_color_type=2):
         """Создаёт луч.
 
         Parameters
@@ -124,6 +124,7 @@ class WhiteRay:
         self.direction /= np.linalg.norm(self.direction)
         self.energy = energy
         self.current_n = current_n
+        self.start_n = current_n if start_n is None else start_n
         self.energy_color_type = energy_color_type
         self.num_spectral_bands = num_spectral_bands
 
@@ -140,7 +141,7 @@ class WhiteRay:
                     direction=self.direction.copy(),
                     energy=sub_energy,
                     current_n=self.current_n,
-                    base_n=self.current_n,
+                    start_n=self.start_n,
                     energy_color_type=self.energy_color_type,
                     wavelength=wl,
                     ray_class=DispersiveRay,
@@ -151,7 +152,7 @@ class WhiteRay:
                     direction=self.direction.copy(),
                     energy=sub_energy,
                     current_n=self.current_n,
-                    base_n=self.current_n,
+                    start_n=self.start_n,
                     energy_color_type=self.energy_color_type,
                     wavelength=wl,
                 )
@@ -181,7 +182,7 @@ class RayPool:
         direction,
         energy=1.0,
         current_n=1.0,
-        base_n=None,
+        start_n=None,
         color="yellow",
         energy_color_type=2,
         wavelength=None,
@@ -204,7 +205,7 @@ class RayPool:
         ray.direction /= np.linalg.norm(ray.direction)
         ray.energy = energy
         ray.current_n = current_n
-        ray.base_n = current_n if base_n is None else base_n
+        ray.start_n = current_n if start_n is None else start_n
         ray.energy_color_type = energy_color_type
 
         if ray_class is DispersiveRay and wavelength is not None:
@@ -267,7 +268,7 @@ def spawn_ray(
         direction=template.direction if direction is None else direction,
         energy=template.energy if energy is None else energy,
         current_n=template.current_n if current_n is None else current_n,
-        base_n=template.base_n,
+        start_n=template.start_n,
         color=template.color if color is None else color,
         energy_color_type=template.energy_color_type,
     )

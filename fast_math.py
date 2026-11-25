@@ -22,7 +22,6 @@ def fresnel_amplitudes(n1, n2, cos_i):
     return complex(r_s), complex(r_p), complex(t_s), complex(t_p)
 
 
-# ---------- Преломление (Снеллиус) ----------
 @njit
 def refract(ray_dir, normal, n1, n2):
     # Относительный показатель преломления
@@ -56,7 +55,6 @@ def refract(ray_dir, normal, n1, n2):
     return eta * ray_dir + (eta * cos_i - cos_t) * actual_normal
 
 
-# ---------- Пересечение с плоскостью (круглая апертура) ----------
 @njit
 def plane_intersect_circular(ray_origin, ray_dir, point, normal, origin, axis, edge_radius):
     dot_dn = dot(ray_dir, normal)
@@ -74,7 +72,6 @@ def plane_intersect_circular(ray_origin, ray_dir, point, normal, origin, axis, e
     return -1.0
 
 
-# ---------- Пересечение с плоскостью (прямоугольная апертура) ----------
 @njit
 def plane_intersect_rectangular(ray_origin, ray_dir, point, normal, origin, tangents, half_sizes):
     dot_dn = dot(ray_dir, normal)
@@ -95,8 +92,6 @@ def plane_intersect_rectangular(ray_origin, ray_dir, point, normal, origin, tang
 def cylinder_side_intersect(ray_origin, ray_dir, center, axis, radius, half_length):
     """
     Пересечение луча с боковой поверхностью цилиндра.
-    Цилиндр задан центром основания на оси, направлением оси, радиусом и полудлиной.
-    Возвращает наименьшее положительное t или -1.
     """
     oc = ray_origin - center
     # Проекция направления на плоскость, перпендикулярную оси

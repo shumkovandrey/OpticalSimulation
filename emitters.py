@@ -96,7 +96,7 @@ class BeamEmitter:
                             direction=self.direction,
                             energy=sub_energy,
                             current_n=self.current_n,
-                            base_n=self.current_n,
+                            start_n=self.current_n,
                             color=self.color,
                             wavelength=wl,
                             energy_color_type=self.energy_color_type,
@@ -108,7 +108,7 @@ class BeamEmitter:
                             direction=self.direction,
                             energy=sub_energy,
                             current_n=self.current_n,
-                            base_n=self.current_n,
+                            start_n=self.current_n,
                             energy_color_type=self.energy_color_type,
                             wavelength=wl,
                         )
@@ -120,7 +120,7 @@ class BeamEmitter:
                         direction=self.direction,
                         energy=self.energy,
                         current_n=self.current_n,
-                        base_n=self.current_n,
+                        start_n=self.current_n,
                         color=self.color,
                         wavelength=self.wavelength,
                         energy_color_type=self.energy_color_type,
@@ -144,7 +144,7 @@ class BeamEmitter:
                             energy=self.energy,
                             current_n=self.current_n,
                             color=self.color,
-                            base_n=self.current_n,
+                            start_n=self.current_n,
                             energy_color_type=self.energy_color_type,
                         )
                         if self.ray_class is DispersiveRay:
